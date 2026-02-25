@@ -53,3 +53,10 @@ database_structure/
 
 # Legacy misc folder with internal docs
 mesc/
+
+# Chat history files (merged into SESSION_HISTORY.md — not for public repo)
+CHAT HISTROY.md
+CHAT HISTROY 2.md
+CHAT HISTROY 3.md
+CHAT HISTROY 4.md
+"CHAT HISTROY*.md"
