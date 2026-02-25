@@ -68,7 +68,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const isClinic = profile.role === 'clinic';
   const isDistrictOfficer = profile.role === 'district_officer';
   const isAdmin = profile.role === 'super_admin' || profile.role === 'health_admin';
-  const canVerify = isAdmin || isClinic; // can verify disease/water reports
+  const canVerify = isAdmin || isClinic || isDistrictOfficer; // can verify/approve/reject reports & campaigns
 
   const [tab, setTab] = useState<QueueTab>(initialTab ?? 'disease');
   const [loading, setLoading]     = useState(true);

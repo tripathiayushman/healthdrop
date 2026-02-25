@@ -111,10 +111,10 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
       <SectionDivider />
 
       {/* 4. District Management Tools */}
-      <Section title="🏛️ District Tools">
-        <ToolCard icon="document-text" iconColor="#4338CA" title="District Reports" subtitle="Review all disease & water reports in your district" onPress={() => onNavigate('approval-queue')} badge={stats.pendingReports} />
-        <ToolCard icon="bar-chart" iconColor="#0891B2" title="District Analytics" subtitle="Trends, outbreak patterns and health coverage" onPress={() => onNavigate('approval-queue')} />
-        <ToolCard icon="megaphone" iconColor="#10B981" title="Campaign Management" subtitle="Manage health campaigns in your district" onPress={() => onNavigate('new-campaign')} />
+      <Section title="District Tools">
+        <ToolCard icon="document-text" iconColor="#4338CA" title="Disease Reports" subtitle="Review, verify & approve disease reports in your district" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
+        <ToolCard icon="water" iconColor="#0891B2" title="Water Quality Reports" subtitle="Review, verify & approve water quality reports in your district" onPress={() => onNavigate('approval-queue:water')} />
+        <ToolCard icon="megaphone" iconColor="#10B981" title="Campaign Management" subtitle="Approve, reject & manage health campaigns in your district" onPress={() => onNavigate('approval-queue:campaigns')} />
       </Section>
 
       <SectionDivider />
