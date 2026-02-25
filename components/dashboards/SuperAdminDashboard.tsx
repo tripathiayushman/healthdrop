@@ -13,7 +13,7 @@ import {
   AlertCard, ToolCard, EmptyState, SectionDivider,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
-import { HealthMapComponent } from '../shared/HealthMapComponent';
+import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -102,22 +102,14 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
       <SectionDivider />
 
-      {/* 5. Health Map */}
-      <HealthMapComponent profile={profile} alerts={alerts} />
-
-      <SectionDivider />
-
-      {/* 6. Active Alerts */}
-      <Section title="Active Alerts" action={{ label: 'View All', onPress: () => onNavigate('approval-queue') }}>
-        {alerts.length === 0
-          ? <EmptyState icon="checkmark-circle" color="#10B981" title="No Active Alerts" subtitle="All systems are clear. No health alerts at this time." />
-          : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => RNAlert.alert(
-              a.title ?? 'Alert',
-              `Type: ${a.alert_type ?? '-'}\nUrgency: ${a.urgency_level ?? '-'}\nLocation: ${a.location_name ?? '-'}, ${a.district ?? '-'}, ${a.state ?? '-'}${a.disease_or_issue ? '\nDisease: ' + a.disease_or_issue : ''}${a.cases_reported ? '\nCases: ' + a.cases_reported : ''}\n\n${a.description ?? ''}`,
-              [{ text: 'Close' }, { text: 'View Queue', onPress: () => onNavigate('approval-queue') }]
-            )} />)
-        }
-      </Section>
+      {/* 5. Map + Alerts side by side */}
+      <MapAndAlertsSection
+        profile={profile}
+        alerts={alerts}
+        alertSectionTitle="Active Alerts"
+        emptyTitle="No Active Alerts"
+        emptySubtitle="All systems are clear. No health alerts at this time."
+      />
 
       <View style={{ height: 120 }} />
     </ScrollView>

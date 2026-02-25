@@ -13,7 +13,7 @@ import {
   AlertCard, ToolCard, EmptyState, InfoBanner, SectionDivider,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
-import { HealthMapComponent } from '../shared/HealthMapComponent';
+import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -85,22 +85,14 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
 
       <SectionDivider />
 
-      {/* 2. Health Map */}
-      <HealthMapComponent profile={profile} alerts={alerts} />
-
-      <SectionDivider />
-
-      {/* 3. District Alerts */}
-      <Section title={`${profile.district ?? 'District'} Alerts`}>
-        {alerts.length === 0
-          ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title={`${profile.district ?? 'District'} is Clear`} subtitle="No active health alerts in your district." />
-          : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => RNAlert.alert(
-              a.title ?? 'Alert',
-              `Type: ${a.alert_type ?? '-'}\nUrgency: ${a.urgency_level ?? '-'}\nLocation: ${a.location_name ?? '-'}, ${a.district ?? '-'}${a.disease_or_issue ? '\nDisease: ' + a.disease_or_issue : ''}${a.cases_reported ? '\nCases: ' + a.cases_reported : ''}\n\n${a.description ?? ''}`,
-              [{ text: 'Close' }, { text: 'View Queue', onPress: () => onNavigate('approval-queue') }]
-            )} />)
-        }
-      </Section>
+      {/* 2. Map + District Alerts side by side */}
+      <MapAndAlertsSection
+        profile={profile}
+        alerts={alerts}
+        alertSectionTitle={`${profile.district ?? 'District'} Alerts`}
+        emptyTitle={`${profile.district ?? 'District'} is Clear`}
+        emptySubtitle="No active health alerts in your district."
+      />
 
       <SectionDivider />
 

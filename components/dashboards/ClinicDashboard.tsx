@@ -12,7 +12,7 @@ import {
   AlertCard, ToolCard, EmptyState, SectionDivider,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
-import { HealthMapComponent } from '../shared/HealthMapComponent';
+import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -83,18 +83,14 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
 
       <SectionDivider />
 
-      {/* 4. Health Map */}
-      <HealthMapComponent profile={profile} alerts={alerts} />
-
-      <SectionDivider />
-
-      {/* 5. District Alerts */}
-      <Section title={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}>
-        {alerts.length === 0
-          ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="District is Clear" subtitle="No active health alerts in your district." />
-          : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => {}} />)
-        }
-      </Section>
+      {/* 4. Map + District Alerts side by side */}
+      <MapAndAlertsSection
+        profile={profile}
+        alerts={alerts}
+        alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
+        emptyTitle="District is Clear"
+        emptySubtitle="No active health alerts in your district."
+      />
 
       <SectionDivider />
 
