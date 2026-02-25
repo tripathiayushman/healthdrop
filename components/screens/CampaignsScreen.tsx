@@ -519,7 +519,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               <Ionicons name="eye-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
               <Text style={[styles.actionButtonText, { color: colors.text }]}>View Details</Text>
             </TouchableOpacity>
-            {activeTab !== 'past' && (
+            {activeTab !== 'past' && canEnrollCampaign && (
               enrolledCampaigns.has(campaign.id) ? (
                 <TouchableOpacity
                   style={[styles.actionButton, styles.primaryButton, { backgroundColor: '#EF4444' }]}
