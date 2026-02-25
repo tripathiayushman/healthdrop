@@ -42,9 +42,9 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
       <DashboardHeader profile={profile} subtitle="Community Health Volunteer" />
 
       {/* 1. Active Alerts — HIGHEST PRIORITY for volunteers */}
-      <Section title="🚨 Active Health Alerts" style={{ marginTop: 16 }}>
+      <Section title="Active Health Alerts" style={{ marginTop: 16 }}>
         {alerts.length === 0
-          ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="No Active Alerts" subtitle="Your community is safe! No health alerts at this time. 🎉" />
+          ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="No Active Alerts" subtitle="Your community is safe! No health alerts at this time." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => {}} />)
         }
       </Section>
@@ -57,7 +57,7 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
       <SectionDivider />
 
       {/* 3. Active Campaigns */}
-      <Section title="📣 Active Campaigns" action={{ label: 'Browse All', onPress: () => {} }}>
+      <Section title="Active Campaigns" action={{ label: 'Browse All', onPress: () => {} }}>
         {campaigns.length === 0
           ? <EmptyState icon="megaphone-outline" color="#16A34A" title="No Active Campaigns" subtitle="Check back soon for health campaigns near you." />
           : campaigns.map(c => (
@@ -89,7 +89,7 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
       <SectionDivider />
 
       {/* 4. Community Stats */}
-      <Section title="📊 Community Overview">
+      <Section title="Community Overview">
         <View style={styles.statsRow}>
           <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
           <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#16A34A" />

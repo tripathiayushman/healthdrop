@@ -148,7 +148,7 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify(chunk.map((token: string) => ({
             to: token,
-            title: `🚨 ${alertTitle}`,
+            title: `[ALERT] ${alertTitle}`,
             body: alertBody,
             sound: 'default',
             priority: 'high',
@@ -209,14 +209,14 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
       if (isAshaWorker) {
         setModalType('success');
         setModalMessage(
-          '📋 Your alert request has been submitted for review. An Admin or Clinic staff member will review and approve it before it becomes visible to others.'
+          'Your alert request has been submitted for review. An Admin or Clinic staff member will review and approve it before it becomes visible to others.'
         );
       } else {
         const scopeMsg = formData.notify_scope === 'all'
           ? 'All app users have been notified via push notification.'
           : 'District officials, clinics, and ASHA workers have been notified.';
         setModalType('success');
-        setModalMessage(`✅ Your health alert has been published successfully.\n\n${scopeMsg}`);
+        setModalMessage(`Your health alert has been published successfully.\n\n${scopeMsg}`);
       }
       setModalVisible(true);
     } catch (error: any) {

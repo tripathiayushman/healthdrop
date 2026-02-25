@@ -89,7 +89,7 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
 
         <Text style={styles.greeting}>{greeting},</Text>
         <Text style={styles.userName} numberOfLines={1}>
-          {profile.full_name || 'User'} 👋
+          {profile.full_name || 'User'}
         </Text>
 
         {(subtitle || profile.district) && (

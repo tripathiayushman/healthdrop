@@ -1,564 +1,366 @@
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Image,
-  Dimensions,
-  Modal,
-  ActivityIndicator,
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  ScrollView, KeyboardAvoidingView, Platform, Dimensions,
+  Modal, ActivityIndicator, Image, Animated,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { Profile } from '../types/profile';
-import { Ionicons } from '@expo/vector-icons';
 
-interface AuthScreenProps {
-  onAuthSuccess: () => void;
-}
+interface AuthScreenProps { onAuthSuccess: () => void; }
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
+
+const BRAND_PRIMARY  = '#1565C0'; // deep blue
+const BRAND_ACCENT   = '#0D47A1';
+const BRAND_GRADIENT: [string, string, string] = ['#1565C0', '#0D47A1', '#0A3068'];
+
+// ── Roles available at sign-up ──────────────────────────
+const SIGNUP_ROLES: { value: Profile['role']; label: string; icon: string; desc: string }[] = [
+  { value: 'clinic',      label: 'Clinic',       icon: 'medical',       desc: 'Healthcare facility' },
+  { value: 'asha_worker', label: 'ASHA Worker',  icon: 'heart',         desc: 'Community health worker' },
+  { value: 'volunteer',   label: 'Volunteer',    icon: 'hand-left',     desc: 'Community participant' },
+];
+
+// ── Labelled input with icon ─────────────────────────────
+const Field: React.FC<{
+  label: string; icon: string; value: string;
+  onChange: (t: string) => void; placeholder: string;
+  keyboardType?: any; secure?: boolean; autoCapitalize?: any; autoComplete?: any;
+}> = ({ label, icon, value, onChange, placeholder, keyboardType, secure, autoCapitalize = 'none', autoComplete }) => {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={field.wrap}>
+      <Text style={field.label}>{label}</Text>
+      <View style={[field.box, focused && field.boxFocused]}>
+        <Ionicons name={icon as any} size={16} color={focused ? BRAND_PRIMARY : '#94A3B8'} style={{ marginRight: 10 }} />
+        <TextInput
+          style={field.input}
+          placeholder={placeholder}
+          placeholderTextColor="#94A3B8"
+          value={value}
+          onChangeText={onChange}
+          keyboardType={keyboardType}
+          secureTextEntry={secure}
+          autoCapitalize={autoCapitalize}
+          autoComplete={autoComplete}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+        />
+      </View>
+    </View>
+  );
+};
+
+const field = StyleSheet.create({
+  wrap:       { marginBottom: 12 },
+  label:      { fontSize: 12, fontWeight: '700', color: '#475569', letterSpacing: 0.5, marginBottom: 6, textTransform: 'uppercase' },
+  box:        { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8FAFC', borderWidth: 1.5, borderColor: '#E2E8F0', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13 },
+  boxFocused: { borderColor: BRAND_PRIMARY, backgroundColor: '#EFF6FF' },
+  input:      { flex: 1, fontSize: 15, color: '#1E293B' },
+});
 
 export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  
-  // Signup form fields
-  const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<Profile['role']>('volunteer');
-  const [district, setDistrict] = useState('');
-  const [state, setState] = useState('');
+  const [email, setEmail]         = useState('');
+  const [password, setPassword]   = useState('');
+  const [fullName, setFullName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [role, setRole]           = useState<Profile['role']>('volunteer');
+  const [district, setDistrict]   = useState('');
+  const [userState, setUserState] = useState('');
+  const [loading, setLoading]     = useState(false);
 
-  // OTP related state
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
+  // OTP
+  const [showOtpModal, setShowOtpModal]       = useState(false);
+  const [otpCode, setOtpCode]                 = useState('');
+  const [otpLoading, setOtpLoading]           = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
+  const [userEmail, setUserEmail]             = useState('');
 
-  // Error/Success Modal for web compatibility
-  const [showMessageModal, setShowMessageModal] = useState(false);
-  const [messageModalType, setMessageModalType] = useState<'error' | 'success'>('error');
-  const [messageModalTitle, setMessageModalTitle] = useState('');
-  const [messageModalText, setMessageModalText] = useState('');
-  const [messageModalCallback, setMessageModalCallback] = useState<(() => void) | null>(null);
+  // Message modal
+  const [msgVisible, setMsgVisible]   = useState(false);
+  const [msgType, setMsgType]         = useState<'error' | 'success'>('error');
+  const [msgTitle, setMsgTitle]       = useState('');
+  const [msgText, setMsgText]         = useState('');
+  const [msgCallback, setMsgCallback] = useState<(() => void) | null>(null);
 
-  // Helper function to show messages (works on both web and mobile)
-  const showMessage = (type: 'error' | 'success', title: string, message: string, callback?: () => void) => {
-    setMessageModalType(type);
-    setMessageModalTitle(title);
-    setMessageModalText(message);
-    setMessageModalCallback(() => callback || null);
-    setShowMessageModal(true);
+  const showMsg = (type: 'error' | 'success', title: string, text: string, cb?: () => void) => {
+    setMsgType(type); setMsgTitle(title); setMsgText(text);
+    setMsgCallback(() => cb ?? null); setMsgVisible(true);
   };
+  const closeMsg = () => { setMsgVisible(false); msgCallback?.(); };
 
-  const handleMessageModalClose = () => {
-    setShowMessageModal(false);
-    if (messageModalCallback) {
-      messageModalCallback();
-    }
-  };
-
-  const roles: { value: Profile['role']; label: string }[] = [
-    { value: 'clinic', label: 'Clinic' },
-    { value: 'asha_worker', label: 'ASHA Worker' },
-    { value: 'volunteer', label: 'Volunteer' },
-  ];
-
-  const isValidEmail = (text: string) => {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
-  };
-
-  const isValidPhone = (text: string) => {
-    return /^\+?[\d\s-()]{10,15}$/.test(text.replace(/\s/g, ''));
-  };
+  const isValidEmail = (t: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
 
   const handleAuth = async () => {
     if (isLogin) {
-      // For login, only use email (remove phone login for now)
-      if (!email || !password) {
-        showMessage('error', 'Error', 'Please enter email and password');
-        return;
-      }
-      if (!isValidEmail(email)) {
-        showMessage('error', 'Error', 'Please enter a valid email address');
-        return;
-      }
+      if (!email || !password) { showMsg('error', 'Missing Fields', 'Please enter your email and password.'); return; }
+      if (!isValidEmail(email)) { showMsg('error', 'Invalid Email', 'Please enter a valid email address.'); return; }
     } else {
-      if (!email || !password || !fullName || !district || !state) {
-        showMessage('error', 'Error', 'Please fill in all required fields');
-        return;
+      if (!email || !password || !fullName || !district || !userState) {
+        showMsg('error', 'Missing Fields', 'Please fill in all required fields.'); return;
       }
-      if (!isValidEmail(email)) {
-        showMessage('error', 'Error', 'Please enter a valid email address');
-        return;
-      }
+      if (!isValidEmail(email)) { showMsg('error', 'Invalid Email', 'Please enter a valid email address.'); return; }
     }
 
     setLoading(true);
-    
     try {
       if (isLogin) {
-        // Login with email only
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        setLoading(false);
         if (error) {
-          setLoading(false);
-          // Show clear error message for wrong credentials
-          if (error.message.includes('Invalid login credentials')) {
-            showMessage('error', 'Login Failed', 'Invalid email or password. Please check your credentials and try again. If you don\'t have an account, please sign up first.');
-          } else if (error.message.includes('Email not confirmed')) {
-            showMessage('error', 'Email Not Verified', 'Please check your email and click the confirmation link before signing in.');
-          } else {
-            showMessage('error', 'Login Error', error.message);
-          }
+          if (error.message.includes('Invalid login credentials'))
+            showMsg('error', 'Login Failed', 'Incorrect email or password. Please try again.');
+          else if (error.message.includes('Email not confirmed'))
+            showMsg('error', 'Email Not Verified', 'Please confirm your email before signing in.');
+          else showMsg('error', 'Login Error', error.message);
           return;
         }
-        
-        // Only proceed if we actually got a session
-        if (data?.session) {
-          onAuthSuccess();
-        } else {
-          setLoading(false);
-          showMessage('error', 'Login Failed', 'Unable to sign in. Please try again.');
-        }
+        if (data?.session) onAuthSuccess();
+        else showMsg('error', 'Login Failed', 'Unable to sign in. Please try again.');
       } else {
-        // Sign up with email and password
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: fullName,
-              role,
-              district,
-              state,
-              phone,
-            }
-          }
+          email, password,
+          options: { data: { full_name: fullName, role, district, state: userState, phone } },
         });
-
-        if (signUpError) {
-          console.error('Sign Up Error:', signUpError);
-          setLoading(false);
-          showMessage('error', 'Sign Up Error', signUpError.message);
-          return;
-        }
-
-        // Check if user was created successfully
+        if (signUpError) { setLoading(false); showMsg('error', 'Sign Up Error', signUpError.message); return; }
         if (signUpData?.user) {
-          // If email confirmation is disabled, user will be logged in automatically
           if (signUpData.session) {
-            // User is logged in, create profile and wait for it
             try {
-              const { error: profileError } = await supabase
-                .from('profiles')
-                .upsert({
-                  id: signUpData.user.id,
-                  email: email,
-                  full_name: fullName,
-                  role,
-                  phone: phone || null,
-                  district: district || null,
-                  state: state || null,
-                  location: `${district}, ${state}`,
-                  organization: 'Not specified',
-                  is_active: true,
-                  created_at: new Date().toISOString(),
-                }, { onConflict: 'id' });
-
-              if (profileError) {
-                console.error('Profile creation error:', profileError);
-                // Don't block signup, profile can be completed later
-              }
-              
-              // Wait a moment for the database to sync
-              await new Promise(resolve => setTimeout(resolve, 500));
-            } catch (profileErr) {
-              console.error('Profile error:', profileErr);
-            }
-
+              await supabase.from('profiles').upsert({
+                id: signUpData.user.id, email, full_name: fullName, role,
+                phone: phone || null, district: district || null, state: userState || null,
+                is_active: true, created_at: new Date().toISOString(),
+              }, { onConflict: 'id' });
+              await new Promise(r => setTimeout(r, 500));
+            } catch {}
             setLoading(false);
-            showMessage('success', 'Success!', 'Account created successfully! You are now logged in.', () => onAuthSuccess());
+            showMsg('success', 'Account Created!', 'Welcome to HealthDrop. You are now logged in.', () => onAuthSuccess());
           } else {
-            // Email confirmation is required
             setLoading(false);
-            showMessage('success', 'Check Your Email', 'We sent a confirmation link to your email. Please check your inbox and click the link to verify your account.', () => setIsLogin(true));
+            showMsg('success', 'Check Your Email', 'We sent a confirmation link to your inbox. Click it to verify your account.', () => setIsLogin(true));
           }
         } else {
           setLoading(false);
-          showMessage('error', 'Sign Up Error', 'Unable to create account. Please try again.');
+          showMsg('error', 'Sign Up Error', 'Unable to create account. Please try again.');
         }
       }
-    } catch (error) {
+    } catch {
       setLoading(false);
-      showMessage('error', 'Error', 'An unexpected error occurred');
-      console.error('Auth error:', error);
+      showMsg('error', 'Unexpected Error', 'Something went wrong. Please try again.');
     }
   };
 
   const handleOtpVerification = async () => {
-    if (!otpCode || otpCode.length !== 6) {
-      Alert.alert('Error', 'Please enter a valid 6-digit OTP');
-      return;
-    }
-
+    if (!otpCode || otpCode.length !== 6) { showMsg('error', 'Invalid OTP', 'Please enter the 6-digit code.'); return; }
     setOtpLoading(true);
-    
     try {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: userEmail,
-        token: otpCode,
-        type: 'email'
-      });
-      
-      if (error) {
-        Alert.alert('OTP Error', error.message);
-      } else if (data.user) {
-        // Check if profile already exists (might be created by trigger)
-        const { data: existingProfile, error: profileCheckError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-
-        if (profileCheckError && profileCheckError.code === 'PGRST116') {
-          // Profile doesn't exist, create it
-           const { error: profileError } = await supabase
-            .from('profiles')
-            .insert({
-              id: data.user.id,
-              full_name: fullName,
-              role,
-              district,
-              state,
-              created_at: new Date().toISOString(),
-              is_active: true,
-            });
-
-          if (profileError) {
-            console.error('Profile creation error:', profileError);
-          }
+      const { data, error } = await supabase.auth.verifyOtp({ email: userEmail, token: otpCode, type: 'email' });
+      if (error) { showMsg('error', 'OTP Error', error.message); }
+      else if (data.user) {
+        const { data: existing, error: pErr } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
+        if (pErr?.code === 'PGRST116') {
+          await supabase.from('profiles').insert({ id: data.user.id, full_name: fullName, role, district, state: userState, is_active: true, created_at: new Date().toISOString() });
         }
-
-        setShowOtpModal(false);
-        setShowSuccessModal(true);
-        setOtpCode('');
+        setShowOtpModal(false); setShowSuccessModal(true); setOtpCode('');
       }
-    } catch (error) {
-      Alert.alert('Error', 'An unexpected error occurred');
-      console.error('OTP verification error:', error);
-    } finally {
-      setOtpLoading(false);
-    }
+    } catch { showMsg('error', 'Error', 'An unexpected error occurred.'); }
+    finally { setOtpLoading(false); }
   };
 
   const handleSuccessNext = () => {
     setShowSuccessModal(false);
-    // Reset form
-    setEmail('');
-    setPassword('');
-    setFullName('');
-    setDistrict('');
-    setState('');
-    setPhone('');
-    setIsLogin(true);
-    onAuthSuccess();
+    setEmail(''); setPassword(''); setFullName(''); setDistrict(''); setUserState(''); setPhone('');
+    setIsLogin(true); onAuthSuccess();
+  };
+
+  const switchMode = () => {
+    setIsLogin(m => !m);
+    setEmail(''); setPhone(''); setPassword(''); setFullName(''); setDistrict(''); setUserState('');
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView 
-        contentContainerStyle={styles.scrollContainer}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.headerContainer}>
-          <Image 
-            source={require('../assets/app_logo.png')} 
-            style={styles.logo}
-            resizeMode="contain"
-          />
-          <Text style={styles.title}>Health Drop</Text>
-          <Text style={styles.subtitle}>
-            {isLogin ? 'Welcome Back!' : 'Join Our Community'}
-          </Text>
-        </View>
+    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-        <View style={styles.formContainer}>
+        {/* ── Hero Header ── */}
+        <LinearGradient colors={BRAND_GRADIENT} style={s.hero}>
+          {/* Decorative circles */}
+          <View style={s.circle1} />
+          <View style={s.circle2} />
+
+          <View style={s.logoWrap}>
+            <View style={s.logoBox}>
+              <Image source={require('../assets/app_logo.png')} style={s.logo} resizeMode="contain" />
+            </View>
+          </View>
+          <Text style={s.heroTitle}>HealthDrop</Text>
+          <Text style={s.heroSub}>Public Health Surveillance System</Text>
+
+          {/* Tab switcher */}
+          <View style={s.tabBar}>
+            {(['Sign In', 'Sign Up'] as const).map((label, i) => {
+              const active = (i === 0) === isLogin;
+              return (
+                <TouchableOpacity key={label} style={[s.tab, active && s.tabActive]} onPress={() => i === 0 ? setIsLogin(true) : setIsLogin(false)}>
+                  <Text style={[s.tabText, active && s.tabTextActive]}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </LinearGradient>
+
+        {/* ── Form Card ── */}
+        <View style={s.card}>
+
           {isLogin ? (
             <>
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Email</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your email"
-                  value={email}
-                  onChangeText={setEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                />
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Password</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your password"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry
-                  autoComplete="password"
-                />
-              </View>
+              <Text style={s.cardTitle}>Welcome back</Text>
+              <Text style={s.cardSub}>Sign in to your HealthDrop account</Text>
+              <Field label="Email Address" icon="mail-outline" value={email} onChange={setEmail} placeholder="you@example.com" keyboardType="email-address" autoComplete="email" />
+              <Field label="Password" icon="lock-closed-outline" value={password} onChange={setPassword} placeholder="Your password" secure autoComplete="password" />
             </>
           ) : (
             <>
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Full Name *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your full name"
-                  value={fullName}
-                  onChangeText={setFullName}
-                  autoCapitalize="words"
-                />
-              </View>
+              <Text style={s.cardTitle}>Create account</Text>
+              <Text style={s.cardSub}>Join the HealthDrop community</Text>
 
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Email Address *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your email address"
-                  value={email}
-                  onChangeText={setEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                />
-              </View>
+              <Field label="Full Name" icon="person-outline" value={fullName} onChange={setFullName} placeholder="Your full name" autoCapitalize="words" />
+              <Field label="Email Address" icon="mail-outline" value={email} onChange={setEmail} placeholder="you@example.com" keyboardType="email-address" autoComplete="email" />
+              <Field label="Phone Number" icon="call-outline" value={phone} onChange={setPhone} placeholder="+91 XXXXX XXXXX" keyboardType="phone-pad" autoComplete="tel" />
 
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Phone Number *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your phone number"
-                  value={phone}
-                  onChangeText={setPhone}
-                  keyboardType="phone-pad"
-                  autoComplete="tel"
-                />
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Role *</Text>
-                <View style={styles.roleContainer}>
-                  {roles.map((roleOption) => (
+              {/* Role selector */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={field.label}>Role</Text>
+                {SIGNUP_ROLES.map(r => {
+                  const active = role === r.value;
+                  return (
                     <TouchableOpacity
-                      key={roleOption.value}
-                      style={[
-                        styles.roleButton,
-                        role === roleOption.value && styles.roleButtonSelected,
-                      ]}
-                      onPress={() => setRole(roleOption.value)}
+                      key={r.value}
+                      style={[s.roleRow, active && s.roleRowActive]}
+                      onPress={() => setRole(r.value)}
                     >
-                      <Text
-                        style={[
-                          styles.roleButtonText,
-                          role === roleOption.value && styles.roleButtonTextSelected,
-                        ]}
-                      >
-                        {roleOption.label}
-                      </Text>
+                      <View style={[s.roleIcon, active && s.roleIconActive]}>
+                        <Ionicons name={r.icon as any} size={18} color={active ? '#FFFFFF' : '#64748B'} />
+                      </View>
+                      <View style={s.roleText}>
+                        <Text style={[s.roleLabel, active && s.roleLabelActive]}>{r.label}</Text>
+                        <Text style={s.roleDesc}>{r.desc}</Text>
+                      </View>
+                      {active && <Ionicons name="checkmark-circle" size={20} color={BRAND_PRIMARY} />}
                     </TouchableOpacity>
-                  ))}
+                  );
+                })}
+              </View>
+
+              <View style={s.row2}>
+                <View style={{ flex: 1 }}>
+                  <Field label="District" icon="business-outline" value={district} onChange={setDistrict} placeholder="District" autoCapitalize="words" />
+                </View>
+                <View style={{ width: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <Field label="State" icon="map-outline" value={userState} onChange={setUserState} placeholder="State" autoCapitalize="words" />
                 </View>
               </View>
 
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>District *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your district"
-                  value={district}
-                  onChangeText={setDistrict}
-                  autoCapitalize="words"
-                />
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>State *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your state"
-                  value={state}
-                  onChangeText={setState}
-                  autoCapitalize="words"
-                />
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Password *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Create a strong password"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry
-                  autoComplete="password"
-                />
-              </View>
+              <Field label="Password" icon="lock-closed-outline" value={password} onChange={setPassword} placeholder="Create a strong password" secure autoComplete="password" />
             </>
           )}
 
+          {/* Submit */}
           <TouchableOpacity
-            style={[styles.primaryButton, loading && styles.buttonDisabled]}
+            style={[s.submitBtn, loading && s.submitBtnDisabled]}
             onPress={handleAuth}
             disabled={loading}
+            activeOpacity={0.85}
           >
-            <Text style={styles.primaryButtonText}>
-              {loading ? 'Processing...' : isLogin ? 'Sign In' : 'Create Account'}
-            </Text>
+            <LinearGradient colors={loading ? ['#94A3B8','#94A3B8'] : BRAND_GRADIENT} style={s.submitGrad}>
+              {loading
+                ? <ActivityIndicator size="small" color="#FFFFFF" />
+                : <>
+                    <Ionicons name={isLogin ? 'log-in-outline' : 'person-add-outline'} size={18} color="#FFF" />
+                    <Text style={s.submitText}>{isLogin ? 'Sign In' : 'Create Account'}</Text>
+                  </>
+              }
+            </LinearGradient>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.switchButton}
-            onPress={() => {
-              setIsLogin(!isLogin);
-              // Clear form when switching
-              setEmail('');
-              setPhone('');
-              setPassword('');
-              setFullName('');
-              setDistrict('');
-              setState('');
-            }}
-          >
-            <Text style={styles.switchText}>
-              {isLogin
-                ? "Don't have an account? "
-                : 'Already have an account? '}
-              <Text style={styles.switchTextBold}>
-                {isLogin ? 'Sign Up' : 'Sign In'}
-              </Text>
+          {/* Switch */}
+          <TouchableOpacity style={s.switchRow} onPress={switchMode}>
+            <Text style={s.switchText}>
+              {isLogin ? "Don't have an account? " : 'Already have an account? '}
+              <Text style={s.switchLink}>{isLogin ? 'Sign Up' : 'Sign In'}</Text>
             </Text>
           </TouchableOpacity>
+        </View>
+
+        {/* Footer */}
+        <View style={s.footer}>
+          <Ionicons name="shield-checkmark-outline" size={13} color="#94A3B8" />
+          <Text style={s.footerText}>Secured by Supabase · Data encrypted at rest</Text>
         </View>
       </ScrollView>
 
-      {/* OTP Verification Modal */}
-      <Modal
-        visible={showOtpModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowOtpModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <Text style={styles.modalTitle}>Enter Verification Code</Text>
-            <Text style={styles.modalSubtitle}>
-              We've sent a 6-digit verification code to {userEmail}
-            </Text>
-            
-            <View style={styles.otpContainer}>
-              <TextInput
-                style={styles.otpInput}
-                value={otpCode}
-                onChangeText={setOtpCode}
-                placeholder="000000"
-                keyboardType="numeric"
-                maxLength={6}
-              />
+      {/* ── OTP Modal ── */}
+      <Modal visible={showOtpModal} transparent animationType="slide" onRequestClose={() => setShowOtpModal(false)}>
+        <View style={mod.overlay}>
+          <View style={mod.card}>
+            <View style={[mod.iconWrap, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="keypad-outline" size={32} color={BRAND_PRIMARY} />
             </View>
-
-            <TouchableOpacity
-              style={[styles.primaryButton, otpLoading && styles.buttonDisabled]}
-              onPress={handleOtpVerification}
-              disabled={otpLoading}
-            >
-              {otpLoading ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <Text style={styles.primaryButtonText}>Verify OTP</Text>
-              )}
+            <Text style={mod.title}>Enter Verification Code</Text>
+            <Text style={mod.sub}>We sent a 6-digit code to {userEmail}</Text>
+            <TextInput
+              style={mod.otpInput}
+              value={otpCode} onChangeText={setOtpCode}
+              placeholder="000000" keyboardType="numeric" maxLength={6}
+            />
+            <TouchableOpacity style={[mod.btn, otpLoading && { opacity: 0.6 }]} onPress={handleOtpVerification} disabled={otpLoading}>
+              {otpLoading ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={mod.btnText}>Verify Code</Text>}
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={() => setShowOtpModal(false)}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+            <TouchableOpacity style={mod.cancel} onPress={() => setShowOtpModal(false)}>
+              <Text style={mod.cancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Success Modal */}
-      <Modal
-        visible={showSuccessModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowSuccessModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={styles.successIcon}>
-              <Text style={styles.successCheckmark}>✓</Text>
+      {/* ── Success Modal ── */}
+      <Modal visible={showSuccessModal} transparent animationType="fade" onRequestClose={() => setShowSuccessModal(false)}>
+        <View style={mod.overlay}>
+          <View style={mod.card}>
+            <View style={[mod.iconWrap, { backgroundColor: '#ECFDF5' }]}>
+              <Ionicons name="checkmark-circle" size={40} color="#10B981" />
             </View>
-            
-            <Text style={styles.modalTitle}>Account Created Successfully!</Text>
-            <Text style={styles.modalSubtitle}>
-              Your account has been created and verified. You can now start using HealthDrop.
-            </Text>
-
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={handleSuccessNext}
-            >
-              <Text style={styles.primaryButtonText}>Next</Text>
+            <Text style={mod.title}>Account Created!</Text>
+            <Text style={mod.sub}>Your account has been verified. You can now start using HealthDrop.</Text>
+            <TouchableOpacity style={[mod.btn, { backgroundColor: '#10B981' }]} onPress={handleSuccessNext}>
+              <Text style={mod.btnText}>Get Started</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Message Modal (Web Compatible - replaces Alert.alert) */}
-      <Modal visible={showMessageModal} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={[
-              styles.messageIconContainer, 
-              { backgroundColor: messageModalType === 'error' ? '#EF4444' : '#10B981' }
-            ]}>
-              <Ionicons 
-                name={messageModalType === 'error' ? 'close' : 'checkmark'} 
-                size={40} 
-                color="#FFFFFF" 
+      {/* ── Message Modal ── */}
+      <Modal visible={msgVisible} transparent animationType="fade" onRequestClose={closeMsg}>
+        <View style={mod.overlay}>
+          <View style={mod.card}>
+            <View style={[mod.iconWrap, { backgroundColor: msgType === 'error' ? '#FEF2F2' : '#ECFDF5' }]}>
+              <Ionicons
+                name={msgType === 'error' ? 'alert-circle' : 'checkmark-circle'}
+                size={40} color={msgType === 'error' ? '#EF4444' : '#10B981'}
               />
             </View>
-            <Text style={styles.modalTitle}>{messageModalTitle}</Text>
-            <Text style={styles.modalSubtitle}>{messageModalText}</Text>
+            <Text style={mod.title}>{msgTitle}</Text>
+            <Text style={mod.sub}>{msgText}</Text>
             <TouchableOpacity
-              style={[
-                styles.primaryButton, 
-                { backgroundColor: messageModalType === 'error' ? '#EF4444' : '#10B981' }
-              ]}
-              onPress={handleMessageModalClose}
+              style={[mod.btn, { backgroundColor: msgType === 'error' ? '#EF4444' : '#10B981' }]}
+              onPress={closeMsg}
             >
-              <Text style={styles.primaryButtonText}>OK</Text>
+              <Text style={mod.btnText}>OK</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -567,220 +369,70 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8fafe',
-  },
-  scrollContainer: {
-    flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 65,
-    paddingBottom: 30,
-  },
-  headerContainer: {
-    alignItems: 'center',
-    marginBottom: 30,
-  },
-  logo: {
-    width: 70,
-    height: 70,
-    marginBottom: 0,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#438edaff',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    textAlign: 'center',
-  },
-  formContainer: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    padding: 25,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  inputContainer: {
-    marginBottom: 10,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginBottom: 8,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#e1e8ed',
-    padding: 15,
-    borderRadius: 12,
-    fontSize: 16,
-    backgroundColor: '#f8fafe',
-    color: '#2c3e50',
-  },
-  orText: {
-    textAlign: 'center',
-    color: '#7f8c8d',
-    fontSize: 14,
-    fontWeight: '500',
-    marginVertical: 10,
-  },
-  roleContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  roleButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#e1e8ed',
-    backgroundColor: '#f8fafe',
-  },
-  roleButtonSelected: {
-    backgroundColor: '#3498db',
-    borderColor: '#3498db',
-  },
-  roleButtonText: {
-    color: '#7f8c8d',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  roleButtonTextSelected: {
-    color: 'white',
-  },
-  primaryButton: {
-    backgroundColor: '#27ae60',
-    padding: 18,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 10,
-    shadowColor: '#27ae60',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  buttonDisabled: {
-    backgroundColor: '#bdc3c7',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  primaryButtonText: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  switchButton: {
-    marginTop: 25,
-    alignItems: 'center',
-  },
-  switchText: {
-    color: '#7f8c8d',
-    fontSize: 16,
-  },
-  switchTextBold: {
-    color: '#3498db',
-    fontWeight: 'bold',
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalContainer: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    padding: 30,
-    width: '90%',
-    maxWidth: 400,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 15,
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  modalSubtitle: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    textAlign: 'center',
-    marginBottom: 25,
-    lineHeight: 22,
-  },
-  otpContainer: {
-    width: '100%',
-    marginBottom: 25,
-  },
-  otpInput: {
-    borderWidth: 2,
-    borderColor: '#e1e8ed',
-    borderRadius: 12,
-    padding: 20,
-    textAlign: 'center',
-    fontSize: 24,
-    letterSpacing: 8,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-    backgroundColor: '#f8fafe',
-  },
-  cancelButton: {
-    marginTop: 15,
-    padding: 15,
-  },
-  cancelButtonText: {
-    color: '#7f8c8d',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  successIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#27ae60',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  successCheckmark: {
-    color: 'white',
-    fontSize: 40,
-    fontWeight: 'bold',
-  },
-  messageIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
+// ── Main Styles ──────────────────────────────────────────
+const s = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: '#F1F5F9' },
+  scroll: { flexGrow: 1, paddingBottom: 32 },
+
+  // Hero
+  hero:       { paddingTop: 60, paddingBottom: 50, paddingHorizontal: 24, alignItems: 'center', overflow: 'hidden' },
+  circle1:    { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(255,255,255,0.06)', top: -60, right: -60 },
+  circle2:    { position: 'absolute', width: 160, height: 160, borderRadius: 80,  backgroundColor: 'rgba(255,255,255,0.04)', bottom: -40, left: -40 },
+  logoWrap:   { marginBottom: 16 },
+  logoBox:    { width: 72, height: 72, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
+  logo:       { width: 52, height: 52 },
+  heroTitle:  { fontSize: 28, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.5, marginBottom: 4 },
+  heroSub:    { fontSize: 13, color: 'rgba(255,255,255,0.72)', marginBottom: 28, textAlign: 'center' },
+
+  // Tab switcher
+  tabBar:       { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, padding: 4, width: '80%' },
+  tab:          { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 10 },
+  tabActive:    { backgroundColor: '#FFFFFF' },
+  tabText:      { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.75)' },
+  tabTextActive:{ color: BRAND_PRIMARY },
+
+  // Form card
+  card:       { marginHorizontal: 16, marginTop: -22, backgroundColor: '#FFFFFF', borderRadius: 24, padding: 24, shadowColor: '#1565C0', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 24, elevation: 10 },
+  cardTitle:  { fontSize: 20, fontWeight: '800', color: '#1E293B', marginBottom: 4 },
+  cardSub:    { fontSize: 13, color: '#64748B', marginBottom: 20 },
+
+  // Role selector
+  row2:           { flexDirection: 'row' },
+  roleRow:        { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 13, borderRadius: 12, borderWidth: 1.5, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', marginBottom: 8 },
+  roleRowActive:  { borderColor: BRAND_PRIMARY, backgroundColor: '#EFF6FF' },
+  roleIcon:       { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  roleIconActive: { backgroundColor: BRAND_PRIMARY },
+  roleText:       { flex: 1 },
+  roleLabel:      { fontSize: 14, fontWeight: '700', color: '#334155' },
+  roleLabelActive:{ color: BRAND_PRIMARY },
+  roleDesc:       { fontSize: 12, color: '#94A3B8', marginTop: 1 },
+
+  // Submit button
+  submitBtn:      { marginTop: 6, borderRadius: 14, overflow: 'hidden' },
+  submitBtnDisabled: { opacity: 0.7 },
+  submitGrad:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16 },
+  submitText:     { fontSize: 16, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
+
+  // Switch
+  switchRow:  { marginTop: 20, alignItems: 'center' },
+  switchText: { fontSize: 14, color: '#64748B' },
+  switchLink: { color: BRAND_PRIMARY, fontWeight: '700' },
+
+  // Footer
+  footer:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 20, marginBottom: 8 },
+  footerText: { fontSize: 11, color: '#94A3B8' },
+});
+
+// ── Modal Styles ─────────────────────────────────────────
+const mod = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  card:    { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 28, width: '100%', maxWidth: 380, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 16 },
+  iconWrap:{ width: 80, height: 80, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  title:   { fontSize: 20, fontWeight: '800', color: '#1E293B', textAlign: 'center', marginBottom: 8 },
+  sub:     { fontSize: 14, color: '#64748B', textAlign: 'center', marginBottom: 24, lineHeight: 20 },
+  otpInput:{ width: '100%', borderWidth: 2, borderColor: '#E2E8F0', borderRadius: 14, padding: 18, textAlign: 'center', fontSize: 28, letterSpacing: 10, fontWeight: '700', color: '#1E293B', backgroundColor: '#F8FAFC', marginBottom: 20 },
+  btn:     { backgroundColor: BRAND_PRIMARY, width: '100%', paddingVertical: 15, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
+  btnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  cancel:  { marginTop: 14, padding: 10 },
+  cancelText:{ color: '#94A3B8', fontSize: 14, fontWeight: '500' },
 });

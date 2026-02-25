@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { View, TouchableOpacity, Image, StyleSheet, Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Theme } from '../lib/ThemeContext';
 
 interface NavbarProps {
@@ -17,9 +18,16 @@ const Navbar: React.FC<NavbarProps> = ({ onMenuPress, userName }) => {
 
   const getGreeting = () => {
     const hour = new Date().getHours();
-    if (hour < 12) return '🌅';
-    if (hour < 17) return '☀️';
-    return '🌙';
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  };
+
+  const getTimeIcon = (): any => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'sunny-outline';
+    if (hour < 17) return 'partly-sunny-outline';
+    return 'moon-outline';
   };
 
   return (
@@ -49,7 +57,7 @@ const Navbar: React.FC<NavbarProps> = ({ onMenuPress, userName }) => {
       
       <View style={styles.rightSection}>
         <View style={styles.greetingContainer}>
-          <Text style={styles.greetingIcon}>{getGreeting()}</Text>
+          <Ionicons name={getTimeIcon()} size={22} color={colors.primary} />
         </View>
         
         <TouchableOpacity style={styles.avatarContainer} activeOpacity={0.8}>

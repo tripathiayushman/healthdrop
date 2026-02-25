@@ -70,7 +70,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
       )}
 
       {/* 1. District Stats */}
-      <Section title={`📊 ${profile.district ?? 'District'} Overview`} style={{ marginTop: stats.pendingReports > 0 ? 4 : 16 }}>
+      <Section title={`${profile.district ?? 'District'} Overview`} style={{ marginTop: stats.pendingReports > 0 ? 4 : 16 }}>
         <View style={styles.statsRow}>
           <StatCard label="Disease Reports" value={stats.districtReports} icon="bar-chart" color="#EF4444" />
           <StatCard label="Water Reports" value={stats.districtWater} icon="water" color="#3B82F6" />
@@ -85,7 +85,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
       <SectionDivider />
 
       {/* 2. District Alerts */}
-      <Section title={`🚨 ${profile.district ?? 'District'} Alerts`}>
+      <Section title={`${profile.district ?? 'District'} Alerts`}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title={`${profile.district ?? 'District'} is Clear`} subtitle="No active health alerts in your district." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => RNAlert.alert(
@@ -99,7 +99,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
       <SectionDivider />
 
       {/* 3. Quick Actions */}
-      <Section title="⚡ Quick Actions">
+      <Section title="Quick Actions">
         <View style={styles.qaRow}>
           <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
           <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />

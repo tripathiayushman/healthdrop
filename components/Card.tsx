@@ -73,7 +73,7 @@ const Card: React.FC<CardProps> = ({ title, date, description, location, type, s
               </View>
             </View>
             <View style={styles.metaRow}>
-              <Text style={styles.location}>📍 {location}</Text>
+              <Text style={styles.location}>{location}</Text>
               <Text style={styles.date}>{formatDate(date)}</Text>
             </View>
             <Text style={styles.typeLabel}>{getTypeLabel()}</Text>

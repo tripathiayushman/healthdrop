@@ -62,7 +62,7 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       )}
 
       {/* 1. Quick Actions */}
-      <Section title="⚡ Quick Actions" style={{ marginTop: stats.myPending > 0 ? 4 : 16 }}>
+      <Section title="Quick Actions" style={{ marginTop: stats.myPending > 0 ? 4 : 16 }}>
         <View style={styles.qaRow}>
           <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
           <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
@@ -73,9 +73,9 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <SectionDivider />
 
       {/* 2. District Alerts */}
-      <Section title={`🚨 ${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}>
+      <Section title={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}>
         {alerts.length === 0
-          ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="District is Clear" subtitle="No active health alerts in your district. All good! 🎉" />
+          ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="District is Clear" subtitle="No active health alerts in your district." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => {}} />)
         }
       </Section>
@@ -88,7 +88,7 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <SectionDivider />
 
       {/* 4. My Report Stats */}
-      <Section title="📋 My Submission Stats">
+      <Section title="My Submission Stats">
         <View style={styles.statsRow}>
           <StatCard label="Total Submitted" value={stats.myReports} icon="document-text" color="#EA580C" />
           <StatCard label="Approved" value={stats.myApproved} icon="checkmark-circle" color="#10B981" />

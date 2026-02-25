@@ -53,7 +53,7 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       <DashboardHeader profile={profile} />
 
       {/* 1. Quick Actions — Report only (no campaign/alert creation for clinic) */}
-      <Section title="⚡ Quick Actions" style={{ marginTop: 16 }}>
+      <Section title="Quick Actions" style={{ marginTop: 16 }}>
         <View style={styles.qaRow}>
           <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
           <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
@@ -64,7 +64,7 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       <SectionDivider />
 
       {/* 2. Approval Tools — clinic verifies/approves disease & water reports */}
-      <Section title="✅ Clinic Approval Tools">
+      <Section title="Clinic Approval Tools">
         <ToolCard icon="medkit" iconColor="#EF4444" title="Disease Reports" subtitle="Verify and approve submitted disease reports" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
         <ToolCard icon="water" iconColor="#3B82F6" title="Water Quality Reports" subtitle="Verify and approve water quality submissions" onPress={() => onNavigate('approval-queue:water')} />
       </Section>
@@ -72,7 +72,7 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       <SectionDivider />
 
       {/* 3. Activity Stats */}
-      <Section title="📊 Your Activity">
+      <Section title="Your Activity">
         <View style={styles.statsRow}>
           <StatCard label="My Reports" value={stats.myReports} icon="document-text" color="#6D28D9" />
           <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
@@ -83,7 +83,7 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       <SectionDivider />
 
       {/* 4. District Alerts */}
-      <Section title={`🚨 ${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}>
+      <Section title={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="District is Clear" subtitle="No active health alerts in your district." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => {}} />)

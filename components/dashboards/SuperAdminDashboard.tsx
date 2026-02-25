@@ -59,7 +59,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <DashboardHeader profile={profile} />
 
       {/* 1. Admin Panel — TOP PRIORITY */}
-      <Section title="🛡️ Admin Panel" style={{ marginTop: 16 }}>
+      <Section title="Admin Panel" style={{ marginTop: 16 }}>
         <ToolCard icon="people" iconColor="#42A5F5" title="User Management" subtitle="Create, edit, deactivate users & manage roles" onPress={() => onNavigate('user-management')} />
         <ToolCard icon="shield-checkmark" iconColor="#A78BFA" title="Approval Queue" subtitle="Review pending reports & campaigns" onPress={() => onNavigate('approval-queue')} badge={stats.pendingApprovals} />
         {stats.pendingFeedback > 0 && (
@@ -70,7 +70,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <SectionDivider />
 
       {/* 2. System Stats */}
-      <Section title="📊 System Overview">
+      <Section title="System Overview">
         <View style={styles.statsRow}>
           <StatCard label="Active Users" value={stats.users} icon="people" color="#42A5F5" />
           <StatCard label="Disease Reports" value={stats.disease} icon="bar-chart" color="#EF4444" />
@@ -85,7 +85,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <SectionDivider />
 
       {/* 3. Quick Actions */}
-      <Section title="⚡ Quick Actions">
+      <Section title="Quick Actions">
         <View style={styles.qaRow}>
           <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
           <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
@@ -102,7 +102,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <SectionDivider />
 
       {/* 5. Active Alerts */}
-      <Section title="🚨 Active Alerts" action={{ label: 'View All', onPress: () => onNavigate('approval-queue') }}>
+      <Section title="Active Alerts" action={{ label: 'View All', onPress: () => onNavigate('approval-queue') }}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle" color="#10B981" title="No Active Alerts" subtitle="All systems are clear. No health alerts at this time." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => RNAlert.alert(

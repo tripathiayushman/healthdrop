@@ -55,7 +55,7 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
       <DashboardHeader profile={profile} />
 
       {/* 1. Health Stats */}
-      <Section title="📊 Health Overview" style={{ marginTop: 16 }}>
+      <Section title="Health Overview" style={{ marginTop: 16 }}>
         <View style={styles.statsRow}>
           <StatCard label="Disease Reports" value={stats.disease} icon="bar-chart" color="#EF4444" />
           <StatCard label="Water Reports" value={stats.water} icon="water" color="#3B82F6" />
@@ -70,7 +70,7 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
       <SectionDivider />
 
       {/* 2. Approval Queue */}
-      <Section title="✅ Approval Queue">
+      <Section title="Approval Queue">
         <ToolCard icon="checkmark-circle" iconColor="#26A69A" title="Reports Pending Review" subtitle={`${stats.pendingReports} ASHA/clinic reports awaiting approval`} onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
         <ToolCard icon="megaphone" iconColor="#10B981" title="Campaign Approvals" subtitle="Review & publish pending health campaigns" onPress={() => onNavigate('approval-queue:campaigns')} />
         <ToolCard icon="warning" iconColor="#F59E0B" title="Alert Management" subtitle="Approve, publish & manage health alerts" onPress={() => onNavigate('approval-queue:alerts')} />
@@ -79,7 +79,7 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
       <SectionDivider />
 
       {/* 3. Active Alerts */}
-      <Section title="🚨 Active Alerts" action={{ label: 'Manage', onPress: () => onNavigate('approval-queue:alerts') }}>
+      <Section title="Active Alerts" action={{ label: 'Manage', onPress: () => onNavigate('approval-queue:alerts') }}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle" color="#10B981" title="No Active Alerts" subtitle="No alerts are currently active in the system." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => RNAlert.alert(
@@ -93,7 +93,7 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
       <SectionDivider />
 
       {/* 4. Quick Actions */}
-      <Section title="⚡ Quick Actions">
+      <Section title="Quick Actions">
         <View style={styles.qaRow}>
           <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
           <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />

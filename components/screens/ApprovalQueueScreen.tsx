@@ -417,7 +417,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <View style={[qst.statusRow, { marginTop: -4 }]}>
                     <View style={[qst.chip, { backgroundColor: selectedItem.status === 'verified' ? '#10B98122' : '#3B82F622' }]}>
                       <Text style={[qst.chipText, { color: selectedItem.status === 'verified' ? '#10B981' : '#3B82F6' }]}>
-                        {selectedItem.status === 'verified' ? '✓ Verified' : '○ Reported'}
+                        {selectedItem.status === 'verified' ? 'Verified' : 'Reported'}
                       </Text>
                     </View>
                   </View>
