@@ -574,16 +574,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           <Text style={styles.headerTitle}>Campaigns</Text>
           <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
         </View>
-        {canCreateCampaign && (
-          <TouchableOpacity
-            style={styles.headerCreateBtn}
-            onPress={() => onNavigateToForm('new-campaign')}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={18} color="#FFF" />
-            <Text style={styles.headerCreateBtnText}>Create</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Search Bar */}
@@ -977,6 +967,16 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           </View>
         </View>
       </Modal>
+      {/* Floating Action Button */}
+      {canCreateCampaign && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => onNavigateToForm('new-campaign')}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="add" size={28} color="#FFF" />
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
@@ -1168,18 +1168,19 @@ const styles = StyleSheet.create({
   },
   fab: {
     position: 'absolute',
-    right: 20,
-    bottom: 20,
+    right: 22,
+    bottom: 88,
     width: 56,
     height: 56,
     borderRadius: 28,
+    backgroundColor: '#0D9488',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 6,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
   },
   bottomSpacer: {
     height: 80,
