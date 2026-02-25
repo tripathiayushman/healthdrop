@@ -156,10 +156,10 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         {renderTabContent()}
       </View>
 
-      {/* ── Improved Bottom Tab Bar ───────────────────── */}
+      {/* ── Glass Bottom Tab Bar (transparent, no blur) ─ */}
       <View style={[styles.tabBar, {
-        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
-        borderTopColor: isDark ? '#334155' : '#E2E8F0',
+        backgroundColor: isDark ? 'rgba(0,0,0,0.72)' : 'rgba(255,255,255,0.82)',
+        borderTopColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
         shadowColor: isDark ? '#000' : '#0F172A',
       }]}>
         {tabs.map((tab) => {

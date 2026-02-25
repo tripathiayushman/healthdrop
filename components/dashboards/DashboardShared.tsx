@@ -161,12 +161,15 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
     Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: false, tension: 80, friction: 7 }).start();
   }, []);
 
-  // Glass blur on web dark mode
   const glassStyle: any = isDark && Platform.OS === 'web'
     ? { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }
     : {};
 
   const Wrapper: any = onPress ? TouchableOpacity : View;
+  const gradColors: readonly [string, string, ...string[]] = isDark
+    ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.03)']
+    : [color + '0A', color + '03'];
+
   return (
     <Animated.View style={[{ flex: 1 }, { transform: [{ scale: scaleAnim }] }]}>
       <Wrapper
@@ -174,11 +177,18 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
           backgroundColor: colors.card,
           borderColor: isDark ? colors.border : color + '25',
           borderTopWidth: 3, borderTopColor: color,
+          overflow: 'hidden',
         }]}
         onPress={onPress}
         activeOpacity={0.75}
       >
-        <View style={[styles.statIconWrap, { backgroundColor: color + '18' }]}>
+        <LinearGradient
+          colors={gradColors}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+        <View style={[styles.statIconWrap, { backgroundColor: color + '22' }]}>
           {iconFamily === 'material'
             ? <MaterialCommunityIcons name={icon as any} size={20} color={color} />
             : <Ionicons name={icon as any} size={20} color={color} />
@@ -515,7 +525,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 52,
-    paddingBottom: 28,
+    paddingBottom: 36,
     overflow: 'hidden',
   },
   blob1: { position: 'absolute', top: -50, right: -50, width: 180, height: 180, borderRadius: 90 },

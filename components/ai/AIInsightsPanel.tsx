@@ -4,8 +4,9 @@
 // =====================================================
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Animated,
+  View, Text, StyleSheet, TouchableOpacity, Animated, Platform,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
@@ -109,9 +110,17 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
 
   const toggleExpand = () => setExpanded(v => !v);
 
-  const cardBg = isDark ? '#1A1A2E' : '#FFFFFF';
-  const shimmerOpacity = shimmerAnim.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] });
+  // Declare these first (used by both glass vars and JSX below)
   const accentColor = insight?.accentColor || colors.primary;
+  const shimmerOpacity = shimmerAnim.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] });
+
+  // Glass card styling consistent with new dark theme
+  const glassStyle: any = isDark && Platform.OS === 'web'
+    ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
+    : {};
+  const cardBg = isDark ? 'rgba(255,255,255,0.06)' : '#FFFFFF';
+  const cardBorder = isDark ? 'rgba(255,255,255,0.10)' : (accentColor + '30');
+  const cardTopBorder = accentColor;
 
   return (
     <View style={styles.section}>
@@ -128,11 +137,20 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.card, {
+      <View style={[styles.card, glassStyle, {
         backgroundColor: cardBg,
-        borderColor: isDark ? '#2A2A4A' : accentColor + '30',
-        borderTopColor: accentColor,
+        borderColor: cardBorder,
+        borderTopColor: cardTopBorder,
       }]}>
+        {/* Subtle gradient overlay for depth */}
+        {isDark && (
+          <LinearGradient
+            colors={['rgba(255,255,255,0.04)', 'rgba(255,255,255,0.00)']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+        )}
         {/* Scope badge row */}
         <View style={styles.scopeRow}>
           <View style={[styles.scopeBadge, { backgroundColor: accentColor + '15' }]}>

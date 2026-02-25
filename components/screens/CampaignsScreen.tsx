@@ -16,6 +16,7 @@ import {
   TextInput,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
@@ -568,13 +569,17 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.accent }]}>
+      {/* Header — gradient */}
+      <LinearGradient
+        colors={['#EF4444', '#DC2626', '#B91C1C']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Campaigns</Text>
           <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
         </View>
-      </View>
+      </LinearGradient>
 
       {/* Search Bar */}
       <View style={[styles.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>

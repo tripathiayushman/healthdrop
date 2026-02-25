@@ -13,6 +13,7 @@ import {
   Platform, ActivityIndicator, ScrollView, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { useTheme } from '../../lib/ThemeContext';
@@ -494,26 +495,63 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
 
   return (
     <>
-      {/* ── Location permission prompt banner ── */}
-      {showLocPrompt && (
-        <View style={[s.promptBanner, { backgroundColor: isDark ? '#172554' : '#EFF6FF', borderColor: '#3B82F6' }]}>
-          <Ionicons name="location-outline" size={16} color="#3B82F6" />
-          <Text style={[s.promptTxt, { color: colors.text }]} numberOfLines={2}>
-            Allow location to center the health map on your area
-          </Text>
-          <TouchableOpacity style={[s.promptBtn, { backgroundColor: '#3B82F6' }]} onPress={() => { setShowLocPrompt(false); requestGPS(); }}>
-            <Text style={s.promptBtnTxt}>Allow</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowLocPrompt(false)} style={{ padding: 4 }}>
-            <Ionicons name="close" size={14} color={colors.textSecondary} />
-          </TouchableOpacity>
+      {/* ── Location permission — MODAL POPUP on first load ── */}
+      <Modal visible={showLocPrompt} transparent animationType="fade" onRequestClose={() => setShowLocPrompt(false)}>
+        <View style={s.popupOverlay}>
+          <View style={[s.popup, {
+            backgroundColor: isDark ? 'rgba(10,10,10,0.97)' : '#FFFFFF',
+            borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(59,130,246,0.3)',
+          }]}>
+            {isDark && (
+              <LinearGradient
+                colors={['rgba(59,130,246,0.08)', 'rgba(0,0,0,0)']}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+              />
+            )}
+            {/* Icon */}
+            <View style={[s.popupIconWrap, { backgroundColor: '#3B82F618' }]}>
+              <Ionicons name="location" size={32} color="#3B82F6" />
+            </View>
+            <Text style={[s.popupTitle, { color: isDark ? '#F1F5F9' : '#1E293B' }]}>Enable Location</Text>
+            <Text style={[s.popupBody, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+              Allow HealthDrop to center the map on your location so you see health alerts in your area first.
+            </Text>
+            <View style={s.popupActions}>
+              <TouchableOpacity style={[s.popupDismiss, { borderColor: isDark ? 'rgba(255,255,255,0.12)' : '#E2E8F0' }]} onPress={() => setShowLocPrompt(false)}>
+                <Text style={{ color: isDark ? '#94A3B8' : '#64748B', fontSize: 14, fontWeight: '600' }}>Not now</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.popupAllow}
+                onPress={() => { setShowLocPrompt(false); requestGPS(); }}
+              >
+                <LinearGradient
+                  colors={['#3B82F6', '#2563EB']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={s.popupAllowGrad}
+                >
+                  <Ionicons name="locate" size={16} color="#fff" />
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Allow Location</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
-      )}
+      </Modal>
 
       {/* ── Side-by-side row ── */}
       <View style={[s.row, { borderColor: colors.border }]}>
         {/* ── Left: Map ── */}
-        <View style={[s.mapPanel, { backgroundColor: colors.card, borderRightColor: colors.border }]}>
+        <View style={[s.mapPanel, { backgroundColor: colors.card, borderRightColor: colors.border, overflow: 'hidden' }]}>
+          {isDark && (
+            <LinearGradient
+              colors={['rgba(59,130,246,0.06)', 'rgba(0,0,0,0)']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            />
+          )}
           <View style={s.panelHeader}>
             <Ionicons name="map" size={13} color={accentColor} />
             <Text style={[s.panelTitle, { color: colors.text }]}>Health Map</Text>
@@ -533,7 +571,15 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
         </View>
 
         {/* ── Right: Alerts ── */}
-        <View style={[s.alertPanel, { backgroundColor: colors.card }]}>
+        <View style={[s.alertPanel, { backgroundColor: colors.card, overflow: 'hidden' }]}>
+          {isDark && (
+            <LinearGradient
+              colors={['rgba(245,158,11,0.05)', 'rgba(0,0,0,0)']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            />
+          )}
           <View style={s.panelHeader}>
             <Ionicons name="warning" size={13} color="#F59E0B" />
             <Text style={[s.panelTitle, { color: colors.text }]}>{alertSectionTitle}</Text>
@@ -591,11 +637,16 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
 const SCREEN_W = Dimensions.get('window').width;
 
 const s = StyleSheet.create({
-  // Prompt banner
-  promptBanner: { flexDirection:'row', alignItems:'center', gap:8, marginHorizontal:16, marginBottom:8, padding:10, borderRadius:12, borderWidth:1 },
-  promptTxt:    { flex:1, fontSize:12 },
-  promptBtn:    { borderRadius:8, paddingHorizontal:10, paddingVertical:5 },
-  promptBtnTxt: { color:'#fff', fontSize:12, fontWeight:'700' },
+  // Location permission popup (centered modal)
+  popupOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.70)', alignItems:'center', justifyContent:'center', padding:24 },
+  popup:        { borderRadius:20, borderWidth:1, padding:28, width:'100%', maxWidth:360, alignItems:'center', overflow:'hidden' },
+  popupIconWrap:{ width:64, height:64, borderRadius:20, alignItems:'center', justifyContent:'center', marginBottom:16 },
+  popupTitle:   { fontSize:19, fontWeight:'800', marginBottom:8, textAlign:'center' },
+  popupBody:    { fontSize:13, lineHeight:20, textAlign:'center', marginBottom:24 },
+  popupActions: { flexDirection:'row', gap:12, width:'100%' },
+  popupDismiss: { flex:1, borderWidth:1, borderRadius:12, paddingVertical:13, alignItems:'center', justifyContent:'center' },
+  popupAllow:   { flex:1.5, borderRadius:12, overflow:'hidden' },
+  popupAllowGrad:{ paddingVertical:13, paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:8 },
 
   // Side-by-side row
   row:        { flexDirection:'row', marginHorizontal:16, marginBottom:12, minHeight:280, borderRadius:16, overflow:'hidden', borderWidth:1 },

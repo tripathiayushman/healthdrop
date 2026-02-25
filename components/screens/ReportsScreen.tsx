@@ -15,6 +15,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
@@ -460,11 +461,15 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
 
   return (
     <View style={[s.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View style={[s.header, { backgroundColor: colors.primary }]}>
+      {/* Header — gradient */}
+      <LinearGradient
+        colors={['#26A69A', '#00897B', '#00695C']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+        style={s.header}
+      >
         <Text style={s.headerTitle}>Reports</Text>
         <Text style={s.headerSub}>View and manage health reports</Text>
-      </View>
+      </LinearGradient>
 
       {/* Search Bar */}
       <View style={[s.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
