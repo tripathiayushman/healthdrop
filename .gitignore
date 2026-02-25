@@ -32,6 +32,7 @@ yarn-error.*
 # local env files
 .env*.local
 .env
+.env.example
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +40,16 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# ── Sensitive internal files ──────────────────────────────
+# Internal memory, session notes — not for public repo
+MEMORY_BANK.md
+SESSION_HISTORY.md
+COMPREHENSIVE_DOCUMENTATION.md
+SETUP_GUIDE.md
+
+# All SQL migration files (may contain DB references / secrets)
+database_structure/
+
+# Legacy misc folder with internal docs
+mesc/
