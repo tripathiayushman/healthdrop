@@ -87,6 +87,9 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const [rejectReason, setRejectReason]   = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  // Confirm-delete modal (replaces Alert.alert — needed for web)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: QueueTab } | null>(null);
 
   // ── Tabs based on role ───────────────────────────────────────────────────
   const allTabs: { id: QueueTab; label: string; icon: string }[] = [
@@ -145,28 +148,24 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   };
 
   // ── Delete ───────────────────────────────────────────────────────────────
-  const deleteItem = async (id: string, type: QueueTab) => {
-    Alert.alert(
-      'Confirm Delete',
-      'Permanently delete this item? This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            setActionLoading(true);
-            try {
-              const table = { disease:'disease_reports', water:'water_quality_reports', campaigns:'health_campaigns', alerts:'health_alerts' }[type];
-              const { error } = await supabase.from(table as string).delete().eq('id', id);
-              if (error) throw error;
-              setShowDetailModal(false);
-              load();
-            } catch (e: any) { Alert.alert('Error', e.message); }
-            finally { setActionLoading(false); }
-          },
-        },
-      ]
-    );
+  const deleteItem = (id: string, type: QueueTab) => {
+    // Use a custom Modal instead of Alert.alert (Alert.alert is no-op on web)
+    setDeleteTarget({ id, type });
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setShowDeleteConfirm(false);
+    setActionLoading(true);
+    try {
+      const table = { disease:'disease_reports', water:'water_quality_reports', campaigns:'health_campaigns', alerts:'health_alerts' }[deleteTarget.type];
+      const { error } = await supabase.from(table as string).delete().eq('id', deleteTarget.id);
+      if (error) throw error;
+      setShowDetailModal(false);
+      load();
+    } catch (e: any) { Alert.alert('Error', e.message); }
+    finally { setActionLoading(false); setDeleteTarget(null); }
   };
 
   // ── Verify / Unverify ────────────────────────────────────────────────────
@@ -574,6 +573,39 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
           )}
         </View>
       </Modal>
+
+      {/* ── Delete Confirm Modal (web-compatible) ───────────────────────── */}
+      <Modal visible={showDeleteConfirm} transparent animationType="fade" onRequestClose={() => setShowDeleteConfirm(false)}>
+        <View style={qst.overlay}>
+          <View style={[qst.confirmCard, { backgroundColor: colors.card }]}>
+            <View style={qst.confirmIconWrap}>
+              <Ionicons name="trash" size={32} color="#EF4444" />
+            </View>
+            <Text style={[qst.confirmTitle, { color: colors.text }]}>Delete Permanently?</Text>
+            <Text style={[qst.confirmSub, { color: colors.textSecondary }]}>
+              This action cannot be undone. The record will be permanently removed from the database.
+            </Text>
+            <View style={qst.confirmBtnRow}>
+              <TouchableOpacity
+                style={[qst.confirmBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
+                onPress={() => { setShowDeleteConfirm(false); setDeleteTarget(null); }}
+              >
+                <Text style={[qst.confirmBtnText, { color: colors.text }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[qst.confirmBtn, { backgroundColor: '#EF4444' }]}
+                onPress={confirmDelete}
+                disabled={actionLoading}
+              >
+                {actionLoading
+                  ? <ActivityIndicator size="small" color="#FFF" />
+                  : <Text style={[qst.confirmBtnText, { color: '#FFF' }]}>Delete</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -627,6 +659,14 @@ const qst = StyleSheet.create({
   actionBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
   deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13, borderRadius: 12, borderWidth: 1.5, borderColor: '#EF4444', backgroundColor: '#EF444410' },
   deleteBtnText: { color: '#EF4444', fontWeight: '700', fontSize: 14 },
+  // Confirm-delete modal
+  confirmCard:    { margin: 24, borderRadius: 20, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 20, elevation: 14 },
+  confirmIconWrap:{ width: 72, height: 72, borderRadius: 20, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  confirmTitle:   { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
+  confirmSub:     { fontSize: 13, textAlign: 'center', lineHeight: 19, marginBottom: 24 },
+  confirmBtnRow:  { flexDirection: 'row', gap: 12, width: '100%' },
+  confirmBtn:     { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
+  confirmBtnText: { fontWeight: '700', fontSize: 15 },
 });
 
 export default ApprovalQueueScreen;
