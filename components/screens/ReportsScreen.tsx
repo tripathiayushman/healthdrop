@@ -603,7 +603,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
       {/* FAB */}
       {canCreateReports && ((activeTab === 'disease' && canAccessDiseaseReports) || (activeTab === 'water' && canAccessWaterReports)) && (
         <TouchableOpacity
-          style={[s.fab, { backgroundColor: activeTab === 'disease' ? colors.primary : colors.secondary }]}
+          style={s.fab}
           onPress={() => onNavigateToForm(activeTab === 'disease' ? 'new-disease-report' : 'new-water-report')}
         >
           <Ionicons name="add" size={28} color="#FFFFFF" />
@@ -932,7 +932,7 @@ const s = StyleSheet.create({
   emptyDesc: { fontSize: 13, textAlign: 'center' },
 
   // FAB
-  fab: { position: 'absolute', right: 16, bottom: 16, width: 54, height: 54, borderRadius: 27, justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 5 },
+  fab: { position: 'absolute', right: 22, bottom: 88, width: 56, height: 56, borderRadius: 28, backgroundColor: '#0D9488', justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 8 },
 
   // Modals shared
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
