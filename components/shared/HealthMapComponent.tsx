@@ -510,7 +510,6 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
                 pointerEvents="none"
               />
             )}
-            {/* Icon */}
             <View style={[s.popupIconWrap, { backgroundColor: '#3B82F618' }]}>
               <Ionicons name="location" size={32} color="#3B82F6" />
             </View>
@@ -522,10 +521,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
               <TouchableOpacity style={[s.popupDismiss, { borderColor: isDark ? 'rgba(255,255,255,0.12)' : '#E2E8F0' }]} onPress={() => setShowLocPrompt(false)}>
                 <Text style={{ color: isDark ? '#94A3B8' : '#64748B', fontSize: 14, fontWeight: '600' }}>Not now</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={s.popupAllow}
-                onPress={() => { setShowLocPrompt(false); requestGPS(); }}
-              >
+              <TouchableOpacity style={s.popupAllow} onPress={() => { setShowLocPrompt(false); requestGPS(); }}>
                 <LinearGradient
                   colors={['#3B82F6', '#2563EB']}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
@@ -540,12 +536,19 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
         </View>
       </Modal>
 
-      {/* ── "Alerts" section heading — matches Quick Actions style ── */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginTop: 4, marginBottom: 4 }}>
-        <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#F59E0B22', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
-          <Ionicons name="warning" size={15} color="#F59E0B" />
+      {/* ── Section heading — styled like QuickActions/Section in DashboardShared ── */}
+      <View style={[s.sectionHeader, { marginHorizontal: 16, marginTop: 8, marginBottom: 6 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={[s.sectionIconWrap, { backgroundColor: '#F59E0B18' }]}>
+            <Ionicons name="alert-circle" size={15} color="#F59E0B" />
+          </View>
+          <Text style={[s.sectionTitle, { color: isDark ? '#F1F5F9' : '#1E293B' }]}>Alerts &amp; Map</Text>
+          {alerts.length > 0 && (
+            <View style={[s.alertCountBadge, { backgroundColor: '#F59E0B22' }]}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: '#F59E0B' }}>{alerts.length}</Text>
+            </View>
+          )}
         </View>
-        <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, letterSpacing: 0.1 }}>Alerts</Text>
       </View>
 
       {/* ── Side-by-side row ── */}
@@ -645,6 +648,11 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
 const SCREEN_W = Dimensions.get('window').width;
 
 const s = StyleSheet.create({
+  // Section heading
+  sectionHeader:    { flexDirection:'row', alignItems:'center', justifyContent:'space-between' },
+  sectionIconWrap:  { width:28, height:28, borderRadius:8, alignItems:'center', justifyContent:'center' },
+  sectionTitle:     { fontSize:15, fontWeight:'800', letterSpacing:-0.2 },
+  alertCountBadge:  { paddingHorizontal:7, paddingVertical:2, borderRadius:8, minWidth:22, alignItems:'center' },
   // Location permission popup (centered modal)
   popupOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.70)', alignItems:'center', justifyContent:'center', padding:24 },
   popup:        { borderRadius:20, borderWidth:1, padding:28, width:'100%', maxWidth:360, alignItems:'center', overflow:'hidden' },

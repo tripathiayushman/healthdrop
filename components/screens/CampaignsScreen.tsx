@@ -429,7 +429,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           </Text>
           {canCreateCampaign && (
             <TouchableOpacity
-              style={[styles.emptyButton, { backgroundColor: '#DC2626' }]}
+              style={[styles.emptyButton, { backgroundColor: colors.primary }]}
               onPress={() => onNavigateToForm('new-campaign')}
             >
               <Text style={styles.emptyButtonText}>Create Campaign</Text>
@@ -687,8 +687,8 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
       {/* FAB - Only for super_admin/health_admin/clinic */}
       {(profile.role === 'super_admin' || profile.role === 'health_admin' || profile.role === 'clinic') && (
-        <TouchableOpacity
-          style={[styles.fab, { backgroundColor: colors.accent }]}
+      <TouchableOpacity
+          style={[styles.fab, { backgroundColor: '#EF4444' }]}
           onPress={() => onNavigateToForm('new-campaign')}
         >
           <Ionicons name="add" size={28} color="#FFFFFF" />

@@ -114,12 +114,12 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   const accentColor = insight?.accentColor || colors.primary;
   const shimmerOpacity = shimmerAnim.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] });
 
-  // Glass card styling consistent with new dark theme
+  // Glass card — darker, more opaque so text is clearly readable on black bg
   const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
+    ? { backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }
     : {};
-  const cardBg = isDark ? 'rgba(255,255,255,0.06)' : '#FFFFFF';
-  const cardBorder = isDark ? 'rgba(255,255,255,0.10)' : (accentColor + '30');
+  const cardBg = isDark ? 'rgba(18,18,22,0.88)' : '#FFFFFF';
+  const cardBorder = isDark ? 'rgba(255,255,255,0.12)' : (accentColor + '30');
   const cardTopBorder = accentColor;
 
   return (

@@ -162,7 +162,7 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
   }, []);
 
   const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }
+    ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }
     : {};
 
   const Wrapper: any = onPress ? TouchableOpacity : View;
@@ -288,14 +288,15 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
   };
 
   const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
+    ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }
     : {};
+  const cardBg = isDark ? 'rgba(12,12,16,0.88)' : colors.card;
 
   return (
     <>
       <TouchableOpacity
         style={[styles.alertCard, glassStyle, {
-          backgroundColor: colors.card,
+          backgroundColor: cardBg,
           borderColor: colors.border,
           borderLeftColor: uc,
         }]}
@@ -449,11 +450,12 @@ interface ToolCardProps {
 export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subtitle, onPress, badge }) => {
   const { colors, isDark } = useTheme();
   const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
+    ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }
     : {};
+  const cardBg = isDark ? 'rgba(12,12,16,0.85)' : colors.card;
   return (
     <TouchableOpacity
-      style={[styles.toolCard, glassStyle, { backgroundColor: colors.card, borderColor: colors.border }]}
+      style={[styles.toolCard, glassStyle, { backgroundColor: cardBg, borderColor: colors.border }]}
       onPress={onPress}
       activeOpacity={0.75}
     >
