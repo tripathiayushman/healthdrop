@@ -233,7 +233,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
       {activeTab === 'home' && !isOpen && (
         <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}>
           <TouchableOpacity
-            style={[styles.fab, { backgroundColor: colors.primary }]}
+            style={[styles.fab, { backgroundColor: '#DC2626', shadowColor: '#DC2626' }]}
             onPress={toggleChat}
             activeOpacity={0.85}
           >

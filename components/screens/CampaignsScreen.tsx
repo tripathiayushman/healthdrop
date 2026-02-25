@@ -429,7 +429,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           </Text>
           {canCreateCampaign && (
             <TouchableOpacity
-              style={[styles.emptyButton, { backgroundColor: colors.primary }]}
+              style={[styles.emptyButton, { backgroundColor: '#DC2626' }]}
               onPress={() => onNavigateToForm('new-campaign')}
             >
               <Text style={styles.emptyButtonText}>Create Campaign</Text>

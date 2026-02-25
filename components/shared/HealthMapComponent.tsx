@@ -540,6 +540,14 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
         </View>
       </Modal>
 
+      {/* ── "Alerts" section heading — matches Quick Actions style ── */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginTop: 4, marginBottom: 4 }}>
+        <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#F59E0B22', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+          <Ionicons name="warning" size={15} color="#F59E0B" />
+        </View>
+        <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, letterSpacing: 0.1 }}>Alerts</Text>
+      </View>
+
       {/* ── Side-by-side row ── */}
       <View style={[s.row, { borderColor: colors.border }]}>
         {/* ── Left: Map ── */}

@@ -293,9 +293,9 @@ export const themes = {
     background:     '#000000',
     surface:        '#0a0a0a',
     surfaceVariant: '#111111',
-    // ── Glassmorphic cards over black ──
-    card:     'rgba(255,255,255,0.06)',
-    cardHover:'rgba(255,255,255,0.09)',
+    // ── Dark opaque glass cards (readable over black background) ──
+    card:     'rgba(22,22,22,0.88)',
+    cardHover:'rgba(30,30,30,0.92)',
 
     // Text
     text:          '#F1F5F9',
@@ -353,8 +353,8 @@ export const themes = {
     navBorder:     'rgba(255,255,255,0.07)',
 
     // Input
-    inputBackground: 'rgba(255,255,255,0.06)',
-    inputBorder:     'rgba(255,255,255,0.12)',
+    inputBackground: 'rgba(30,30,30,0.80)',
+    inputBorder:     'rgba(255,255,255,0.14)',
     inputFocus:      '#26A69A',
     placeholder:     '#64748B',
 
