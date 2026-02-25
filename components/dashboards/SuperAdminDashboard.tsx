@@ -13,6 +13,7 @@ import {
   AlertCard, ToolCard, EmptyState, SectionDivider,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
+import { HealthMapComponent } from '../shared/HealthMapComponent';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -101,7 +102,12 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
       <SectionDivider />
 
-      {/* 5. Active Alerts */}
+      {/* 5. Health Map */}
+      <HealthMapComponent profile={profile} alerts={alerts} />
+
+      <SectionDivider />
+
+      {/* 6. Active Alerts */}
       <Section title="Active Alerts" action={{ label: 'View All', onPress: () => onNavigate('approval-queue') }}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle" color="#10B981" title="No Active Alerts" subtitle="All systems are clear. No health alerts at this time." />

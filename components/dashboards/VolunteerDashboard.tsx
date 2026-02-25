@@ -10,6 +10,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { DashboardHeader, Section, StatCard, AlertCard, EmptyState, SectionDivider, InfoBanner } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
+import { HealthMapComponent } from '../shared/HealthMapComponent';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -41,8 +42,13 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
     >
       <DashboardHeader profile={profile} subtitle="Community Health Volunteer" />
 
-      {/* 1. Active Alerts — HIGHEST PRIORITY for volunteers */}
-      <Section title="Active Health Alerts" style={{ marginTop: 16 }}>
+      {/* 1. Health Map */}
+      <HealthMapComponent profile={profile} alerts={alerts} />
+
+      <SectionDivider />
+
+      {/* 2. Active Alerts — HIGHEST PRIORITY for volunteers */}
+      <Section title="Active Health Alerts" style={{ marginTop: 0 }}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="No Active Alerts" subtitle="Your community is safe! No health alerts at this time." />
           : alerts.map(a => <AlertCard key={a.id} alert={a} onPress={() => {}} />)

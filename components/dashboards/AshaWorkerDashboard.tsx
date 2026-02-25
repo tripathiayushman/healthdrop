@@ -12,6 +12,7 @@ import {
   AlertCard, EmptyState, InfoBanner, SectionDivider,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
+import { HealthMapComponent } from '../shared/HealthMapComponent';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -72,7 +73,12 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
       <SectionDivider />
 
-      {/* 2. District Alerts */}
+      {/* 2. Health Map */}
+      <HealthMapComponent profile={profile} alerts={alerts} />
+
+      <SectionDivider />
+
+      {/* 3. District Alerts */}
       <Section title={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}>
         {alerts.length === 0
           ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title="District is Clear" subtitle="No active health alerts in your district." />
