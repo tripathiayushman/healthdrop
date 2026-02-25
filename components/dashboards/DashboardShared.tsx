@@ -3,10 +3,10 @@
 // Gradient headers, animated stat cards, alert cards,
 // tool cards, quick actions — used by all role dashboards
 // =====================================================
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  Animated, ViewStyle,
+  Animated, ViewStyle, Modal, ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -238,9 +238,6 @@ export const urgencyColor = (u: string): string => {
   }
 };
 
-// ─────────────────────────────────────────────────────
-//  AlertCard — severity-coded left border
-// ─────────────────────────────────────────────────────
 interface AlertCardProps {
   alert: {
     id: string;
@@ -248,50 +245,175 @@ interface AlertCardProps {
     urgency_level: string;
     location_name: string;
     district: string;
+    state?: string;
     created_at: string;
     description: string;
     alert_type?: string;
+    disease_or_issue?: string;
+    cases_reported?: number;
+    affected_population?: number;
+    immediate_actions?: string;
+    precautionary_measures?: string;
   };
-  onPress: () => void;
+  onPress?: () => void;
 }
 
+const URGENCY_LABEL: Record<string, string> = {
+  critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', low: 'LOW',
+};
+
 export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const uc = urgencyColor(alert.urgency_level);
+  const [showDetail, setShowDetail] = useState(false);
+
+  const handlePress = () => {
+    setShowDetail(true);
+    onPress?.();
+  };
 
   return (
-    <TouchableOpacity
-      style={[styles.alertCard, {
-        backgroundColor: colors.card,
-        borderColor: colors.border,
-        borderLeftColor: uc,
-      }]}
-      onPress={onPress}
-      activeOpacity={0.78}
-    >
-      {/* Urgency header row */}
-      <View style={styles.alertHeader}>
-        <View style={[styles.urgencyPill, { backgroundColor: uc + '20' }]}>
-          <View style={[styles.urgencyDot, { backgroundColor: uc }]} />
-          <Text style={[styles.urgencyText, { color: uc }]}>{alert.urgency_level?.toUpperCase()}</Text>
+    <>
+      <TouchableOpacity
+        style={[styles.alertCard, {
+          backgroundColor: colors.card,
+          borderColor: colors.border,
+          borderLeftColor: uc,
+        }]}
+        onPress={handlePress}
+        activeOpacity={0.78}
+      >
+        {/* Urgency header row */}
+        <View style={styles.alertHeader}>
+          <View style={[styles.urgencyPill, { backgroundColor: uc + '20' }]}>
+            <View style={[styles.urgencyDot, { backgroundColor: uc }]} />
+            <Text style={[styles.urgencyText, { color: uc }]}>{URGENCY_LABEL[alert.urgency_level] ?? alert.urgency_level?.toUpperCase()}</Text>
+          </View>
+          <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
+            {new Date(alert.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+          </Text>
         </View>
-        <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
-          {new Date(alert.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-        </Text>
-      </View>
 
-      <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={2}>{alert.title}</Text>
-      <Text style={[styles.alertDesc, { color: colors.textSecondary }]} numberOfLines={2}>{alert.description}</Text>
+        <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={2}>{alert.title}</Text>
+        <Text style={[styles.alertDesc, { color: colors.textSecondary }]} numberOfLines={2}>{alert.description}</Text>
 
-      <View style={styles.alertFooter}>
-        <Ionicons name="location-outline" size={12} color={colors.textSecondary} />
-        <Text style={[styles.alertLocation, { color: colors.textSecondary }]} numberOfLines={1}>
-          {alert.location_name ? `${alert.location_name}, ` : ''}{alert.district}
-        </Text>
-      </View>
-    </TouchableOpacity>
+        <View style={styles.alertFooter}>
+          <Ionicons name="location-outline" size={12} color={colors.textSecondary} />
+          <Text style={[styles.alertLocation, { color: colors.textSecondary }]} numberOfLines={1}>
+            {alert.location_name ? `${alert.location_name}, ` : ''}{alert.district}
+          </Text>
+          <View style={{ flex: 1 }} />
+          <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+        </View>
+      </TouchableOpacity>
+
+      {/* Detail Modal */}
+      <Modal visible={showDetail} transparent animationType="slide" onRequestClose={() => setShowDetail(false)}>
+        <View style={adStyles.overlay}>
+          <View style={[adStyles.sheet, { backgroundColor: colors.card }]}>
+            {/* Handle bar */}
+            <View style={[adStyles.handle, { backgroundColor: colors.border }]} />
+
+            {/* Header gradient strip */}
+            <View style={[adStyles.headerStrip, { backgroundColor: uc }]}>
+              <View style={adStyles.headerRow}>
+                <View style={adStyles.urgencyTag}>
+                  <Text style={adStyles.urgencyTagText}>{URGENCY_LABEL[alert.urgency_level] ?? alert.urgency_level?.toUpperCase()}</Text>
+                </View>
+                {alert.alert_type && (
+                  <Text style={adStyles.alertTypeText}>{alert.alert_type.replace(/_/g, ' ').toUpperCase()}</Text>
+                )}
+              </View>
+              <Text style={adStyles.modalTitle} numberOfLines={3}>{alert.title}</Text>
+              <TouchableOpacity style={adStyles.closeBtn} onPress={() => setShowDetail(false)}>
+                <Ionicons name="close" size={20} color="rgba(255,255,255,0.85)" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={adStyles.body} showsVerticalScrollIndicator={false}>
+              {/* Description */}
+              <Text style={[adStyles.sectionLabel, { color: colors.textSecondary }]}>Description</Text>
+              <Text style={[adStyles.bodyText, { color: colors.text }]}>{alert.description}</Text>
+
+              {/* Key info grid */}
+              <View style={adStyles.infoGrid}>
+                <View style={[adStyles.infoBox, { backgroundColor: uc + '12', borderColor: uc + '30' }]}>
+                  <Ionicons name="location-outline" size={16} color={uc} />
+                  <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Location</Text>
+                  <Text style={[adStyles.infoValue, { color: colors.text }]} numberOfLines={2}>
+                    {[alert.location_name, alert.district, alert.state].filter(Boolean).join(', ')}
+                  </Text>
+                </View>
+                <View style={[adStyles.infoBox, { backgroundColor: uc + '12', borderColor: uc + '30' }]}>
+                  <Ionicons name="calendar-outline" size={16} color={uc} />
+                  <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Date</Text>
+                  <Text style={[adStyles.infoValue, { color: colors.text }]}>
+                    {new Date(alert.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </Text>
+                </View>
+                {alert.cases_reported && (
+                  <View style={[adStyles.infoBox, { backgroundColor: '#EF444412', borderColor: '#EF444430' }]}>
+                    <Ionicons name="people-outline" size={16} color="#EF4444" />
+                    <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Cases</Text>
+                    <Text style={[adStyles.infoValue, { color: colors.text }]}>{alert.cases_reported}</Text>
+                  </View>
+                )}
+                {alert.affected_population && (
+                  <View style={[adStyles.infoBox, { backgroundColor: '#F59E0B12', borderColor: '#F59E0B30' }]}>
+                    <Ionicons name="stats-chart-outline" size={16} color="#F59E0B" />
+                    <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Affected</Text>
+                    <Text style={[adStyles.infoValue, { color: colors.text }]}>{alert.affected_population}</Text>
+                  </View>
+                )}
+              </View>
+
+              {alert.disease_or_issue && (
+                <>
+                  <Text style={[adStyles.sectionLabel, { color: colors.textSecondary }]}>Disease / Issue</Text>
+                  <Text style={[adStyles.bodyText, { color: colors.text }]}>{alert.disease_or_issue}</Text>
+                </>
+              )}
+              {alert.immediate_actions && (
+                <>
+                  <Text style={[adStyles.sectionLabel, { color: colors.textSecondary }]}>Immediate Actions</Text>
+                  <Text style={[adStyles.bodyText, { color: colors.text }]}>{alert.immediate_actions}</Text>
+                </>
+              )}
+              {alert.precautionary_measures && (
+                <>
+                  <Text style={[adStyles.sectionLabel, { color: colors.textSecondary }]}>Precautionary Measures</Text>
+                  <Text style={[adStyles.bodyText, { color: colors.text }]}>{alert.precautionary_measures}</Text>
+                </>
+              )}
+              <View style={{ height: 32 }} />
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 };
+
+// ── AlertCard detail modal styles ────────────────
+const adStyles = StyleSheet.create({
+  overlay:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet:         { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%', overflow: 'hidden' },
+  handle:        { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 4 },
+  headerStrip:   { padding: 20, paddingTop: 12, paddingRight: 48 },
+  headerRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  urgencyTag:    { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  urgencyTagText:{ color: '#FFF', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  alertTypeText: { color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '600', textTransform: 'uppercase' },
+  modalTitle:    { fontSize: 18, fontWeight: '800', color: '#FFF', lineHeight: 24 },
+  closeBtn:      { position: 'absolute', top: 12, right: 16, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  body:          { padding: 20 },
+  sectionLabel:  { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 16, marginBottom: 6 },
+  bodyText:      { fontSize: 14, lineHeight: 21 },
+  infoGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 16 },
+  infoBox:       { width: '47%', borderRadius: 12, borderWidth: 1, padding: 12, gap: 4 },
+  infoLabel:     { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+  infoValue:     { fontSize: 13, fontWeight: '700' },
+});
 
 // ─────────────────────────────────────────────────────
 //  ToolCard — icon + title + subtitle + chevron

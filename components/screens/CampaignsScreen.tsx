@@ -426,7 +426,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               ? 'No upcoming campaigns scheduled'
               : 'No past campaigns found'}
           </Text>
-          {(profile.role === 'super_admin' || profile.role === 'health_admin' || profile.role === 'district_officer') && (
+          {canCreateCampaign && (
             <TouchableOpacity
               style={[styles.emptyButton, { backgroundColor: colors.primary }]}
               onPress={() => onNavigateToForm('new-campaign')}
@@ -570,8 +570,20 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.accent }]}>
-        <Text style={styles.headerTitle}>Campaigns</Text>
-        <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Campaigns</Text>
+          <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
+        </View>
+        {canCreateCampaign && (
+          <TouchableOpacity
+            style={styles.headerCreateBtn}
+            onPress={() => onNavigateToForm('new-campaign')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add" size={18} color="#FFF" />
+            <Text style={styles.headerCreateBtnText}>Create</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Search Bar */}
@@ -989,6 +1001,23 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.8)',
+  },
+  headerCreateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    marginLeft: 12,
+  },
+  headerCreateBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   tabContainer: {
     flexDirection: 'row',
