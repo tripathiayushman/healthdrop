@@ -63,7 +63,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   const { colors } = useTheme();
 
   // Role permission constants — mirrors DB RLS
-  const canCreateCampaign  = ['super_admin', 'health_admin', 'district_officer'].includes(profile.role);
+  const canCreateCampaign  = ['super_admin', 'health_admin', 'district_officer', 'asha_worker'].includes(profile.role);
   const canApproveCampaign = ['super_admin', 'health_admin', 'district_officer'].includes(profile.role);
   const canEnrollCampaign  = ['volunteer', 'asha_worker'].includes(profile.role);
   const isViewOnly         = profile.role === 'volunteer';

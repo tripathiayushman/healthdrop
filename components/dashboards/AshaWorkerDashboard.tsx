@@ -64,9 +64,9 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       {/* 1. Quick Actions */}
       <Section title="Quick Actions" style={{ marginTop: stats.myPending > 0 ? 4 : 16 }}>
         <View style={styles.qaRow}>
+          <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
           <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
           <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
-          <QuickActionBtn icon="warning" label="Send Alert" color="#F59E0B" onPress={() => onNavigate('new-alert')} />
         </View>
       </Section>
 
