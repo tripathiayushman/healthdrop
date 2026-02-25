@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  Animated, ViewStyle, Modal, ScrollView,
+  Animated, ViewStyle, Modal, ScrollView, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -161,11 +161,16 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
     Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: false, tension: 80, friction: 7 }).start();
   }, []);
 
+  // Glass blur on web dark mode
+  const glassStyle: any = isDark && Platform.OS === 'web'
+    ? { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }
+    : {};
+
   const Wrapper: any = onPress ? TouchableOpacity : View;
   return (
     <Animated.View style={[{ flex: 1 }, { transform: [{ scale: scaleAnim }] }]}>
       <Wrapper
-        style={[styles.statCard, {
+        style={[styles.statCard, glassStyle, {
           backgroundColor: colors.card,
           borderColor: isDark ? colors.border : color + '25',
           borderTopWidth: 3, borderTopColor: color,
@@ -272,10 +277,14 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
     onPress?.();
   };
 
+  const glassStyle: any = isDark && Platform.OS === 'web'
+    ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
+    : {};
+
   return (
     <>
       <TouchableOpacity
-        style={[styles.alertCard, {
+        style={[styles.alertCard, glassStyle, {
           backgroundColor: colors.card,
           borderColor: colors.border,
           borderLeftColor: uc,
@@ -428,10 +437,13 @@ interface ToolCardProps {
 }
 
 export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subtitle, onPress, badge }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const glassStyle: any = isDark && Platform.OS === 'web'
+    ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
+    : {};
   return (
     <TouchableOpacity
-      style={[styles.toolCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+      style={[styles.toolCard, glassStyle, { backgroundColor: colors.card, borderColor: colors.border }]}
       onPress={onPress}
       activeOpacity={0.75}
     >
@@ -532,7 +544,8 @@ const styles = StyleSheet.create({
   statCard: {
     borderRadius: 14, borderWidth: 1,
     padding: 14, alignItems: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 6, elevation: 3,
+    minHeight: 110, justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 3,
   },
   statIconWrap: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
   statValue: { fontSize: 24, fontWeight: '800', marginBottom: 2 },

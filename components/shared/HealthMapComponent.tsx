@@ -104,6 +104,7 @@ function groupByDistrict(
   getDistrict: (r: any) => string,
   getColor:    (r: any) => string,
   getLabel:    (r: any) => string,
+  hasCoords = true,
 ): MapMarker[] {
   const map: Record<string, {
     lats: number[]; lons: number[]; colors: Set<string>;
@@ -115,7 +116,7 @@ function groupByDistrict(
     if (!map[dist]) map[dist] = { lats: [], lons: [], colors: new Set(), labels: [], count: 0, district: dist };
     map[dist].count++;
     // Use ACTUAL GPS from the record if present and valid (not 0,0 which is default/empty)
-    if (r.latitude && r.longitude && !(r.latitude === 0 && r.longitude === 0)) {
+    if (hasCoords && r.latitude && r.longitude && !(r.latitude === 0 && r.longitude === 0)) {
       map[dist].lats.push(Number(r.latitude));
       map[dist].lons.push(Number(r.longitude));
     }
@@ -123,6 +124,8 @@ function groupByDistrict(
     const lbl = getLabel(r);
     if (lbl) map[dist].labels.push(lbl);
   });
+
+  const DEFAULT = DISTRICT_CENTROIDS['__default__'];
 
   return Object.values(map).map(info => {
     // Average of actual GPS coords if available, else use centroid lookup
@@ -133,6 +136,10 @@ function groupByDistrict(
       ? info.lons.reduce((a, b) => a + b, 0) / info.lons.length
       : fallbackCoords(info.district)[1];
 
+    // Skip markers that landed exactly on the __default__ fallback
+    // (means we have no real location data for this district)
+    if (lat === DEFAULT[0] && lon === DEFAULT[1]) return null;
+
     const colorArr = Array.from(info.colors);
     const color = colorArr.length > 1 ? MULTI_COLOR : colorArr[0];
 
@@ -140,7 +147,7 @@ function groupByDistrict(
     const distPretty = info.district.replace(/\b\w/g, c => c.toUpperCase());
 
     return { lat, lon, district: distPretty, color, count: info.count, label: uniqueLabels };
-  });
+  }).filter(Boolean) as MapMarker[];
 }
 
 function buildAlertMarkers(alerts: any[]): MapMarker[] {
@@ -171,11 +178,13 @@ function buildWaterMarkers(data: any[]): MapMarker[] {
 }
 
 function buildCampaignMarkers(data: any[]): MapMarker[] {
+  // campaigns table has no lat/lon columns — use district centroid only
   return groupByDistrict(
     data,
     r => r.district,
     _r => LAYER_COLOR.campaigns,
     r => (r.campaign_type ?? '').replace(/_/g, ' '),
+    false,  // hasCoords = false
   );
 }
 
@@ -329,7 +338,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
           .select('district,overall_quality,latitude,longitude')
           .eq('approval_status','approved').limit(300),
         supabase.from('health_campaigns')
-          .select('district,campaign_type,status,latitude,longitude')
+          .select('district,campaign_type,status')
           .eq('status','active').limit(300),
       ]);
       if (d.data) setDiseaseData(d.data);
@@ -589,7 +598,7 @@ const s = StyleSheet.create({
   promptBtnTxt: { color:'#fff', fontSize:12, fontWeight:'700' },
 
   // Side-by-side row
-  row:        { flexDirection:'row', marginHorizontal:16, marginBottom:12, minHeight:260, borderRadius:16, overflow:'hidden', borderWidth:1 },
+  row:        { flexDirection:'row', marginHorizontal:16, marginBottom:12, minHeight:280, borderRadius:16, overflow:'hidden', borderWidth:1 },
   mapPanel:   { flex:1.1, padding:10, borderRightWidth:1, minWidth:0 },
   alertPanel: { flex:1, padding:10, minWidth:0 },
   panelHeader:{ flexDirection:'row', alignItems:'center', gap:5, marginBottom:8 },

@@ -289,111 +289,112 @@ export const themes = {
   
   dark: {
     mode: 'dark' as const,
-    // Backgrounds
-    background: '#0F172A',
-    surface: '#1E293B',
-    surfaceVariant: '#334155',
-    card: '#1E293B',
-    cardHover: '#334155',
-    
+    // ── Pure black backgrounds ──
+    background:     '#000000',
+    surface:        '#0a0a0a',
+    surfaceVariant: '#111111',
+    // ── Glassmorphic cards over black ──
+    card:     'rgba(255,255,255,0.06)',
+    cardHover:'rgba(255,255,255,0.09)',
+
     // Text
-    text: '#F1F5F9',
+    text:          '#F1F5F9',
     textSecondary: '#94A3B8',
-    textTertiary: '#64748B',
-    textInverse: '#0F172A',
-    
-    // Primary actions
-    primary: colors.primary[400],
-    primaryLight: colors.primary[900],
-    primaryDark: colors.primary[300],
-    primaryVariant: colors.primary[500],
-    onPrimary: '#0F172A',
-    
+    textTertiary:  '#5A6A7A',
+    textInverse:   '#000000',
+
+    // Primary — teal (not blue)
+    primary:        '#26A69A',
+    primaryLight:   'rgba(38,166,154,0.15)',
+    primaryDark:    '#4DB6AC',
+    primaryVariant: '#00897B',
+    onPrimary:      '#000000',
+
     // Secondary
-    secondary: colors.secondary[400],
-    secondaryLight: colors.secondary[900],
-    onSecondary: '#0F172A',
-    
+    secondary:      '#38BDF8',
+    secondaryLight: 'rgba(56,189,248,0.12)',
+    onSecondary:    '#000000',
+
     // Accent
     accent: colors.danger[400],
-    
-    // Status colors
-    success: colors.success[400],
-    successLight: '#0D3E10',
-    successBg: '#1B4332',
-    
-    warning: colors.warning[400],
-    warningLight: '#78350F',
-    warningBg: '#713F12',
-    
-    error: colors.danger[400],
-    danger: colors.danger[400],
-    dangerLight: '#450A0A',
-    dangerBg: '#7F1D1D',
-    
-    info: colors.info[400],
-    infoLight: '#003F6B',
-    infoBg: '#0C4A6E',
-    
-    // Borders
-    border: '#334155',
-    borderLight: '#1E293B',
-    borderDark: '#475569',
-    
+
+    // Status
+    success:      colors.success[400],
+    successLight: 'rgba(68,160,60,0.15)',
+    successBg:    'rgba(68,160,60,0.20)',
+
+    warning:      colors.warning[400],
+    warningLight: 'rgba(255,179,0,0.15)',
+    warningBg:    'rgba(255,179,0,0.20)',
+
+    error:       colors.danger[400],
+    danger:      colors.danger[400],
+    dangerLight: 'rgba(239,68,68,0.15)',
+    dangerBg:    'rgba(239,68,68,0.20)',
+
+    info:      colors.info[400],
+    infoLight: 'rgba(3,155,229,0.15)',
+    infoBg:    'rgba(3,155,229,0.20)',
+
+    // Borders: subtle white glow
+    border:      'rgba(255,255,255,0.10)',
+    borderLight: 'rgba(255,255,255,0.05)',
+    borderDark:  'rgba(255,255,255,0.18)',
+
     // Sidebar
-    sidebar: '#020617',
-    sidebarText: '#94A3B8',
+    sidebar:           '#000000',
+    sidebarText:       'rgba(255,255,255,0.55)',
     sidebarTextActive: '#FFFFFF',
-    sidebarHover: '#1E293B',
-    sidebarActive: colors.primary[600],
-    
+    sidebarHover:      'rgba(255,255,255,0.07)',
+    sidebarActive:     '#26A69A',
+
     // Navigation
-    navBackground: '#1E293B',
-    navBorder: '#334155',
-    
+    navBackground: 'rgba(0,0,0,0.90)',
+    navBorder:     'rgba(255,255,255,0.07)',
+
     // Input
-    inputBackground: '#1E293B',
-    inputBorder: '#475569',
-    inputFocus: colors.primary[400],
-    placeholder: '#64748B',
-    
+    inputBackground: 'rgba(255,255,255,0.06)',
+    inputBorder:     'rgba(255,255,255,0.12)',
+    inputFocus:      '#26A69A',
+    placeholder:     '#64748B',
+
     // Charts
-    chartLine: colors.primary[400],
-    chartArea: colors.primary[900],
-    chartGrid: '#334155',
-    
-    // Severity indicators
+    chartLine: '#26A69A',
+    chartArea: 'rgba(38,166,154,0.15)',
+    chartGrid: 'rgba(255,255,255,0.07)',
+
+    // Severity
     severityCritical: colors.danger[400],
-    severityHigh: colors.warning[400],
-    severityMedium: colors.warning[300],
-    severityLow: colors.success[400],
-    
+    severityHigh:     colors.warning[400],
+    severityMedium:   colors.warning[300],
+    severityLow:      colors.success[400],
+
     // Water quality
-    waterSafe: colors.success[400],
+    waterSafe:     colors.success[400],
     waterModerate: colors.warning[400],
-    waterUnsafe: colors.danger[400],
+    waterUnsafe:   colors.danger[400],
     waterCritical: colors.danger[300],
-    
+
     // Shadow
-    shadow: 'rgba(0, 0, 0, 0.3)',
-    shadowMedium: 'rgba(0, 0, 0, 0.4)',
-    shadowDark: 'rgba(0, 0, 0, 0.5)',
-    
+    shadow:       'rgba(0,0,0,0.6)',
+    shadowMedium: 'rgba(0,0,0,0.75)',
+    shadowDark:   'rgba(0,0,0,0.90)',
+
     // Overlay
-    overlay: 'rgba(0, 0, 0, 0.7)',
-    
-    // Status badges
-    badgeActive: colors.success[400],
-    badgePending: colors.warning[400],
+    overlay: 'rgba(0,0,0,0.80)',
+
+    // Badges
+    badgeActive:   colors.success[400],
+    badgePending:  colors.warning[400],
     badgeInactive: colors.gray[500],
-    
+
     disabled: '#64748B',
     elevation: {
-      low: 'rgba(255,255,255,0.1)',
-      medium: 'rgba(255,255,255,0.2)',
-      high: 'rgba(255,255,255,0.3)',
+      low:    'rgba(255,255,255,0.05)',
+      medium: 'rgba(255,255,255,0.09)',
+      high:   'rgba(255,255,255,0.14)',
     },
-    alert: colors.danger[400],
+    alert:    colors.danger[400],
     campaign: colors.success[400],
   } as Theme,
 };
