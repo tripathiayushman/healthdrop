@@ -74,7 +74,7 @@ const Field: React.FC<{
   <View style={f.field}>
     <Ionicons name={icon as any} size={16} color="#9ca3af" />
     <TextInput
-      style={f.input}
+      style={[f.input, Platform.OS === 'web' && ({ outline: 'none' } as any)]}
       placeholder={placeholder}
       placeholderTextColor="#4b5563"
       value={value}
@@ -83,8 +83,6 @@ const Field: React.FC<{
       secureTextEntry={secure}
       autoCapitalize={autoCapitalize}
       autoComplete={autoComplete}
-      // Remove browser default outline / box
-      {...(Platform.OS === 'web' ? { style: [f.input, { outline: 'none' } as any] } : {})}
     />
     {rightElement}
   </View>
@@ -376,7 +374,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   // ── Render ────────────────────────────────────────────
   return (
     <ImageBackground
-      source={require('../mesc/images/44472001_grey_hexagons_on_black_background.jpg')}
+      source={require('../assets/44472001_grey_hexagons_on_black_background.jpg')}
       style={s.bg}
       imageStyle={{ opacity: 0.35 }}
     >
@@ -510,7 +508,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         {/* ── OTP Modal ── */}
         <Modal visible={showOtpModal} transparent animationType="slide" onRequestClose={() => setShowOtpModal(false)}>
           <View style={mod.overlay}>
-            <View style={mod.card}>
+            <View style={[mod.card, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
               <Ionicons name="keypad-outline" size={36} color={BRAND_PRIMARY} style={{ marginBottom: 12 }} />
               <Text style={mod.title}>Enter Verification Code</Text>
               <Text style={mod.sub}>We sent a 6-digit code to {userEmail}</Text>
@@ -528,7 +526,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         {/* ── Success Modal ── */}
         <Modal visible={showSuccessModal} transparent animationType="fade" onRequestClose={() => setShowSuccessModal(false)}>
           <View style={mod.overlay}>
-            <View style={mod.card}>
+            <View style={[mod.card, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
               <Ionicons name="checkmark-circle" size={48} color="#10B981" style={{ marginBottom: 12 }} />
               <Text style={mod.title}>Account Created!</Text>
               <Text style={mod.sub}>Welcome to HealthDrop. Let's get started.</Text>
@@ -542,7 +540,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         {/* ── Message Modal ── */}
         <Modal visible={msgVisible} transparent animationType="fade" onRequestClose={closeMsg}>
           <View style={mod.overlay}>
-            <View style={mod.card}>
+            <View style={[mod.card, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
               <Ionicons
                 name={msgType === 'error' ? 'alert-circle' : 'checkmark-circle'}
                 size={48} color={msgType === 'error' ? '#EF4444' : '#10B981'}
