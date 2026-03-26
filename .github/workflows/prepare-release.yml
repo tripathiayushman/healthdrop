@@ -1,0 +1,53 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version (e.g. 1.2.0)"
+        required: true
+        type: string
+      buildNumber:
+        description: "Android/iOS build number (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bump versions
+        run: |
+          BUILD_NUMBER="${{ github.event.inputs.buildNumber }}"
+          if [ -z "$BUILD_NUMBER" ]; then
+            BUILD_NUMBER="${{ github.run_number }}"
+          fi
+          node scripts/sync-version.cjs "${{ github.event.inputs.version }}" "$BUILD_NUMBER"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json app.json
+          git diff --cached --quiet || git commit -m "chore(release): v${{ github.event.inputs.version }}"
+
+      - name: Push commit and tag
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          git push origin HEAD
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"

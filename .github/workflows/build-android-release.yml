@@ -1,0 +1,61 @@
+name: Build Android Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync version for this tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/sync-version.cjs "$VERSION" "${{ github.run_number }}"
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build APK on EAS
+        run: npx eas build --platform android --profile preview --non-interactive --wait --json > eas-build.json
+
+      - name: Download APK artifact
+        run: |
+          APK_URL=$(node -e "const fs=require('fs');const raw=JSON.parse(fs.readFileSync('eas-build.json','utf8'));const item=Array.isArray(raw)?raw[0]:raw;const url=item?.artifacts?.buildUrl||'';if(!url){process.exit(1)};process.stdout.write(url);")
+          VERSION="${GITHUB_REF_NAME#v}"
+          curl -L "$APK_URL" -o "HealthDrop-${VERSION}.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: HealthDrop ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            HealthDrop-*.apk
