@@ -15,9 +15,11 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tripathiayushman.healthdrop"
     },
     "android": {
+      "package": "com.tripathiayushman.healthdrop",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -30,6 +32,12 @@
     "sdkVersion": "54.0.0",
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3a4f36a3-4383-4310-8e55-c85c2f28ab08"
+      }
+    },
+    "owner": "tripathiayushman"
   }
 }
