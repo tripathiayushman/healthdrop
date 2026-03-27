@@ -162,7 +162,7 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
   }, []);
 
   const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }
+    ? { backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }
     : {};
 
   const Wrapper: any = onPress ? TouchableOpacity : View;
@@ -329,8 +329,17 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
 
       {/* Detail Modal */}
       <Modal visible={showDetail} transparent animationType="slide" onRequestClose={() => setShowDetail(false)}>
-        <View style={adStyles.overlay}>
-          <View style={[adStyles.sheet, { backgroundColor: colors.card }]}>
+        <TouchableOpacity
+          style={adStyles.overlay}
+          activeOpacity={1}
+          onPress={() => setShowDetail(false)}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+          <View style={[
+            adStyles.sheet, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(18px)' } as any : {}
+          ]}>
             {/* Handle bar */}
             <View style={[adStyles.handle, { backgroundColor: colors.border }]} />
 
@@ -408,7 +417,8 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
               <View style={{ height: 32 }} />
             </ScrollView>
           </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </>
   );

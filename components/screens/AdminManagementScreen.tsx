@@ -97,41 +97,17 @@ interface Campaign {
   organizer_id?: string;
 }
 
-interface HealthAlert {
-  id: string;
-  title: string;
-  description: string;
-  alert_type: string;
-  urgency_level: string;
-  location_name: string;
-  district: string;
-  state: string;
-  status: string;
-  created_by: string;
-  created_at: string;
-  affected_population?: number;
-  cases_reported?: number;
-  disease_or_issue?: string;
-  approval_status?: string;
-  approved_by?: string;
-  approved_at?: string;
-  rejection_reason?: string;
-}
-
 interface AdminManagementScreenProps {
   profile: Profile;
   onBack: () => void;
 }
 
-type TabType = 'users' | 'disease' | 'water' | 'campaigns' | 'alerts' | 'analytics';
+type TabType = 'users' | 'disease' | 'water' | 'campaigns' | 'analytics';
 
 const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, onBack }) => {
   const { colors } = useTheme();
   const isClinic = profile.role === 'clinic';
-  const isSuperAdmin = profile.role === 'super_admin';
-  const isHealthAdmin = profile.role === 'health_admin';
-  // super_admin starts on users tab; health_admin + clinic start on disease tab
-  const [activeTab, setActiveTab] = useState<TabType>(isSuperAdmin ? 'users' : 'disease');
+  const [activeTab, setActiveTab] = useState<TabType>(isClinic ? 'disease' : 'users');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -141,7 +117,6 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
   const [diseaseReports, setDiseaseReports] = useState<DiseaseReport[]>([]);
   const [waterReports, setWaterReports] = useState<WaterReport[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [healthAlerts, setHealthAlerts] = useState<HealthAlert[]>([]);
 
   // Modal states
   const [showUserModal, setShowUserModal] = useState(false);
@@ -185,7 +160,6 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         activeTab === 'disease' && loadDiseaseReports(),
         activeTab === 'water' && loadWaterReports(),
         activeTab === 'campaigns' && loadCampaigns(),
-        activeTab === 'alerts' && loadAlerts(),
       ]);
     } catch (error) {
       console.error('Error loading data:', error);
@@ -285,20 +259,6 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     }
   };
 
-  const loadAlerts = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('health_alerts')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setHealthAlerts(data || []);
-    } catch (error) {
-      console.error('Error loading alerts:', error);
-    }
-  };
-
   const onRefresh = async () => {
     setRefreshing(true);
     await loadData();
@@ -307,22 +267,11 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   // ==================== USER MANAGEMENT FUNCTIONS ====================
   const handleUpdateUserRole = async (userId: string, newRole: string) => {
-    // Only super_admin can change roles
-    if (profile.role !== 'super_admin') {
-      setConfirmAction({
-        title: 'Permission Denied',
-        message: 'Only Super Administrators can change user roles.',
-        onConfirm: async () => setShowConfirmModal(false),
-        type: 'warning',
-      });
-      setShowConfirmModal(true);
-      return;
-    }
-    // Prevent super_admin from changing their own role away from super_admin
-    if (userId === profile.id && newRole !== 'super_admin') {
+    // Prevent admin from changing their own role
+    if (userId === profile.id && newRole !== 'admin') {
       setConfirmAction({
         title: 'Warning',
-        message: 'You cannot change your own role from super_admin. Ask another super admin to do this.',
+        message: 'You cannot change your own role from admin. Ask another admin to do this.',
         onConfirm: async () => setShowConfirmModal(false),
         type: 'warning',
       });
@@ -533,7 +482,6 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
       if (type === 'disease') loadDiseaseReports();
       else if (type === 'water') loadWaterReports();
       else if (type === 'campaign') loadCampaigns();
-      else if (type === 'alert') loadAlerts();
       
       setShowReportModal(false);
       loadStats();
@@ -572,7 +520,6 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
       if (type === 'disease') loadDiseaseReports();
       else if (type === 'water') loadWaterReports();
       else if (type === 'campaign') loadCampaigns();
-      else if (type === 'alert') loadAlerts();
       
       setShowReportModal(false);
       loadStats();
@@ -657,13 +604,10 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   const getRoleIcon = (role: string) => {
     const icons: Record<string, string> = {
-      super_admin: 'shield-checkmark',
-      health_admin: 'medkit',
-      admin: 'shield-checkmark', // legacy fallback
+      admin: 'shield-checkmark',
       clinic: 'medical',
       asha_worker: 'heart',
       volunteer: 'hand-left',
-      district_officer: 'business',
     };
     return icons[role] || 'person';
   };
@@ -731,24 +675,12 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     { id: 'disease', label: 'Disease', icon: 'medkit' },
     { id: 'water', label: 'Water', icon: 'water' },
     { id: 'campaigns', label: 'Campaigns', icon: 'megaphone' },
-    { id: 'alerts', label: 'Alerts', icon: 'alert-circle' },
     { id: 'analytics', label: 'Analytics', icon: 'stats-chart' },
   ];
   
-  const tabs = isSuperAdmin
-    ? allTabs  // super_admin: full access including Users tab
-    : isClinic
-    ? allTabs.filter(tab => ['disease', 'water', 'campaigns', 'alerts'].includes(tab.id))
-    : allTabs.filter(tab => ['disease', 'water', 'campaigns', 'alerts', 'analytics'].includes(tab.id));
-    // health_admin + district_officer: content + analytics but NOT Users tab
-
-
-  const filteredAlerts = healthAlerts.filter(
-    (a) =>
-      a.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      a.district?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      a.disease_or_issue?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const tabs = isClinic 
+    ? allTabs.filter(tab => ['disease', 'water', 'campaigns'].includes(tab.id))
+    : allTabs;
 
   // ==================== RENDER USER ITEM ====================
   const renderUserItem = ({ item }: { item: User }) => (
@@ -1194,97 +1126,6 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
             }
           />
         );
-      case 'alerts':
-        return (
-          <FlatList
-            data={filteredAlerts}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => {
-              const urgencyColors: Record<string, string> = {
-                critical: '#DC2626', high: '#EA580C', medium: '#F59E0B', low: '#10B981',
-              };
-              const urgColor = urgencyColors[item.urgency_level] || colors.textSecondary;
-              return (
-                <View style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={styles.itemHeader}>
-                    <View style={[styles.avatarCircle, { backgroundColor: urgColor + '20' }]}>
-                      <Ionicons name="alert-circle" size={24} color={urgColor} />
-                    </View>
-                    <View style={styles.itemInfo}>
-                      <Text style={[styles.itemTitle, { color: colors.text }]} numberOfLines={1}>
-                        {item.title}
-                      </Text>
-                      <Text style={[styles.itemSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-                        {item.alert_type?.replace(/_/g, ' ')} • {item.urgency_level?.toUpperCase()}
-                      </Text>
-                    </View>
-                    <View style={[styles.severityBadge, { backgroundColor: getApprovalStatusColor(item.approval_status) + '20' }]}>
-                      <Text style={[styles.severityBadgeText, { color: getApprovalStatusColor(item.approval_status) }]}>
-                        {getApprovalStatusLabel(item.approval_status)}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.itemDetails}>
-                    <View style={styles.detailRow}>
-                      <Ionicons name="location-outline" size={14} color={colors.textSecondary} />
-                      <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-                        {item.location_name || 'N/A'}, {item.district || 'N/A'}
-                      </Text>
-                    </View>
-                    <View style={styles.detailRow}>
-                      <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
-                      <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-                        {item.created_at ? format(new Date(item.created_at), 'MMM d, yyyy h:mm a') : 'Unknown'}
-                      </Text>
-                    </View>
-                    {item.disease_or_issue && (
-                      <View style={styles.detailRow}>
-                        <Ionicons name="medkit-outline" size={14} color={colors.textSecondary} />
-                        <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-                          {item.disease_or_issue}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                  {item.approval_status === 'pending_approval' && (
-                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-                      <TouchableOpacity
-                        style={[styles.approveBtn, { backgroundColor: '#10B981' }]}
-                        onPress={() => handleApproveReport(item.id, 'alert')}
-                      >
-                        <Ionicons name="checkmark" size={16} color="#FFF" />
-                        <Text style={styles.approveBtnText}>Approve</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.approveBtn, { backgroundColor: '#EF4444' }]}
-                        onPress={() => handleRejectReport(item.id, 'alert')}
-                      >
-                        <Ionicons name="close" size={16} color="#FFF" />
-                        <Text style={styles.approveBtnText}>Reject</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  {item.approval_status === 'rejected' && item.rejection_reason && (
-                    <View style={{ marginTop: 8, padding: 8, backgroundColor: '#FEE2E2', borderRadius: 8 }}>
-                      <Text style={{ color: '#991B1B', fontSize: 12 }}>Reason: {item.rejection_reason}</Text>
-                    </View>
-                  )}
-                </View>
-              );
-            }}
-            contentContainerStyle={styles.listContainer}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <View style={styles.emptyContainer}>
-                <Ionicons name="alert-circle-outline" size={48} color={colors.textSecondary} />
-                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No alerts found</Text>
-              </View>
-            }
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
-            }
-          />
-        );
       case 'analytics':
         return renderAnalytics();
       default:
@@ -1293,12 +1134,10 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
   };
 
   const roles = [
-    { value: 'super_admin', label: 'Super Administrator' },
-    { value: 'health_admin', label: 'Health Administrator' },
+    { value: 'admin', label: 'Administrator' },
     { value: 'clinic', label: 'Clinic Staff' },
     { value: 'asha_worker', label: 'ASHA Worker' },
     { value: 'volunteer', label: 'Volunteer' },
-    { value: 'district_officer', label: 'District Officer' },
   ];
 
   return (
@@ -1311,11 +1150,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         <View style={styles.headerContent}>
           <Text style={styles.headerTitle}>{isClinic ? 'Report Approval' : 'Admin Management'}</Text>
           <Text style={styles.headerSubtitle}>
-            {isSuperAdmin
-              ? 'Manage users, reports & campaigns'
-              : isHealthAdmin
-              ? 'Approve reports, campaigns & alerts'
-              : 'Review & approve pending reports'}
+            {isClinic ? 'Review & approve pending reports' : 'Manage users, reports & campaigns'}
           </Text>
         </View>
         <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
@@ -2165,20 +2000,6 @@ const styles = StyleSheet.create({
   },
   confirmBtnText: {
     fontSize: 15,
-    fontWeight: '600',
-  },
-  approveBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  approveBtnText: {
-    color: '#FFFFFF',
-    fontSize: 14,
     fontWeight: '600',
   },
 });

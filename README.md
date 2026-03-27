@@ -26,7 +26,7 @@
 | 🚨 **Health Alerts** | Urgency-graded alerts (Low → Critical) broadcast to relevant zones |
 | 📋 **Campaign Management** | Create, manage, and enroll in health campaigns |
 | ✅ **Approval Workflow** | Verify → Approve → Reject pipeline with rejection reasons |
-| 🤖 **AI Health Insights** | Location-aware insights powered by Google Gemini 2.0 |
+| 🤖 **AI Health Insights** | Location-aware insights powered by OpenRouter free models |
 | 🔔 **Push Notifications** | Real-time alerts via Expo push notifications |
 | 📡 **Offline Sync** | Reports queued locally and synced when connectivity resumes |
 
@@ -40,7 +40,7 @@
 | Web | react-native-web (Android / iOS / Web) |
 | Language | TypeScript 5.9 |
 | Backend | Supabase (PostgreSQL + Auth + Row-Level Security) |
-| AI | Google Gemini REST API (gemini-2.0-flash-lite) |
+| AI | OpenRouter Chat Completions API (`openrouter/free` + free fallbacks) |
 | Location | expo-location + Nominatim reverse geocoding |
 | Gradients | expo-linear-gradient |
 | Icons | @expo/vector-icons (Ionicons, MaterialCommunityIcons) |
@@ -112,11 +112,12 @@ Create a `.env` file in the project root:
 ```env
 EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-EXPO_PUBLIC_GEMINI_API_KEY=your-gemini-api-key
+EXPO_PUBLIC_OPENROUTER_API_KEY=your-openrouter-api-key
+EXPO_PUBLIC_OPENROUTER_MODEL=openrouter/free
 ```
 
 > **Supabase:** Create a project at [supabase.com](https://supabase.com)
-> **Gemini:** Get a key at [Google AI Studio](https://aistudio.google.com/apikey)
+> **OpenRouter:** Get a key at [openrouter.ai](https://openrouter.ai/keys)
 
 ### 4. Run
 ```bash
@@ -151,7 +152,7 @@ healthdrop/
 └── components/
     ├── MainApp.tsx             ← Navigation container
     ├── AuthScreen.tsx          ← Auth (sign in / sign up)
-    ├── ai/                     ← Gemini AI panel + chatbot
+   ├── ai/                     ← OpenRouter-backed AI panel + chatbot
     ├── dashboards/             ← 6 role-specific dashboards
     ├── forms/                  ← Report / campaign / alert forms
     └── screens/                ← Tab screens + overlays
@@ -191,7 +192,7 @@ Campaigns and alerts also go through the same `pending_approval → approved/rej
 
 ## 🤖 AI Integration
 
-The app uses **Google Gemini 2.0 Flash Lite** to generate contextual health insights:
+The app uses **OpenRouter free models** to generate contextual health insights:
 
 - **AIInsightsPanel** — Embedded in every dashboard; shows district/state/global health trends
 - **AIChatbot** — Floating button → slide-up chat for health Q&A

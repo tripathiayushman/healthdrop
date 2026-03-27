@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   Animated,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -123,9 +124,10 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
           style={[
             styles.modalContainer,
             {
-              backgroundColor: isDark ? '#1F2937' : '#FFFFFF',
+              backgroundColor: isDark ? 'rgba(31,41,55,0.92)' : 'rgba(255,255,255,0.92)',
               transform: [{ scale: scaleAnim }],
             },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
           ]}
         >
           {/* Icon */}

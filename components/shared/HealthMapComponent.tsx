@@ -19,6 +19,16 @@ import { Profile } from '../../types';
 import { useTheme } from '../../lib/ThemeContext';
 import { AlertCard, EmptyState } from '../dashboards/DashboardShared';
 
+// Import WebView for native map rendering
+let WebViewComponent: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    WebViewComponent = require('react-native-webview').WebView;
+  } catch (e) {
+    // WebView not available, will use fallback
+  }
+}
+
 // ── Session location cache (persists until reload = logout) ─
 let _cachedLat: number | null = null;
 let _cachedLon: number | null = null;
@@ -126,8 +136,6 @@ function groupByDistrict(
     if (lbl) map[dist].labels.push(lbl);
   });
 
-  const DEFAULT = DISTRICT_CENTROIDS['__default__'];
-
   return Object.values(map).map(info => {
     // Average of actual GPS coords if available, else use centroid lookup
     const lat = info.lats.length
@@ -137,13 +145,8 @@ function groupByDistrict(
       ? info.lons.reduce((a, b) => a + b, 0) / info.lons.length
       : fallbackCoords(info.district)[1];
 
-    // Skip markers that landed exactly on the __default__ fallback
-    // (means we have no real location data for this district)
-    if (lat === DEFAULT[0] && lon === DEFAULT[1]) return null;
-
     const colorArr = Array.from(info.colors);
     const color = colorArr.length > 1 ? MULTI_COLOR : colorArr[0];
-
     const uniqueLabels = [...new Set(info.labels)].slice(0, 3).join(', ') || info.district;
     const distPretty = info.district.replace(/\b\w/g, c => c.toUpperCase());
 
@@ -286,6 +289,26 @@ leg.addTo(map);
 
 // ── WebMap iframe ─────────────────────────────────────
 function WebMap({ html, height }: { html: string; height: number | string }) {
+  if (Platform.OS !== 'web') {
+    if (WebViewComponent) {
+      const nativeStyle = typeof height === 'number'
+        ? { width: '100%', height }
+        : { width: '100%', flex: 1 };
+
+      return (
+        <WebViewComponent
+          originWhitelist={['*']}
+          source={{ html }}
+          style={nativeStyle}
+          javaScriptEnabled
+          domStorageEnabled
+        />
+      );
+    }
+
+    return <View style={typeof height === 'number' ? { height } : { flex: 1 }} />;
+  }
+
   return (
     <iframe
       srcDoc={html}
@@ -326,9 +349,10 @@ const MapPanel: React.FC<MapPanelProps> = ({
   const [waterData,    setWaterData]    = useState<any[]>([]);
   const [campaignData, setCampaignData] = useState<any[]>([]);
   const [loadingData,  setLoadingData]  = useState(false);
+  const [layersFetched, setLayersFetched] = useState(false);
 
   const fetchLayerData = useCallback(async () => {
-    if (diseaseData.length || waterData.length || campaignData.length) return;
+    if (layersFetched) return;
     setLoadingData(true);
     try {
       const [d, w, c] = await Promise.all([
@@ -345,9 +369,10 @@ const MapPanel: React.FC<MapPanelProps> = ({
       if (d.data) setDiseaseData(d.data);
       if (w.data) setWaterData(w.data);
       if (c.data) setCampaignData(c.data);
+      setLayersFetched(true);
     } catch {}
     setLoadingData(false);
-  }, [diseaseData, waterData, campaignData]);
+  }, [layersFetched]);
 
   const markers = React.useMemo((): MapMarker[] => {
     switch (activeLayer) {
@@ -368,7 +393,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
   return (
     <View style={{ flex: 1 }}>
       {/* Layer chips */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 6 }} contentContainerStyle={{ gap: 5, paddingRight: 4 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ gap: 6, paddingRight: 4, paddingHorizontal: IS_MOBILE ? 2 : 0 }}>
         {LAYERS.map(l => (
           <TouchableOpacity
             key={l.id}
@@ -378,7 +403,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
             }]}
             onPress={() => { setActiveLayer(l.id); if (l.id !== 'alerts') fetchLayerData(); }}
           >
-            <Ionicons name={l.icon as any} size={10} color={activeLayer === l.id ? '#fff' : LAYER_COLOR[l.id]} />
+            <Ionicons name={l.icon as any} size={IS_MOBILE ? 14 : 10} color={activeLayer === l.id ? '#fff' : LAYER_COLOR[l.id]} />
             <Text style={[mp.chipTxt, { color: activeLayer === l.id ? '#fff' : LAYER_COLOR[l.id] }]}>{l.label}</Text>
           </TouchableOpacity>
         ))}
@@ -386,36 +411,38 @@ const MapPanel: React.FC<MapPanelProps> = ({
         <TouchableOpacity style={[mp.chip, { backgroundColor: colors.background, borderColor: '#3B82F6' }]} onPress={onRequestLocate} disabled={locating}>
           {locating
             ? <ActivityIndicator size="small" color="#3B82F6" />
-            : <><Ionicons name="locate" size={10} color="#3B82F6" /><Text style={[mp.chipTxt, { color:'#3B82F6' }]}>GPS</Text></>
+            : <><Ionicons name="locate" size={IS_MOBILE ? 14 : 10} color="#3B82F6" /><Text style={[mp.chipTxt, { color:'#3B82F6' }]}>GPS</Text></>
           }
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Map */}
-      {Platform.OS === 'web'
-        ? <WebMap html={html} height={isExpanded ? '100%' : 195} />
-        : (
-          <View style={[mp.nativeFallback, { backgroundColor: colors.background, height: isExpanded ? 400 : 195 }]}>
-            <Ionicons name="map" size={28} color={colors.textSecondary} />
-            <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 6, textAlign:'center' }}>
-              {markers.length} district{markers.length !== 1 ? 's' : ''} with {activeLayer} data
-            </Text>
-            {markers.slice(0, 4).map((m, i) => (
-              <View key={i} style={{ flexDirection:'row', alignItems:'center', gap:6, marginTop:4 }}>
-                <View style={{ width:8, height:8, borderRadius:4, backgroundColor:m.color }} />
-                <Text style={{ color:colors.text, fontSize:11 }}>{m.district} ({m.count})</Text>
-              </View>
-            ))}
-          </View>
-        )
-      }
+      {/* Map — WebView on native, iframe on web */}
+      <WebMap html={html} height={isExpanded ? '100%' : (IS_MOBILE ? 250 : 195)} />
+
+      {/* Native fallback if WebView unavailable */}
+      {Platform.OS !== 'web' && !WebViewComponent && (
+        <View style={[mp.nativeFallback, { backgroundColor: colors.background, height: isExpanded ? 400 : 195 }]}>
+          <Ionicons name="map" size={28} color={colors.textSecondary} />
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 6, textAlign:'center' }}>
+            {markers.length} district{markers.length !== 1 ? 's' : ''} with {activeLayer} data
+          </Text>
+          {markers.slice(0, 4).map((m, i) => (
+            <View key={i} style={{ flexDirection:'row', alignItems:'center', gap:6, marginTop:4 }}>
+              <View style={{ width:8, height:8, borderRadius:4, backgroundColor:m.color }} />
+              <Text style={{ color:colors.text, fontSize:11 }}>{m.district} ({m.count})</Text>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   );
 };
 
+const IS_MOBILE = Platform.OS !== 'web';
+
 const mp = StyleSheet.create({
-  chip:        { flexDirection:'row', alignItems:'center', gap:3, paddingHorizontal:8, paddingVertical:4, borderRadius:12, borderWidth:1.5 },
-  chipTxt:     { fontSize:10, fontWeight:'700' },
+  chip:        { flexDirection:'row', alignItems:'center', gap: IS_MOBILE ? 5 : 3, paddingHorizontal: IS_MOBILE ? 12 : 8, paddingVertical: IS_MOBILE ? 7 : 4, borderRadius:12, borderWidth:1.5 },
+  chipTxt:     { fontSize: IS_MOBILE ? 12 : 10, fontWeight:'700' },
   nativeFallback: { alignItems:'center', justifyContent:'center', borderRadius:10 },
 });
 
@@ -463,6 +490,10 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
     setLocating(true);
     try {
       if (Platform.OS === 'web') {
+        if (typeof navigator === 'undefined' || !navigator.geolocation) {
+          setLocating(false);
+          return;
+        }
         await new Promise<void>((resolve, reject) =>
           navigator.geolocation.getCurrentPosition(
             pos => {
@@ -501,7 +532,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
           <View style={[s.popup, {
             backgroundColor: isDark ? 'rgba(10,10,10,0.97)' : '#FFFFFF',
             borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(59,130,246,0.3)',
-          }]}>
+          }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
             {isDark && (
               <LinearGradient
                 colors={['rgba(59,130,246,0.08)', 'rgba(0,0,0,0)']}
@@ -554,7 +585,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       {/* ── Side-by-side row ── */}
       <View style={[s.row, { borderColor: colors.border }]}>
         {/* ── Left: Map ── */}
-        <View style={[s.mapPanel, { backgroundColor: colors.card, borderRightColor: colors.border, overflow: 'hidden' }]}>
+        <View style={[s.mapPanel, { backgroundColor: colors.card, borderRightColor: colors.border, overflow: 'hidden', ...(IS_MOBILE ? { borderRightWidth: 0, borderBottomWidth: 1, borderBottomColor: colors.border } : {}) }]}>
           {isDark && (
             <LinearGradient
               colors={['rgba(59,130,246,0.06)', 'rgba(0,0,0,0)']}
@@ -576,7 +607,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             locating={locating}
           />
           <TouchableOpacity style={[s.expandBtn, { backgroundColor: accentColor + '18', borderColor: accentColor }]} onPress={() => setExpanded(true)}>
-            <Ionicons name="expand" size={12} color={accentColor} />
+            <Ionicons name="expand" size={IS_MOBILE ? 16 : 12} color={accentColor} />
             <Text style={[s.expandTxt, { color: accentColor }]}>Expand Map</Text>
           </TouchableOpacity>
         </View>
@@ -615,7 +646,11 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
 
       {/* ── Full-screen modal ── */}
       <Modal visible={expanded} animationType="fade" onRequestClose={() => setExpanded(false)}>
-        <View style={[s.modal, { backgroundColor: isDark ? '#0a0a0a' : '#f1f5f9' }]}>
+        <View style={[
+          s.modal, 
+          { backgroundColor: isDark ? '#0a0a0a' : '#f1f5f9' },
+          Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+        ]}>
           {/* Modal header */}
           <View style={[s.modalHeader, { backgroundColor: isDark ? '#111' : '#fff', borderBottomColor: colors.border }]}>
             <TouchableOpacity onPress={() => setExpanded(false)} style={s.closeBtn}>
@@ -664,15 +699,15 @@ const s = StyleSheet.create({
   popupAllow:   { flex:1.5, borderRadius:12, overflow:'hidden' },
   popupAllowGrad:{ paddingVertical:13, paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:8 },
 
-  // Side-by-side row
-  row:        { flexDirection:'row', marginHorizontal:16, marginBottom:12, minHeight:280, borderRadius:16, overflow:'hidden', borderWidth:1 },
-  mapPanel:   { flex:1.1, padding:10, borderRightWidth:1, minWidth:0 },
-  alertPanel: { flex:1, padding:10, minWidth:0 },
+  // Side-by-side row (stacks vertically on mobile)
+  row:        { flexDirection: IS_MOBILE ? 'column' : 'row', marginHorizontal:16, marginBottom:12, minHeight: IS_MOBILE ? undefined : 280, borderRadius:16, overflow:'hidden', borderWidth:1 },
+  mapPanel:   { flex: IS_MOBILE ? undefined : 1.1, padding: IS_MOBILE ? 12 : 10, borderRightWidth: IS_MOBILE ? 0 : 1, minWidth:0, minHeight: IS_MOBILE ? 320 : undefined },
+  alertPanel: { flex: IS_MOBILE ? undefined : 1, padding: IS_MOBILE ? 12 : 10, minWidth:0, minHeight: IS_MOBILE ? 200 : undefined, maxHeight: IS_MOBILE ? 300 : undefined },
   panelHeader:{ flexDirection:'row', alignItems:'center', gap:5, marginBottom:8 },
   panelTitle: { fontSize:13, fontWeight:'700', flex:1 },
   countBadge: { minWidth:20, height:20, borderRadius:10, alignItems:'center', justifyContent:'center', paddingHorizontal:4 },
-  expandBtn:  { flexDirection:'row', alignItems:'center', gap:4, justifyContent:'center', borderRadius:8, paddingVertical:5, marginTop:6, borderWidth:1 },
-  expandTxt:  { fontSize:11, fontWeight:'600' },
+  expandBtn:  { flexDirection:'row', alignItems:'center', gap:4, justifyContent:'center', borderRadius:8, paddingVertical: IS_MOBILE ? 8 : 5, marginTop:6, borderWidth:1 },
+  expandTxt:  { fontSize: IS_MOBILE ? 13 : 11, fontWeight:'600' },
 
   // Full-screen modal
   modal:       { flex:1 },

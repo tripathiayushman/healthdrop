@@ -12,6 +12,7 @@ import {
   Dimensions,
   Modal,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -61,7 +62,7 @@ interface HealthAlert {
 }
 
 const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({
     diseaseReports: 0,
@@ -506,7 +507,11 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
       {/* ==================== FEEDBACK MODAL (Admin Only) ==================== */}
       <Modal visible={showFeedbackModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <View style={styles.modalTitleRow}>
                 <Ionicons name="chatbox-ellipses" size={24} color="#8B5CF6" />
@@ -846,7 +851,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   quickActionCard: {
-    width: (width - 52) / 2,
+    width: '47%' as any,
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
@@ -898,7 +903,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   statCard: {
-    width: (width - 52) / 2,
+    width: '47%' as any,
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,

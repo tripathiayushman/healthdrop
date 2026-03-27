@@ -5,8 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Modal, ScrollView, TextInput, ActivityIndicator,
-  RefreshControl,
+  Modal, ScrollView, TextInput, ActivityIndicator, RefreshControl, Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -175,7 +174,11 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
       <Modal visible={!!selected} animationType="slide" transparent>
         <View style={as.overlay}>
           {selected && (
-            <View style={[as.sheet, { backgroundColor: colors.card }]}>
+            <View style={[
+              as.sheet, 
+              { backgroundColor: colors.card },
+              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            ]}>
               <LinearGradient colors={gradient} style={as.modalHeader}>
                 <View style={{ flex: 1 }}>
                   <Text style={as.modalTitle}>{selected.title}</Text>

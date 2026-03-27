@@ -12,6 +12,7 @@ import {
   Dimensions,
   ActivityIndicator,
   Modal,
+  Platform,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -451,7 +452,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
       {/* ==================== FEEDBACK MODAL ==================== */}
       <Modal visible={showFeedbackModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <View style={styles.modalTitleRow}>
                 <Ionicons name="chatbox-ellipses" size={24} color={colors.primary} />

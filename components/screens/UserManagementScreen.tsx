@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
-  ScrollView,
+  ScrollView, Platform
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -260,20 +260,24 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
       <Modal visible={showModal} animationType="slide" transparent>
         <View style={s.modalOverlay}>
           {selectedUser && (
-            <View style={[s.modalSheet, { backgroundColor: colors.card }]}>
+            <View style={[
+              s.modalSheet, 
+              { backgroundColor: colors.card },
+              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            ]}>
               {/* Modal Header */}
-              <LinearGradient colors={gradient as any} style={s.modalHeader}>
+              <View style={[s.modalHeader, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
                 <View style={[s.modalAvatar, { backgroundColor: (ROLE_COLOR[selectedUser.role] ?? '#888') + '30' }]}>
                   <Ionicons name={(ROLE_ICON[selectedUser.role] ?? 'person') as any} size={32} color={ROLE_COLOR[selectedUser.role] ?? '#888'} />
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={s.modalName}>{selectedUser.full_name || 'No Name'}</Text>
-                  <Text style={s.modalEmail}>{selectedUser.email}</Text>
+                  <Text style={[s.modalName, { color: colors.text }]}>{selectedUser.full_name || 'No Name'}</Text>
+                  <Text style={[s.modalEmail, { color: colors.textSecondary }]}>{selectedUser.email}</Text>
                 </View>
                 <TouchableOpacity onPress={() => setShowModal(false)}>
-                  <Ionicons name="close" size={22} color="rgba(255,255,255,0.8)" />
+                  <Ionicons name="close" size={22} color={colors.textSecondary} />
                 </TouchableOpacity>
-              </LinearGradient>
+              </View>
 
               <ScrollView style={{ padding: 16 }}>
                 {/* Info rows */}
@@ -349,7 +353,11 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
       <Modal visible={confirmModal} animationType="fade" transparent>
         <View style={s.confirmOverlay}>
           {confirmAction && (
-            <View style={[s.confirmSheet, { backgroundColor: colors.card }]}>
+            <View style={[
+              s.confirmSheet, 
+              { backgroundColor: colors.card },
+              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            ]}>
               <Ionicons
                 name={confirmAction.type === 'danger' ? 'warning' : 'alert-circle'}
                 size={36}
@@ -407,8 +415,8 @@ const s = StyleSheet.create({
   modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', padding: 20, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   modalAvatar: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
-  modalName: { fontSize: 18, fontWeight: '700', color: '#FFF' },
-  modalEmail: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 2 },
+  modalName: { fontSize: 18, fontWeight: '700' },
+  modalEmail: { fontSize: 13, marginTop: 2 },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1 },
   infoText: { fontSize: 14 },
   sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 10 },

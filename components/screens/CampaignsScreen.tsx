@@ -13,25 +13,13 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
-  TextInput,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 
 const { width } = Dimensions.get('window');
-
-interface CampaignFilters {
-  searchQuery: string;
-  campaignType: string;
-  status: string;
-  district: string;
-  dateFrom: string;
-  dateTo: string;
-}
 
 interface CampaignsScreenProps {
   profile: Profile;
@@ -62,14 +50,6 @@ interface Campaign {
 
 const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateToForm }) => {
   const { colors } = useTheme();
-
-  // Role permission constants — mirrors DB RLS
-  const canCreateCampaign  = ['super_admin', 'health_admin', 'district_officer', 'asha_worker'].includes(profile.role);
-  const canApproveCampaign = ['super_admin', 'health_admin', 'district_officer'].includes(profile.role);
-  const canEnrollCampaign  = ['volunteer', 'asha_worker'].includes(profile.role);
-  const isViewOnly         = profile.role === 'volunteer';
-
-
   const [activeTab, setActiveTab] = useState<'active' | 'upcoming' | 'past'>('active');
   const [refreshing, setRefreshing] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -81,19 +61,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   const [enrolledCampaigns, setEnrolledCampaigns] = useState<Set<string>>(new Set());
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawTarget, setWithdrawTarget] = useState<{ id: string; name: string } | null>(null);
-
-  // Search & Filter state
-  const emptyFilters: CampaignFilters = { searchQuery: '', campaignType: '', status: '', district: '', dateFrom: '', dateTo: '' };
-  const [searchText, setSearchText] = useState('');
-  const [showFilterPanel, setShowFilterPanel] = useState(false);
-  const [filters, setFilters] = useState<CampaignFilters>(emptyFilters);
-  const [appliedFilters, setAppliedFilters] = useState<CampaignFilters>(emptyFilters);
-  const [fetchingLocation, setFetchingLocation] = useState(false);
-
-  const activeFilterCount = [
-    appliedFilters.campaignType, appliedFilters.status, appliedFilters.district,
-    appliedFilters.dateFrom, appliedFilters.dateTo,
-  ].filter(Boolean).length;
 
   useEffect(() => {
     loadCampaigns();
@@ -186,71 +153,18 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     return campaigns.filter((campaign) => {
       const startDate = new Date(campaign.start_date);
       const endDate = new Date(campaign.end_date);
-
-      // Tab filter
+      
       switch (activeTab) {
         case 'active':
-          if (!(startDate <= now && endDate >= now)) return false;
-          break;
+          return startDate <= now && endDate >= now;
         case 'upcoming':
-          if (!(startDate > now)) return false;
-          break;
+          return startDate > now;
         case 'past':
-          if (!(endDate < now)) return false;
-          break;
+          return endDate < now;
+        default:
+          return true;
       }
-
-      // Search filter
-      if (appliedFilters.searchQuery) {
-        const q = appliedFilters.searchQuery.toLowerCase();
-        const name = (campaign.campaign_name || campaign.title || '').toLowerCase();
-        const loc = (campaign.location_name || '').toLowerCase();
-        const desc = (campaign.description || '').toLowerCase();
-        if (!name.includes(q) && !loc.includes(q) && !desc.includes(q)) return false;
-      }
-
-      // Campaign type filter
-      if (appliedFilters.campaignType && campaign.campaign_type !== appliedFilters.campaignType) return false;
-
-      // Status filter
-      if (appliedFilters.status && campaign.status !== appliedFilters.status) return false;
-
-      // District filter
-      if (appliedFilters.district) {
-        const d = (campaign.district || '').toLowerCase();
-        if (!d.includes(appliedFilters.district.toLowerCase())) return false;
-      }
-
-      // Date range filter (on start_date)
-      if (appliedFilters.dateFrom && campaign.start_date < appliedFilters.dateFrom) return false;
-      if (appliedFilters.dateTo && campaign.start_date > appliedFilters.dateTo + 'T23:59:59') return false;
-
-      return true;
     });
-  };
-
-  // Search & filter helpers
-  const handleSearch = () => setAppliedFilters(f => ({ ...f, searchQuery: searchText.trim() }));
-  const clearSearch = () => { setSearchText(''); setAppliedFilters(f => ({ ...f, searchQuery: '' })); };
-  const applyFilters = () => { setAppliedFilters(f => ({ ...f, ...filters, searchQuery: f.searchQuery })); setShowFilterPanel(false); };
-  const clearAllFilters = () => { setFilters(emptyFilters); setAppliedFilters(f => ({ ...f, campaignType: '', status: '', district: '', dateFrom: '', dateTo: '' })); setShowFilterPanel(false); };
-
-  const handleMyLocation = async () => {
-    try {
-      setFetchingLocation(true);
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') { Alert.alert('Permission Denied', 'Location permission is needed.'); return; }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const resp = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${loc.coords.latitude}&lon=${loc.coords.longitude}&format=json&addressdetails=1`,
-        { headers: { 'Accept-Language': 'en' } }
-      );
-      const data = await resp.json();
-      const district = data?.address?.state_district || data?.address?.county || data?.address?.city_district || data?.address?.city || '';
-      if (district) setFilters(f => ({ ...f, district }));
-      else Alert.alert('Not Found', 'Could not determine district from GPS.');
-    } catch { Alert.alert('Error', 'Failed to fetch location.'); }
-    finally { setFetchingLocation(false); }
   };
 
   const handleEnroll = async (campaignId: string, campaignName: string) => {
@@ -427,7 +341,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               ? 'No upcoming campaigns scheduled'
               : 'No past campaigns found'}
           </Text>
-          {canCreateCampaign && (
+          {(profile.role === 'health_admin' || profile.role === 'clinic') && (
             <TouchableOpacity
               style={[styles.emptyButton, { backgroundColor: colors.primary }]}
               onPress={() => onNavigateToForm('new-campaign')}
@@ -520,7 +434,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               <Ionicons name="eye-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
               <Text style={[styles.actionButtonText, { color: colors.text }]}>View Details</Text>
             </TouchableOpacity>
-            {activeTab !== 'past' && canEnrollCampaign && (
+            {activeTab !== 'past' && (
               enrolledCampaigns.has(campaign.id) ? (
                 <TouchableOpacity
                   style={[styles.actionButton, styles.primaryButton, { backgroundColor: '#EF4444' }]}
@@ -569,84 +483,11 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — gradient */}
-      <LinearGradient
-        colors={['#EF4444', '#DC2626', '#B91C1C']}
-        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-        style={styles.header}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Campaigns</Text>
-          <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
-        </View>
-      </LinearGradient>
-
-      {/* Search Bar */}
-      <View style={[styles.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Ionicons name="search" size={18} color={colors.textSecondary} />
-        <TextInput
-          style={[styles.searchInput, { color: colors.text }]}
-          placeholder="Search campaigns..."
-          placeholderTextColor={colors.textSecondary}
-          value={searchText}
-          onChangeText={setSearchText}
-          onSubmitEditing={handleSearch}
-          returnKeyType="search"
-        />
-        {searchText ? (
-          <TouchableOpacity onPress={clearSearch}>
-            <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
-          </TouchableOpacity>
-        ) : null}
-        <TouchableOpacity
-          style={[styles.filterIconBtn, { backgroundColor: activeFilterCount > 0 ? colors.accent : 'transparent', borderColor: colors.accent }]}
-          onPress={() => { setFilters({ ...appliedFilters }); setShowFilterPanel(true); }}
-        >
-          <Ionicons name="options" size={18} color={activeFilterCount > 0 ? '#fff' : colors.accent} />
-          {activeFilterCount > 0 && (
-            <View style={styles.filterCountBadge}><Text style={styles.filterCountText}>{activeFilterCount}</Text></View>
-          )}
-        </TouchableOpacity>
+      {/* Header */}
+      <View style={[styles.header, { backgroundColor: colors.accent }]}>
+        <Text style={styles.headerTitle}>Campaigns</Text>
+        <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
       </View>
-
-      {/* Active filter tags */}
-      {(activeFilterCount > 0 || appliedFilters.searchQuery) && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activeFilterTags} contentContainerStyle={{ gap: 6, paddingHorizontal: 16 }}>
-          {appliedFilters.searchQuery ? (
-            <TouchableOpacity style={[styles.filterTag, { borderColor: colors.accent }]} onPress={clearSearch}>
-              <Text style={[styles.filterTagText, { color: colors.accent }]}>"{appliedFilters.searchQuery}"</Text>
-              <Ionicons name="close" size={12} color={colors.accent} />
-            </TouchableOpacity>
-          ) : null}
-          {appliedFilters.campaignType ? (
-            <TouchableOpacity style={[styles.filterTag, { borderColor: colors.accent }]} onPress={() => setAppliedFilters(f => ({ ...f, campaignType: '' }))}>
-              <Text style={[styles.filterTagText, { color: colors.accent }]}>{appliedFilters.campaignType.replace(/_/g, ' ')}</Text>
-              <Ionicons name="close" size={12} color={colors.accent} />
-            </TouchableOpacity>
-          ) : null}
-          {appliedFilters.status ? (
-            <TouchableOpacity style={[styles.filterTag, { borderColor: getStatusColor(appliedFilters.status) }]} onPress={() => setAppliedFilters(f => ({ ...f, status: '' }))}>
-              <Text style={[styles.filterTagText, { color: getStatusColor(appliedFilters.status) }]}>{appliedFilters.status}</Text>
-              <Ionicons name="close" size={12} color={getStatusColor(appliedFilters.status)} />
-            </TouchableOpacity>
-          ) : null}
-          {appliedFilters.district ? (
-            <TouchableOpacity style={[styles.filterTag, { borderColor: colors.accent }]} onPress={() => setAppliedFilters(f => ({ ...f, district: '' }))}>
-              <Text style={[styles.filterTagText, { color: colors.accent }]}>📍 {appliedFilters.district}</Text>
-              <Ionicons name="close" size={12} color={colors.accent} />
-            </TouchableOpacity>
-          ) : null}
-          {(appliedFilters.dateFrom || appliedFilters.dateTo) ? (
-            <TouchableOpacity style={[styles.filterTag, { borderColor: colors.accent }]} onPress={() => setAppliedFilters(f => ({ ...f, dateFrom: '', dateTo: '' }))}>
-              <Text style={[styles.filterTagText, { color: colors.accent }]}>📅 {appliedFilters.dateFrom || '...'} → {appliedFilters.dateTo || '...'}</Text>
-              <Ionicons name="close" size={12} color={colors.accent} />
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity onPress={() => { clearSearch(); clearAllFilters(); }}>
-            <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: '600', paddingVertical: 4, paddingHorizontal: 8 }}>Clear all</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      )}
 
       {/* Tab Buttons */}
       <View style={[styles.tabContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -666,13 +507,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         ))}
       </View>
 
-      {/* Result count */}
-      <View style={styles.resultBar}>
-        <Text style={[styles.resultText, { color: colors.textSecondary }]}>
-          {filteredCampaigns.length} campaign{filteredCampaigns.length !== 1 ? 's' : ''} found
-        </Text>
-      </View>
-
       {/* Content */}
       <ScrollView
         style={styles.content}
@@ -685,10 +519,10 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         <View style={styles.bottomSpacer} />
       </ScrollView>
 
-      {/* FAB - Only for super_admin/health_admin/clinic */}
-      {(profile.role === 'super_admin' || profile.role === 'health_admin' || profile.role === 'clinic') && (
-      <TouchableOpacity
-          style={[styles.fab, { backgroundColor: '#EF4444' }]}
+      {/* FAB - Only for admin/clinic */}
+      {(profile.role === 'health_admin' || profile.role === 'clinic') && (
+        <TouchableOpacity
+          style={[styles.fab, { backgroundColor: colors.accent }]}
           onPress={() => onNavigateToForm('new-campaign')}
         >
           <Ionicons name="add" size={28} color="#FFFFFF" />
@@ -870,118 +704,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           </View>
         </View>
       </Modal>
-
-      {/* ── Filter Panel Modal ─────────────────────────────────── */}
-      <Modal visible={showFilterPanel} animationType="slide" transparent onRequestClose={() => setShowFilterPanel(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.filterPanel, { backgroundColor: colors.card }]}>
-            <View style={[styles.filterPanelHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.filterPanelTitle, { color: colors.text }]}>Filters</Text>
-              <TouchableOpacity onPress={() => setShowFilterPanel(false)}>
-                <Ionicons name="close" size={24} color={colors.text} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.filterPanelBody} showsVerticalScrollIndicator={false}>
-              {/* Campaign Type */}
-              <Text style={[styles.fLabel, { color: colors.text }]}>Campaign Type</Text>
-              <View style={styles.chipRow}>
-                {['vaccination', 'awareness', 'health_checkup', 'medicine_distribution', 'medical_camp', 'water_sanitation', 'nutrition'].map(v => (
-                  <TouchableOpacity key={v}
-                    style={[styles.fChip, { backgroundColor: filters.campaignType === v ? colors.accent + '20' : colors.card, borderColor: filters.campaignType === v ? colors.accent : colors.border }]}
-                    onPress={() => setFilters(f => ({ ...f, campaignType: f.campaignType === v ? '' : v }))}>
-                    <Text style={[styles.fChipText, { color: filters.campaignType === v ? colors.accent : colors.text }]}>
-                      {v.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {/* Status */}
-              <Text style={[styles.fLabel, { color: colors.text, marginTop: 16 }]}>Status</Text>
-              <View style={styles.chipRow}>
-                {['active', 'upcoming', 'completed', 'cancelled'].map(v => (
-                  <TouchableOpacity key={v}
-                    style={[styles.fChip, { backgroundColor: filters.status === v ? getStatusColor(v) + '20' : colors.card, borderColor: filters.status === v ? getStatusColor(v) : colors.border }]}
-                    onPress={() => setFilters(f => ({ ...f, status: f.status === v ? '' : v }))}>
-                    <Text style={[styles.fChipText, { color: filters.status === v ? getStatusColor(v) : colors.text }]}>
-                      {v.charAt(0).toUpperCase() + v.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {/* District + My Location */}
-              <Text style={[styles.fLabel, { color: colors.text, marginTop: 16 }]}>District</Text>
-              <View style={styles.districtRow}>
-                <TextInput
-                  style={[styles.fInput, { flex: 1, backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
-                  placeholder="Type district name..."
-                  placeholderTextColor={colors.textSecondary}
-                  value={filters.district}
-                  onChangeText={(t) => setFilters(f => ({ ...f, district: t }))}
-                />
-                <TouchableOpacity
-                  style={[styles.myLocBtn, { backgroundColor: colors.accent + '15', borderColor: colors.accent }]}
-                  onPress={handleMyLocation}
-                  disabled={fetchingLocation}
-                >
-                  {fetchingLocation ? (
-                    <ActivityIndicator size="small" color={colors.accent} />
-                  ) : (
-                    <>
-                      <Ionicons name="navigate" size={16} color={colors.accent} />
-                      <Text style={[styles.myLocText, { color: colors.accent }]}>My Location</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              {/* Date Range */}
-              <Text style={[styles.fLabel, { color: colors.text, marginTop: 16 }]}>Date Range</Text>
-              <View style={styles.dateRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.dateSubLabel, { color: colors.textSecondary }]}>From</Text>
-                  <TextInput
-                    style={[styles.fInput, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
-                    placeholder="YYYY-MM-DD" placeholderTextColor={colors.textSecondary}
-                    value={filters.dateFrom}
-                    onChangeText={(t) => setFilters(f => ({ ...f, dateFrom: t }))}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.dateSubLabel, { color: colors.textSecondary }]}>To</Text>
-                  <TextInput
-                    style={[styles.fInput, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
-                    placeholder="YYYY-MM-DD" placeholderTextColor={colors.textSecondary}
-                    value={filters.dateTo}
-                    onChangeText={(t) => setFilters(f => ({ ...f, dateTo: t }))}
-                  />
-                </View>
-              </View>
-            </ScrollView>
-
-            <View style={[styles.filterActions, { borderTopColor: colors.border }]}>
-              <TouchableOpacity style={[styles.filterActionBtn, { borderColor: colors.border }]} onPress={clearAllFilters}>
-                <Text style={[styles.filterActionText, { color: colors.text }]}>Clear All</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.filterActionBtn, { backgroundColor: colors.accent }]} onPress={applyFilters}>
-                <Ionicons name="checkmark" size={18} color="#fff" />
-                <Text style={[styles.filterActionText, { color: '#fff' }]}>Apply Filters</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-      {/* Floating Action Button */}
-      {canCreateCampaign && (
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => onNavigateToForm('new-campaign')}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="add" size={28} color="#FFF" />
-        </TouchableOpacity>
-      )}
     </View>
   );
 };
@@ -1006,23 +728,6 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.8)',
-  },
-  headerCreateBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.35)',
-    marginLeft: 12,
-  },
-  headerCreateBtnText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '700',
   },
   tabContainer: {
     flexDirection: 'row',
@@ -1173,51 +878,22 @@ const styles = StyleSheet.create({
   },
   fab: {
     position: 'absolute',
-    right: 22,
-    bottom: 88,
+    right: 20,
+    bottom: 20,
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#0D9488',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 8,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
   },
   bottomSpacer: {
     height: 80,
   },
-  // Search & Filter styles
-  searchRow: { flexDirection: 'row', alignItems: 'center', margin: 12, marginBottom: 0, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, gap: 8 },
-  searchInput: { flex: 1, fontSize: 14, paddingVertical: 4 },
-  filterIconBtn: { width: 36, height: 36, borderRadius: 10, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
-  filterCountBadge: { position: 'absolute', top: -4, right: -4, backgroundColor: '#EF4444', width: 16, height: 16, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-  filterCountText: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  activeFilterTags: { maxHeight: 36, marginTop: 8 },
-  filterTag: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 },
-  filterTagText: { fontSize: 12, fontWeight: '500' },
-  resultBar: { paddingHorizontal: 16, paddingVertical: 4 },
-  resultText: { fontSize: 12 },
-  filterPanel: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '75%' },
-  filterPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 18, borderBottomWidth: 1 },
-  filterPanelTitle: { fontSize: 18, fontWeight: '700' },
-  filterPanelBody: { padding: 18 },
-  fLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  fChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
-  fChipText: { fontSize: 13, fontWeight: '500' },
-  fInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
-  districtRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  myLocBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5 },
-  myLocText: { fontSize: 12, fontWeight: '600' },
-  dateRow: { flexDirection: 'row', gap: 12 },
-  dateSubLabel: { fontSize: 12, marginBottom: 4 },
-  filterActions: { flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1 },
-  filterActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 12, borderWidth: 1 },
-  filterActionText: { fontSize: 15, fontWeight: '600' },
   // Modal Styles
   modalOverlay: {
     flex: 1,

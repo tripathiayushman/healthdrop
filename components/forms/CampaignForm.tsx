@@ -488,7 +488,7 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
           <Text style={[styles.footerBtnText, { color: colors.text }]}>Cancel</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: '#EF4444' }]}
+          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: getCampaignColor() }]}
           onPress={handleSubmit}
           disabled={loading}
         >

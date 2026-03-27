@@ -13,6 +13,7 @@ import {
   Modal,
   TextInput,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
 
@@ -435,7 +436,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
       {/* Edit Profile Modal */}
       <Modal visible={showEditProfile} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="person" size={24} color={colors.primary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Profile</Text>
@@ -487,7 +492,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
       {/* Change Password Modal */}
       <Modal visible={showChangePassword} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="lock-closed" size={24} color={colors.primary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Change Password</Text>
@@ -542,7 +551,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
       {/* Update Location Modal */}
       <Modal visible={showUpdateLocation} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="location" size={24} color={colors.primary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Update Location</Text>
@@ -632,7 +645,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
       {/* Help & FAQ Modal */}
       <Modal visible={showHelpFAQ} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="help-circle" size={24} color={colors.primary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Help & FAQ</Text>
@@ -678,7 +695,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
       {/* Send Feedback Modal */}
       <Modal visible={showFeedback} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[
+            styles.modalContent, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="chatbox-ellipses" size={24} color={colors.primary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Send Feedback</Text>

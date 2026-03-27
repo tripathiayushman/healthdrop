@@ -135,14 +135,32 @@ function AppContent() {
     // Only works on physical devices, not simulators or web
     if (Platform.OS === 'web') return;
     try {
+      const ConstantsModule = await import('expo-constants').catch(() => null);
+      const Constants = ConstantsModule?.default ?? ConstantsModule;
+      const constantsAny = Constants as any;
+      if (constantsAny?.appOwnership === 'expo') {
+        console.warn('[Push] Token registration skipped: Expo Go does not support remote push on SDK 53+. Use a development build.');
+        return;
+      }
+
       const Notifications = await import('expo-notifications').catch(() => null);
       if (!Notifications) return;
+
       const { status } = await Notifications.getPermissionsAsync();
       const finalStatus = status !== 'granted'
         ? (await Notifications.requestPermissionsAsync()).status
         : status;
       if (finalStatus !== 'granted') return;
-      const tokenData = await Notifications.getExpoPushTokenAsync();
+
+      const projectId =
+        constantsAny?.expoConfig?.extra?.eas?.projectId ??
+        constantsAny?.easConfig?.projectId;
+      if (!projectId) {
+        console.warn('[Push] Token registration skipped: No EAS projectId configured.');
+        return;
+      }
+
+      const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
       await usersService.registerExpoPushToken(tokenData.data);
     } catch (err) {
       console.warn('[Push] Token registration skipped:', err);
@@ -207,7 +225,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AppContent />
-      <StatusBar style="auto" />
+      <StatusBar style="light" hidden={true} translucent />
     </ThemeProvider>
   );
 }

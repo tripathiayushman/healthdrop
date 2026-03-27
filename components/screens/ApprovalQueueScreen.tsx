@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
-  ScrollView,
+  ScrollView, Platform
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -390,22 +390,31 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       }
 
       {/* ── Detail / Approve Modal ──────────────────────────────────────── */}
-      <Modal visible={showDetailModal} animationType="slide" transparent>
-        <View style={qst.overlay}>
+      <Modal visible={showDetailModal} animationType="slide" transparent onRequestClose={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}>
+        <TouchableOpacity
+          style={qst.overlay}
+          activeOpacity={1}
+          onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}
+        >
           {selectedItem && (
-            <View style={[qst.sheet, { backgroundColor: colors.card }]}>
+            <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={[
+              qst.sheet, 
+              { backgroundColor: colors.card },
+              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            ]}>
               {/* Modal header */}
-              <LinearGradient colors={gradient as any} style={qst.modalHeader}>
+              <View style={[qst.modalHeader, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
                 <View style={{ flex: 1 }}>
-                  <Text style={qst.modalTitle} numberOfLines={2}>
+                  <Text style={[qst.modalTitle, { color: colors.text }]} numberOfLines={2}>
                     {selectedItem.disease_name ?? selectedItem.source_name ?? selectedItem.name ?? selectedItem.title ?? 'Detail'}
                   </Text>
-                  <Text style={qst.modalSub}>{selectedItem.district}, {selectedItem.state}</Text>
+                  <Text style={[qst.modalSub, { color: colors.textSecondary }]}>{selectedItem.district}, {selectedItem.state}</Text>
                 </View>
                 <TouchableOpacity onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}>
-                  <Ionicons name="close" size={22} color="rgba(255,255,255,0.8)" />
+                  <Ionicons name="close" size={22} color={colors.textSecondary} />
                 </TouchableOpacity>
-              </LinearGradient>
+              </View>
 
               <ScrollView style={{ padding: 16 }}>
                 {/* Approval / Rejection status chip */}
@@ -570,14 +579,20 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                 <View style={{ height: 40 }} />
               </ScrollView>
             </View>
+            </TouchableOpacity>
           )}
-        </View>
+        </TouchableOpacity>
       </Modal>
 
       {/* ── Delete Confirm Modal (web-compatible) ───────────────────────── */}
       <Modal visible={showDeleteConfirm} transparent animationType="fade" onRequestClose={() => setShowDeleteConfirm(false)}>
-        <View style={qst.overlay}>
-          <View style={[qst.confirmCard, { backgroundColor: colors.card }]}>
+        <TouchableOpacity style={qst.overlay} activeOpacity={1} onPress={() => setShowDeleteConfirm(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+          <View style={[
+            qst.confirmCard, 
+            { backgroundColor: colors.card },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
             <View style={qst.confirmIconWrap}>
               <Ionicons name="trash" size={32} color="#EF4444" />
             </View>
@@ -604,7 +619,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
@@ -646,8 +662,8 @@ const qst = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '92%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', padding: 20, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#FFF' },
-  modalSub: { fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 2 },
+  modalTitle: { fontSize: 17, fontWeight: '700' },
+  modalSub: { fontSize: 12, marginTop: 2 },
   statusRow: { flexDirection: 'row', marginBottom: 12 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 10, borderBottomWidth: 1 },
   detailLabel: { fontSize: 12, fontWeight: '600', flex: 1 },

@@ -16,14 +16,15 @@ import {
   Platform,
   ActivityIndicator,
   Dimensions,
+  Modal,
+  PanResponder,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../lib/ThemeContext';
 import { Profile } from '../../types';
 import { getChatResponse, ChatMessage } from '../../lib/services/gemini';
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const PANEL_HEIGHT = SCREEN_HEIGHT * 0.62;
 
 // FAB sits just above the tab bar (70px) + an extra gap from add buttons (58px)
@@ -35,38 +36,80 @@ interface AIChatbotProps {
   activeTab?: string; // hide FAB on profile tab
 }
 
-const INITIAL_MESSAGE: ChatMessage = {
+export interface LocalChatMessage {
+  role: 'user' | 'model';
+  text: string;
+  timestamp?: Date;
+}
+
+const INITIAL_MESSAGE: LocalChatMessage = {
   role: 'model',
   text: "Hello! I am your HealthDrop assistant.\n\nI can help with disease information, water quality guidance, app navigation, and general health advice. What would you like to know?",
+  timestamp: new Date(),
 };
 
 export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const { colors, isDark } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_MESSAGE]);
+  const [messages, setMessages] = useState<LocalChatMessage[]>([INITIAL_MESSAGE]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
 
   const slideAnim = useRef(new Animated.Value(PANEL_HEIGHT)).current;
   const scrollRef = useRef<ScrollView>(null);
 
-  const openChat = () => {
-    setIsOpen(true);
-    Animated.spring(slideAnim, {
-      toValue: 0,
-      useNativeDriver: false,
-      tension: 65,
-      friction: 11,
-    }).start();
-  };
+  // ── Draggable FAB (native only) ──────────────────────────────
+  const IS_MOBILE = Platform.OS !== 'web';
+  const { width: SW, height: SH } = Dimensions.get('window');
+  const FAB_SIZE = 64;
+  const fabPos = useRef(new Animated.ValueXY({ x: SW - FAB_SIZE - 16, y: SH - FAB_BOTTOM - FAB_SIZE })).current;
+  const isDragging = useRef(false);
+  const lastTap = useRef(0);
 
-  const closeChat = () => {
-    Animated.timing(slideAnim, {
-      toValue: PANEL_HEIGHT,
-      duration: 260,
-      useNativeDriver: false,
-    }).start(() => setIsOpen(false));
-  };
+  const fabPanResponder = useRef(
+    IS_MOBILE
+      ? PanResponder.create({
+          onStartShouldSetPanResponder: () => true,
+          onMoveShouldSetPanResponder: (_, gs) =>
+            Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4,
+          onPanResponderGrant: () => {
+            fabPos.extractOffset();
+            isDragging.current = false;
+          },
+          onPanResponderMove: (_, gs) => {
+            if (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5) {
+              isDragging.current = true;
+            }
+            Animated.event(
+              [null, { dx: fabPos.x, dy: fabPos.y }],
+              { useNativeDriver: false }
+            )(_, gs);
+          },
+          onPanResponderRelease: (_, gs) => {
+            fabPos.flattenOffset();
+            if (!isDragging.current) {
+              toggleChat();
+              return;
+            }
+            // Snap to nearest horizontal edge
+            const currentX = (fabPos.x as any)._value ?? (SW - FAB_SIZE - 16);
+            const snapX = currentX + FAB_SIZE / 2 < SW / 2 ? 16 : SW - FAB_SIZE - 16;
+            // Clamp Y within screen
+            const rawY = (fabPos.y as any)._value ?? (SH - FAB_BOTTOM - FAB_SIZE);
+            const clampedY = Math.max(50, Math.min(rawY, SH - FAB_BOTTOM - FAB_SIZE - 8));
+            Animated.spring(fabPos, {
+              toValue: { x: snapX, y: clampedY },
+              useNativeDriver: false,
+              tension: 60,
+              friction: 10,
+            }).start();
+          },
+        })
+      : { panHandlers: {} }
+  ).current;
+
+  const openChat = () => setIsOpen(true);
+  const closeChat = () => setIsOpen(false);
 
   const toggleChat = () => { if (isOpen) closeChat(); else openChat(); };
 
@@ -78,7 +121,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     const text = inputText.trim();
     if (!text || isTyping) return;
 
-    const userMsg: ChatMessage = { role: 'user', text };
+    const userMsg: LocalChatMessage = { role: 'user', text, timestamp: new Date() };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInputText('');
@@ -92,11 +135,12 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
         state: profile.state,
         fullName: profile.full_name,
       });
-      setMessages(prev => [...prev, { role: 'model', text: reply }]);
+      setMessages(prev => [...prev, { role: 'model', text: reply, timestamp: new Date() }]);
     } catch {
       setMessages(prev => [...prev, {
         role: 'model',
         text: "Sorry, I could not connect right now. Please try again shortly.",
+        timestamp: new Date(),
       }]);
     } finally {
       setIsTyping(false);
@@ -105,32 +149,30 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   };
 
   // Colours
-  const panelBg   = isDark ? '#1A1A2E' : '#FFFFFF';
-  const aiBubble  = isDark ? '#252540' : '#F0F4FD';
-  const aiText    = isDark ? '#E0E0F0' : '#1E293B';
+  const panelBg   = isDark ? 'rgba(15,15,15,0.75)' : 'rgba(255,255,255,0.85)';
+  const aiBubble  = '#000000'; // Black text bubble requested by user
+  const userBubble = '#1A1A1A'; // Slightly lighter black for distinction or matching
+  const aiText    = '#FFFFFF'; // White text requested by user
   const userText  = '#FFFFFF';
 
   return (
     <>
-      {/* ── SLIDING CHAT PANEL ───────────────────────────────────── */}
-      {isOpen && (
-        <Animated.View
-          style={[
-            styles.panel,
-            {
-              backgroundColor: panelBg,
-              bottom: FAB_BOTTOM - 4, // panel sits above the FAB
-              transform: [{ translateY: slideAnim }],
-              borderColor: isDark ? '#2A2A4A' : '#E2E8F0',
-            },
-          ]}
-          pointerEvents="box-none"
-        >
-          {/* Panel Header */}
-          <LinearGradient
-            colors={isDark ? ['#1E1B4B', '#312E81'] : ['#1976D2', '#42A5F5']}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-            style={styles.panelHeader}
+      <Modal visible={isOpen} animationType="slide" transparent onRequestClose={closeChat}>
+        <View style={styles.overlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, justifyContent: 'flex-end' }}>
+            <View
+              style={[
+                styles.sheet,
+                { backgroundColor: panelBg, borderColor: isDark ? '#2A2A4A' : '#E2E8F0' },
+                isDark && Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+              ]}
+            >
+          <View
+            style={[
+              styles.panelHeader, 
+              { backgroundColor: isDark ? 'rgba(20,20,20,0.8)' : 'rgba(30,30,30,0.85)' },
+              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            ]}
           >
             <View style={styles.panelHeaderLeft}>
               <View style={styles.aiAvatarWrap}>
@@ -147,7 +189,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
             <TouchableOpacity onPress={closeChat} style={styles.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="chevron-down" size={22} color="rgba(255,255,255,0.8)" />
             </TouchableOpacity>
-          </LinearGradient>
+          </View>
 
           {/* Messages */}
           <ScrollView
@@ -163,21 +205,26 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                 style={[styles.bubbleRow, msg.role === 'user' ? styles.userRow : styles.aiRow]}
               >
                 {msg.role === 'model' && (
-                  <View style={[styles.aiAvatarSmall, { backgroundColor: colors.primary + '25' }]}>
-                    <Ionicons name="hardware-chip" size={14} color={colors.primary} />
+                  <View style={[styles.aiAvatarSmall, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]}>
+                    <Ionicons name="hardware-chip" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
                   </View>
                 )}
                 <View
                   style={[
                     styles.bubble,
                     msg.role === 'user'
-                      ? [styles.userBubble, { backgroundColor: colors.primary }]
+                      ? [styles.userBubble, { backgroundColor: userBubble }]
                       : [styles.aiBubble, { backgroundColor: aiBubble }],
                   ]}
                 >
                   <Text style={[styles.bubbleText, { color: msg.role === 'user' ? userText : aiText }]}>
                     {msg.text}
                   </Text>
+                  {msg.timestamp && (
+                    <Text style={[styles.timeText, { color: 'rgba(255,255,255,0.6)', alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start' }]}>
+                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  )}
                 </View>
               </View>
             ))}
@@ -185,8 +232,8 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
             {/* Typing indicator */}
             {isTyping && (
               <View style={[styles.bubbleRow, styles.aiRow]}>
-                <View style={[styles.aiAvatarSmall, { backgroundColor: colors.primary + '25' }]}>
-                  <Ionicons name="hardware-chip" size={14} color={colors.primary} />
+                <View style={[styles.aiAvatarSmall, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]}>
+                  <Ionicons name="hardware-chip" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
                 </View>
                 <View style={[styles.bubble, styles.aiBubble, { backgroundColor: aiBubble }]}>
                   <View style={styles.typingDots}>
@@ -198,48 +245,80 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
           </ScrollView>
 
           {/* Input Area */}
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <View style={[styles.inputArea, { borderTopColor: isDark ? '#2A2A4A' : '#E2E8F0', backgroundColor: panelBg }]}>
-              <TextInput
-                style={[styles.input, {
-                  backgroundColor: isDark ? '#252540' : '#F1F5F9',
-                  color: isDark ? '#E0E0F0' : colors.text,
-                  borderColor: isDark ? '#373760' : '#E2E8F0',
-                }]}
-                placeholder="Ask a health question..."
-                placeholderTextColor={colors.textSecondary}
-                value={inputText}
-                onChangeText={setInputText}
-                onSubmitEditing={sendMessage}
-                returnKeyType="send"
-                multiline={false}
-                editable={!isTyping}
-              />
-              <TouchableOpacity
-                style={[styles.sendBtn, { backgroundColor: inputText.trim() && !isTyping ? colors.primary : colors.border }]}
-                onPress={sendMessage}
-                disabled={!inputText.trim() || isTyping}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
-              </TouchableOpacity>
+          <View style={[styles.inputArea, { borderTopColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', backgroundColor: 'transparent' }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
+            <TextInput
+              style={[styles.input, {
+                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                color: isDark ? '#E0E0F0' : colors.text,
+                borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
+              }]}
+              placeholder="Ask a health question..."
+              placeholderTextColor={colors.textSecondary}
+              value={inputText}
+              onChangeText={setInputText}
+              onSubmitEditing={sendMessage}
+              returnKeyType="send"
+              multiline={false}
+              editable={!isTyping}
+            />
+            <TouchableOpacity
+              style={[styles.sendBtn, { backgroundColor: inputText.trim() && !isTyping ? '#000000' : colors.border }]}
+              onPress={sendMessage}
+              disabled={!inputText.trim() || isTyping}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
             </View>
           </KeyboardAvoidingView>
-        </Animated.View>
-      )}
+        </View>
+      </Modal>
 
       {/* ── FLOATING ACTION BUTTON ─────────────────────────────── */}
-      {/* AI FAB — only on Home tab to avoid stacking with Reports/Campaign add buttons */}
-      {activeTab === 'home' && !isOpen && (
-        <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}>
-          <TouchableOpacity
-            style={[styles.fab, { backgroundColor: '#DC2626', shadowColor: '#DC2626' }]}
-            onPress={toggleChat}
-            activeOpacity={0.85}
+      {activeTab !== 'profile' && !isOpen && (
+        IS_MOBILE ? (
+          // Draggable FAB — native only
+          <Animated.View
+            style={[
+              styles.fabContainer,
+              {
+                position: 'absolute',
+                transform: fabPos.getTranslateTransform(),
+                bottom: undefined, right: undefined, top: 0, left: 0,
+              }
+            ]}
+            {...fabPanResponder.panHandlers}
           >
-            <Ionicons name="sparkles" size={24} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
+            <View
+              style={[
+                styles.fab,
+                isDark
+                  ? { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)', borderWidth: 1 }
+                  : { backgroundColor: '#000000' },
+              ]}
+            >
+              <Ionicons name="sparkles" size={30} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
+            </View>
+          </Animated.View>
+        ) : (
+          // Fixed FAB — web only
+          <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}>
+            <TouchableOpacity
+              style={[
+                styles.fab,
+                isDark
+                  ? { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)', borderWidth: 1 }
+                  : { backgroundColor: '#000000' },
+                { backdropFilter: 'blur(16px)' } as any
+              ]}
+              onPress={toggleChat}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="sparkles" size={30} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
+            </TouchableOpacity>
+          </View>
+        )
       )}
     </>
   );
@@ -263,13 +342,16 @@ const BouncingDot: React.FC<{ delay: number; color: string }> = ({ delay, color 
 };
 
 const styles = StyleSheet.create({
-  // ── Panel
-  panel: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
+  // ── Modal
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end'
+  },
+  sheet: {
     height: PANEL_HEIGHT,
-    borderRadius: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     borderWidth: 1,
     overflow: 'hidden',
     shadowColor: '#000',
@@ -277,7 +359,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 16,
     elevation: 20,
-    zIndex: 998,
+    width: '100%'
   },
   panelHeader: {
     flexDirection: 'row',
@@ -309,10 +391,11 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     marginBottom: 2,
   },
-  bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
+  bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10, minWidth: 80 },
   userBubble: { borderBottomRightRadius: 4 },
   aiBubble: { borderBottomLeftRadius: 4 },
   bubbleText: { fontSize: 14, lineHeight: 20 },
+  timeText: { fontSize: 10, marginTop: 4 },
 
   // ── Typing
   typingDots: { flexDirection: 'row', gap: 4, paddingVertical: 4, paddingHorizontal: 2 },
@@ -341,9 +424,9 @@ const styles = StyleSheet.create({
     zIndex: 999,
   },
   fab: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 64, // Increased from 54
+    height: 64, // Increased from 54
+    borderRadius: 32, // Increased from 27
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 6,
