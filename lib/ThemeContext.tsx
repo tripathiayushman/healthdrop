@@ -294,8 +294,8 @@ export const themes = {
     surface:        '#0a0a0a',
     surfaceVariant: '#111111',
     // ── Glassmorphic cards over black ──
-    card:     'rgba(255,255,255,0.06)',
-    cardHover:'rgba(255,255,255,0.09)',
+    card:     'rgba(255,255,255,0.10)',
+    cardHover:'rgba(255,255,255,0.15)',
 
     // Text
     text:          '#F1F5F9',
@@ -353,8 +353,8 @@ export const themes = {
     navBorder:     'rgba(255,255,255,0.07)',
 
     // Input
-    inputBackground: 'rgba(255,255,255,0.06)',
-    inputBorder:     'rgba(255,255,255,0.12)',
+    inputBackground: 'rgba(255,255,255,0.14)',
+    inputBorder:     'rgba(255,255,255,0.22)',
     inputFocus:      '#26A69A',
     placeholder:     '#64748B',
 

@@ -225,7 +225,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AppContent />
-      <StatusBar style="light" hidden={true} translucent />
+      <StatusBar style="light" hidden={false} translucent />
     </ThemeProvider>
   );
 }

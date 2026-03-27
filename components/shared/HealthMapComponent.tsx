@@ -306,7 +306,7 @@ function WebMap({ html, height }: { html: string; height: number | string }) {
       );
     }
 
-    return <View style={typeof height === 'number' ? { height } : { flex: 1 }} />;
+    return null;
   }
 
   return (

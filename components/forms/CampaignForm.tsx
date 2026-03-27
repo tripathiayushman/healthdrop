@@ -184,6 +184,45 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
     return campaign?.color || colors.primary;
   };
 
+  const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
+    const cleaned = hex.replace('#', '');
+    if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) {
+      return null;
+    }
+    return {
+      r: parseInt(cleaned.slice(0, 2), 16),
+      g: parseInt(cleaned.slice(2, 4), 16),
+      b: parseInt(cleaned.slice(4, 6), 16),
+    };
+  };
+
+  const getLuminance = (hex: string): number => {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return 0;
+    const srgb = [rgb.r, rgb.g, rgb.b].map(v => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+  };
+
+  const getContrastRatio = (hexA: string, hexB: string): number => {
+    const l1 = getLuminance(hexA);
+    const l2 = getLuminance(hexB);
+    const lighter = Math.max(l1, l2);
+    const darker = Math.min(l1, l2);
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  const getReadableTextColor = (bgHex: string): string => {
+    const whiteContrast = getContrastRatio(bgHex, '#FFFFFF');
+    // WCAG AA threshold for large text
+    return whiteContrast >= 3 ? '#FFFFFF' : '#111111';
+  };
+
+  const submitBgColor = getCampaignColor();
+  const submitTextColor = getReadableTextColor(submitBgColor);
+
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleDateString('en-IN', {
@@ -488,12 +527,12 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
           <Text style={[styles.footerBtnText, { color: colors.text }]}>Cancel</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: getCampaignColor() }]}
+          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: submitBgColor }]}
           onPress={handleSubmit}
           disabled={loading}
         >
-          <Ionicons name="checkmark" size={20} color="#FFF" />
-          <Text style={[styles.footerBtnText, { color: '#FFF' }]}>
+          <Ionicons name="checkmark" size={20} color={submitTextColor} />
+          <Text style={[styles.footerBtnText, { color: submitTextColor }]}>
             {loading ? 'Creating...' : 'Create Campaign'}
           </Text>
         </TouchableOpacity>

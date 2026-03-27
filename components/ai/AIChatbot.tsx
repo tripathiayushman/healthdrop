@@ -45,13 +45,14 @@ export interface LocalChatMessage {
 const INITIAL_MESSAGE: LocalChatMessage = {
   role: 'model',
   text: "Hello! I am your HealthDrop assistant.\n\nI can help with disease information, water quality guidance, app navigation, and general health advice. What would you like to know?",
-  timestamp: new Date(),
 };
 
 export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const { colors, isDark } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<LocalChatMessage[]>([INITIAL_MESSAGE]);
+  const [messages, setMessages] = useState<LocalChatMessage[]>(() => [
+    { ...INITIAL_MESSAGE, timestamp: new Date() },
+  ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
 
@@ -62,7 +63,11 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const IS_MOBILE = Platform.OS !== 'web';
   const { width: SW, height: SH } = Dimensions.get('window');
   const FAB_SIZE = 64;
-  const fabPos = useRef(new Animated.ValueXY({ x: SW - FAB_SIZE - 16, y: SH - FAB_BOTTOM - FAB_SIZE })).current;
+  const defaultFabX = SW - FAB_SIZE - 16;
+  const defaultFabY = SH - FAB_BOTTOM - FAB_SIZE;
+  const fabPos = useRef(new Animated.ValueXY({ x: defaultFabX, y: defaultFabY })).current;
+  const posRef = useRef({ x: defaultFabX, y: defaultFabY });
+  const dragStartRef = useRef({ x: defaultFabX, y: defaultFabY });
   const isDragging = useRef(false);
   const lastTap = useRef(0);
 
@@ -73,36 +78,38 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
           onMoveShouldSetPanResponder: (_, gs) =>
             Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4,
           onPanResponderGrant: () => {
-            fabPos.extractOffset();
             isDragging.current = false;
+            dragStartRef.current = { ...posRef.current };
           },
           onPanResponderMove: (_, gs) => {
             if (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5) {
               isDragging.current = true;
             }
-            Animated.event(
-              [null, { dx: fabPos.x, dy: fabPos.y }],
-              { useNativeDriver: false }
-            )(_, gs);
+            const nextX = dragStartRef.current.x + gs.dx;
+            const nextY = dragStartRef.current.y + gs.dy;
+            posRef.current = { x: nextX, y: nextY };
+            fabPos.setValue({ x: nextX, y: nextY });
           },
           onPanResponderRelease: (_, gs) => {
-            fabPos.flattenOffset();
             if (!isDragging.current) {
               toggleChat();
               return;
             }
             // Snap to nearest horizontal edge
-            const currentX = (fabPos.x as any)._value ?? (SW - FAB_SIZE - 16);
+            const currentX = posRef.current.x ?? defaultFabX;
             const snapX = currentX + FAB_SIZE / 2 < SW / 2 ? 16 : SW - FAB_SIZE - 16;
             // Clamp Y within screen
-            const rawY = (fabPos.y as any)._value ?? (SH - FAB_BOTTOM - FAB_SIZE);
+            const rawY = posRef.current.y ?? defaultFabY;
             const clampedY = Math.max(50, Math.min(rawY, SH - FAB_BOTTOM - FAB_SIZE - 8));
+            posRef.current = { x: snapX, y: clampedY };
             Animated.spring(fabPos, {
               toValue: { x: snapX, y: clampedY },
               useNativeDriver: false,
               tension: 60,
               friction: 10,
-            }).start();
+            }).start(() => {
+              fabPos.setValue(posRef.current);
+            });
           },
         })
       : { panHandlers: {} }

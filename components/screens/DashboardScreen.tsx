@@ -62,7 +62,7 @@ interface HealthAlert {
 }
 
 const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({
     diseaseReports: 0,

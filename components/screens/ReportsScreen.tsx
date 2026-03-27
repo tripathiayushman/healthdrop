@@ -80,6 +80,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
   const [diseaseReports, setDiseaseReports] = useState<DiseaseReport[]>([]);
   const [waterReports, setWaterReports] = useState<WaterReport[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedDiseaseReport, setSelectedDiseaseReport] = useState<DiseaseReport | null>(null);
   const [selectedWaterReport, setSelectedWaterReport] = useState<WaterReport | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -90,22 +91,48 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
 
   const loadReports = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const [diseaseRes, waterRes] = await Promise.allSettled([
         supabase.from('disease_reports').select('*').order('created_at', { ascending: false }).limit(20),
         supabase.from('water_quality_reports').select('*').order('created_at', { ascending: false }).limit(20),
       ]);
 
-      if (diseaseRes.status === 'fulfilled' && diseaseRes.value.data) {
-        setDiseaseReports(diseaseRes.value.data);
+      let hasQueryError = false;
+
+      if (diseaseRes.status === 'fulfilled') {
+        if (diseaseRes.value.error) {
+          hasQueryError = true;
+          console.error('Failed loading disease reports:', diseaseRes.value.error);
+        } else if (diseaseRes.value.data) {
+          setDiseaseReports(diseaseRes.value.data);
+        }
+      } else {
+        hasQueryError = true;
+        console.error('Disease reports query rejected:', diseaseRes.reason);
       }
-      if (waterRes.status === 'fulfilled' && waterRes.value.data) {
-        setWaterReports(waterRes.value.data);
+
+      if (waterRes.status === 'fulfilled') {
+        if (waterRes.value.error) {
+          hasQueryError = true;
+          console.error('Failed loading water quality reports:', waterRes.value.error);
+        } else if (waterRes.value.data) {
+          setWaterReports(waterRes.value.data);
+        }
+      } else {
+        hasQueryError = true;
+        console.error('Water quality reports query rejected:', waterRes.reason);
+      }
+
+      if (hasQueryError) {
+        setLoadError('Some reports could not be loaded. Pull to refresh and try again.');
       }
     } catch (error) {
-      console.log('Reports loading - tables may not exist yet');
+      console.error('Unexpected error loading reports:', error);
+      setLoadError('Unable to load reports right now. Please try again.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const onRefresh = async () => {
@@ -289,7 +316,9 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
           </View>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>TDS Level:</Text>
-            <Text style={[styles.detailValue, { color: colors.text }]}>{report.tds_level || 'N/A'} ppm</Text>
+            <Text style={[styles.detailValue, { color: colors.text }]}>
+              {report.tds_level === null || report.tds_level === undefined ? 'N/A' : `${report.tds_level} ppm`}
+            </Text>
           </View>
           {report.contamination_type && report.contamination_type !== 'none' && (
             <View style={styles.detailRow}>
@@ -370,6 +399,11 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
         }
         showsVerticalScrollIndicator={false}
       >
+        {loadError && (
+          <View style={[styles.errorBanner, { backgroundColor: colors.dangerBg || 'rgba(239,68,68,0.15)', borderColor: colors.danger || '#EF4444' }]}>
+            <Text style={[styles.errorBannerText, { color: colors.danger || '#EF4444' }]}>{loadError}</Text>
+          </View>
+        )}
         {activeTab === 'disease' ? renderDiseaseReports() : renderWaterReports()}
         <View style={styles.bottomSpacer} />
       </ScrollView>
@@ -499,11 +533,15 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
                   </View>
                   <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>pH Level</Text>
-                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedWaterReport.ph_level?.toFixed(2) || 'N/A'}</Text>
+                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedWaterReport.ph_level?.toFixed(1) || 'N/A'}</Text>
                   </View>
                   <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>TDS Level</Text>
-                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedWaterReport.tds_level || 'N/A'} ppm</Text>
+                    <Text style={[styles.modalValue, { color: colors.text }]}>
+                      {selectedWaterReport.tds_level === null || selectedWaterReport.tds_level === undefined
+                        ? 'N/A'
+                        : `${selectedWaterReport.tds_level} ppm`}
+                    </Text>
                   </View>
                   {selectedWaterReport.contamination_type && selectedWaterReport.contamination_type !== 'none' && (
                     <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
@@ -582,6 +620,18 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 16,
+  },
+  errorBanner: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  errorBannerText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   emptyState: {
     padding: 32,

@@ -67,9 +67,26 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         import('expo-navigation-bar').then(NavBar => {
           NavBar.setVisibilityAsync('hidden');
           NavBar.setBehaviorAsync('overlay-swipe');
-        }).catch(() => {});
+        }).catch((error) => {
+          console.error('Failed to configure Android navigation bar:', error);
+        });
       }
     }
+
+    return () => {
+      if (Platform.OS !== 'web') {
+        StatusBar.setHidden(false, 'fade');
+        if (Platform.OS === 'android') {
+          StatusBar.setTranslucent(false);
+          import('expo-navigation-bar').then(NavBar => {
+            NavBar.setVisibilityAsync('visible');
+            NavBar.setBehaviorAsync('inset-swipe');
+          }).catch((error) => {
+            console.error('Failed to restore Android navigation bar:', error);
+          });
+        }
+      }
+    };
   }, []);
 
   // Swipe gesture — mobile only
