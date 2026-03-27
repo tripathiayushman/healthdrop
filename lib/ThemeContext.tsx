@@ -151,6 +151,10 @@ export interface Theme {
   inputBackground: string;
   inputBorder: string;
   inputFocus: string;
+  inputFocusBorder: string;
+  inputFilledBorder: string;
+  inputErrorBorder: string;
+  inputPlaceholderColor: string;
   placeholder: string;
   chartLine: string;
   chartArea: string;
@@ -242,10 +246,14 @@ export const themes = {
     navBorder: '#E2E8F0',
     
     // Input
-    inputBackground: '#F1F5F9',
-    inputBorder: '#CBD5E1',
+    inputBackground: '#F8FAFC',
+    inputBorder: '#94A3B8',
     inputFocus: colors.primary[500],
-    placeholder: '#94A3B8',
+    inputFocusBorder: colors.primary[500],
+    inputFilledBorder: '#64748B',
+    inputErrorBorder: colors.danger[600],
+    inputPlaceholderColor: '#64748B',
+    placeholder: '#64748B',
     
     // Charts
     chartLine: colors.primary[500],
@@ -294,8 +302,8 @@ export const themes = {
     surface:        '#0a0a0a',
     surfaceVariant: '#111111',
     // ── Glassmorphic cards over black ──
-    card:     'rgba(255,255,255,0.10)',
-    cardHover:'rgba(255,255,255,0.15)',
+    card:     'rgba(255,255,255,0.35)',
+    cardHover:'rgba(255,255,255,0.45)',
 
     // Text
     text:          '#F1F5F9',
@@ -353,10 +361,14 @@ export const themes = {
     navBorder:     'rgba(255,255,255,0.07)',
 
     // Input
-    inputBackground: 'rgba(255,255,255,0.14)',
-    inputBorder:     'rgba(255,255,255,0.22)',
+    inputBackground: 'rgba(15,23,42,0.78)',
+    inputBorder:     'rgba(148,163,184,0.55)',
     inputFocus:      '#26A69A',
-    placeholder:     '#64748B',
+    inputFocusBorder:'#38BDF8',
+    inputFilledBorder:'rgba(148,163,184,0.75)',
+    inputErrorBorder:'#F87171',
+    inputPlaceholderColor:'#94A3B8',
+    placeholder:     '#94A3B8',
 
     // Charts
     chartLine: '#26A69A',

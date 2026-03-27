@@ -506,11 +506,20 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
 
       {/* ==================== FEEDBACK MODAL (Admin Only) ==================== */}
       <Modal visible={showFeedbackModal} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <View
+          style={[
+            styles.modalOverlay,
+            Platform.OS === 'web'
+              ? ({
+                  backdropFilter: 'blur(16px)',
+                  backgroundColor: 'rgba(0,0,0,0.35)',
+                } as any)
+              : {},
+          ]}
+        >
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
           ]}>
             <View style={styles.modalHeader}>
               <View style={styles.modalTitleRow}>

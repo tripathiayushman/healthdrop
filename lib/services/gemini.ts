@@ -3,8 +3,9 @@
 // (kept in gemini.ts to avoid breaking existing imports)
 // =====================================================
 
-const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY ?? '';
-const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1/chat/completions';
+import { supabase } from '../supabase';
+
+const OPENROUTER_PROXY_FUNCTION = 'openrouter-proxy';
 
 const MODEL_CASCADE = [
     process.env.EXPO_PUBLIC_OPENROUTER_MODEL ?? 'openrouter/free',
@@ -101,6 +102,14 @@ interface ORMessage {
     content: string;
 }
 
+interface OpenRouterProxyResponse {
+    content?: string;
+    model?: string;
+    error?: string;
+    status?: number;
+    detail?: string;
+}
+
 function extractOpenRouterContent(data: any): string {
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content === 'string' && content.trim()) return content;
@@ -122,34 +131,42 @@ async function callOpenRouterModel(
     temperature = 0.7,
     max_tokens = 350,
 ): Promise<string> {
-    const response = await fetch(OPENROUTER_API_BASE, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-            'HTTP-Referer': 'https://healthdrop.local',
-            'X-Title': 'HealthDrop Surveillance System',
-        },
-        body: JSON.stringify({
-            model,
-            messages,
-            temperature,
-            max_tokens,
-            stream: false,
-        }),
-    });
+    const { data, error } = await supabase.functions.invoke<OpenRouterProxyResponse>(
+        OPENROUTER_PROXY_FUNCTION,
+        {
+            body: {
+                model,
+                messages,
+                temperature,
+                max_tokens,
+            },
+        }
+    );
 
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-        const msg = data?.error?.message ?? data?.message ?? `HTTP ${response.status}`;
-        throw Object.assign(new Error(`${response.status}: ${msg}`), {
-            status: response.status,
-            msg,
+    if (error) {
+        throw Object.assign(new Error(`Proxy invocation failed: ${error.message}`), {
+            status: 502,
+            msg: error.message,
         });
     }
 
-    return extractOpenRouterContent(data);
+    if (!data) {
+        throw new Error('Empty response from OpenRouter proxy');
+    }
+
+    if (data.error) {
+        throw Object.assign(new Error(`${data.status ?? 500}: ${data.error}`), {
+            status: data.status ?? 500,
+            msg: data.error,
+            detail: data.detail,
+        });
+    }
+
+    if (!data.content?.trim()) {
+        throw new Error('Empty content from OpenRouter proxy');
+    }
+
+    return data.content;
 }
 
 async function callOpenRouter(
@@ -157,8 +174,6 @@ async function callOpenRouter(
     temperature = 0.7,
     max_tokens = 350,
 ): Promise<string> {
-    if (!OPENROUTER_API_KEY) throw new Error('EXPO_PUBLIC_OPENROUTER_API_KEY not set');
-
     let lastError: any;
 
     for (const model of MODEL_CASCADE) {
@@ -319,8 +334,8 @@ export function getChatResponse(
                 const msg = String(err?.message ?? '');
                 if (msg.includes('quota') || msg.includes('429') || msg.includes('unavailable')) {
                     resolve('I am currently at capacity. Please wait a moment and try again.');
-                } else if (msg.includes('not set')) {
-                    resolve('AI features require an OpenRouter API key. Please check your .env file.');
+                } else if (msg.includes('OPENROUTER_API_KEY') || msg.includes('proxy')) {
+                    resolve('AI features are temporarily unavailable due to server configuration.');
                 } else {
                     resolve('I am having trouble connecting. Please check your internet and try again.');
                 }

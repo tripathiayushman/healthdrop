@@ -42,8 +42,9 @@ export const InputField: React.FC<InputFieldProps> = ({
   const [isFocused, setIsFocused] = useState(false);
 
   const getBorderColor = () => {
-    if (error) return colors.danger;
-    if (isFocused) return colors.inputFocus;
+    if (error) return colors.inputErrorBorder || colors.danger;
+    if (isFocused) return colors.inputFocusBorder || colors.inputFocus;
+    if (value?.trim()) return colors.inputFilledBorder || colors.inputBorder;
     return colors.inputBorder;
   };
 
@@ -72,7 +73,7 @@ export const InputField: React.FC<InputFieldProps> = ({
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder}
-          placeholderTextColor={colors.placeholder}
+          placeholderTextColor={colors.inputPlaceholderColor || colors.placeholder}
           secureTextEntry={secureTextEntry}
           keyboardType={keyboardType}
           multiline={multiline}
