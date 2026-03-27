@@ -62,8 +62,8 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   useEffect(() => {
     if (Platform.OS !== 'web') {
       StatusBar.setHidden(true, 'fade');
+      StatusBar.setTranslucent(true);
       if (Platform.OS === 'android') {
-        StatusBar.setTranslucent(true);
         import('expo-navigation-bar').then(NavBar => {
           NavBar.setVisibilityAsync('hidden');
           NavBar.setBehaviorAsync('overlay-swipe');
@@ -76,11 +76,11 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     return () => {
       if (Platform.OS !== 'web') {
         StatusBar.setHidden(false, 'fade');
+        StatusBar.setTranslucent(false);
         if (Platform.OS === 'android') {
-          StatusBar.setTranslucent(false);
           import('expo-navigation-bar').then(NavBar => {
             NavBar.setVisibilityAsync('visible');
-            NavBar.setBehaviorAsync('inset-swipe');
+            NavBar.setBehaviorAsync('hide');
           }).catch((error) => {
             console.error('Failed to restore Android navigation bar:', error);
           });
@@ -280,10 +280,10 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         </View>
       )}
 
-      {/* Swipe hint indicator — mobile only, shown briefly */}
+      {/* Swipe hint indicator — mobile only */}
       {IS_MOBILE && (
         <View style={styles.swipeIndicator} pointerEvents="none">
-          {TAB_ORDER.map((t, i) => (
+          {TAB_ORDER.map((t) => (
             <View
               key={t}
               style={[
