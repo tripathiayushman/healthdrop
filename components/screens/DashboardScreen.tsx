@@ -13,12 +13,13 @@ import {
   Modal,
   ActivityIndicator,
   Platform,
+  Alert,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
-import { format } from 'date-fns';
+import { format, isValid } from 'date-fns';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 
 const { width } = Dimensions.get('window');
@@ -63,6 +64,7 @@ interface HealthAlert {
 
 const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateToForm }) => {
   const { colors } = useTheme();
+  const isMountedRef = React.useRef(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({
     diseaseReports: 0,
@@ -83,8 +85,13 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
   const [feedbackLoading, setFeedbackLoading] = useState(false);
 
   useEffect(() => {
+    isMountedRef.current = true;
     loadStats();
     loadAlerts();
+
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   const loadAlerts = async () => {
@@ -96,12 +103,17 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         .eq('approval_status', 'approved')
         .order('created_at', { ascending: false })
         .limit(5);
+
+      if (!isMountedRef.current) return;
       
       if (data && !error) {
         setAlerts(data);
       }
     } catch (error) {
-      console.log('Alerts loading - table may not exist yet');
+      console.error('[DashboardScreen.loadAlerts] Alerts loading failed', {
+        error,
+        role: profile.role,
+      });
     }
   };
 
@@ -114,6 +126,21 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active'),
       ]);
 
+      const getSafeCount = (label: string, result: PromiseSettledResult<any>): number => {
+        if (result.status === 'rejected') {
+          console.error(`[DashboardScreen.loadStats] ${label} query rejected`, { error: result.reason });
+          return 0;
+        }
+
+        if (result.value?.error) {
+          console.error(`[DashboardScreen.loadStats] ${label} query failed`, { error: result.value.error });
+          return 0;
+        }
+
+        const count = result.value?.count;
+        return typeof count === 'number' && Number.isFinite(count) ? count : 0;
+      };
+
       let pendingFeedbackCount = 0;
       // Super Admin + Health Admin get feedback count
       if (profile.role === 'super_admin' || profile.role === 'health_admin') {
@@ -121,14 +148,24 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
           .from('user_feedback')
           .select('id', { count: 'exact', head: true })
           .eq('status', 'pending');
-        pendingFeedbackCount = feedbackRes.count || 0;
+
+        if (feedbackRes.error) {
+          console.error('[DashboardScreen.loadStats] pending feedback query failed', { error: feedbackRes.error });
+        } else {
+          pendingFeedbackCount =
+            typeof feedbackRes.count === 'number' && Number.isFinite(feedbackRes.count)
+              ? feedbackRes.count
+              : 0;
+        }
       }
 
+      if (!isMountedRef.current) return;
+
       setStats({
-        diseaseReports: diseaseRes.status === 'fulfilled' ? (diseaseRes.value.count || 0) : 0,
-        waterReports: waterRes.status === 'fulfilled' ? (waterRes.value.count || 0) : 0,
-        campaigns: campaignsRes.status === 'fulfilled' ? (campaignsRes.value.count || 0) : 0,
-        criticalAlerts: alertsRes.status === 'fulfilled' ? (alertsRes.value.count || 0) : 0,
+        diseaseReports: getSafeCount('disease_reports', diseaseRes),
+        waterReports: getSafeCount('water_quality_reports', waterRes),
+        campaigns: getSafeCount('health_campaigns', campaignsRes),
+        criticalAlerts: getSafeCount('health_alerts', alertsRes),
         pendingFeedback: pendingFeedbackCount,
       });
     } catch (error) {
@@ -162,10 +199,10 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         .eq('id', id);
 
       if (error) throw error;
-      loadFeedback();
-      loadStats();
+      await Promise.all([loadFeedback(), loadStats()]);
     } catch (error) {
       console.error('Error updating feedback:', error);
+      Alert.alert('Update failed', 'Unable to update feedback status. Please try again.');
     }
   };
 
@@ -526,7 +563,13 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                 <Ionicons name="chatbox-ellipses" size={24} color="#8B5CF6" />
                 <Text style={[styles.modalTitle, { color: colors.text }]}>User Feedbacks</Text>
               </View>
-              <TouchableOpacity onPress={() => setShowFeedbackModal(false)}>
+              <TouchableOpacity
+                onPress={() => setShowFeedbackModal(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="Close feedback modal"
+                accessibilityHint="Closes the user feedback details modal"
+              >
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
@@ -548,6 +591,10 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               <ScrollView style={styles.feedbackScroll} showsVerticalScrollIndicator={false}>
                 {feedbackList.map((feedback) => {
                   const catIcon = getCategoryIcon(feedback.category);
+                  const feedbackCreatedAt = new Date(feedback.created_at);
+                  const feedbackCreatedAtLabel = isValid(feedbackCreatedAt)
+                    ? format(feedbackCreatedAt, 'MMM d, yyyy h:mm a')
+                    : 'Invalid date';
                   return (
                     <View
                       key={feedback.id}
@@ -587,7 +634,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                         <View style={styles.feedbackDate}>
                           <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
                           <Text style={[styles.feedbackDateText, { color: colors.textSecondary }]}>
-                            {format(new Date(feedback.created_at), 'MMM d, yyyy h:mm a')}
+                            {feedbackCreatedAtLabel}
                           </Text>
                         </View>
 
@@ -640,7 +687,13 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                   {selectedAlert?.title}
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => setShowAlertModal(false)}>
+              <TouchableOpacity
+                onPress={() => setShowAlertModal(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="Close alert details modal"
+                accessibilityHint="Closes the health alert details modal"
+              >
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
@@ -860,7 +913,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   quickActionCard: {
-    width: '47%' as any,
+    width: '47%',
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
@@ -912,7 +965,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   statCard: {
-    width: '47%' as any,
+    width: '47%',
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,

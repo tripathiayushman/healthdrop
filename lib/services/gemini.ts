@@ -35,45 +35,98 @@ export interface AIInsight {
 }
 
 export interface ChatMessage {
-    role: 'user' | 'model';
+    role: 'user' | 'assistant';
     text: string;
 }
 
 // ── Cache (success = 30 min TTL, failure = 5 min TTL) ───────────────────────
-interface CacheEntry { insight: AIInsight; expiresAt: number }
+interface CacheEntry { insight: AIInsight; createdAt: number; expiresAt: number }
+interface FailureCacheEntry { createdAt: number; expiresAt: number }
 const successCache = new Map<string, CacheEntry>();
-const failureCache = new Map<string, number>();
+const failureCache = new Map<string, FailureCacheEntry>();
 const SUCCESS_TTL = 30 * 60 * 1000;
 const FAILURE_TTL = 5 * 60 * 1000;
+const MAX_CACHE_SIZE = 200;
+const CACHE_PURGE_INTERVAL_MS = 60 * 1000;
+let _lastCachePurgeAt = 0;
+
+function trimMapToMaxSize<T>(map: Map<string, T>, maxSize: number) {
+    while (map.size > maxSize) {
+        const oldestKey = map.keys().next().value as string | undefined;
+        if (!oldestKey) return;
+        map.delete(oldestKey);
+    }
+}
+
+function upsertCacheEntry<T>(map: Map<string, T>, key: string, value: T) {
+    if (map.has(key)) map.delete(key);
+    map.set(key, value);
+}
+
+function purgeExpiredCacheEntries(force = false) {
+    const now = Date.now();
+    if (!force && now - _lastCachePurgeAt < CACHE_PURGE_INTERVAL_MS) return;
+    _lastCachePurgeAt = now;
+
+    for (const [key, entry] of successCache) {
+        if (entry.expiresAt <= now) successCache.delete(key);
+    }
+    for (const [key, entry] of failureCache) {
+        if (entry.expiresAt <= now) failureCache.delete(key);
+    }
+
+    trimMapToMaxSize(successCache, MAX_CACHE_SIZE);
+    trimMapToMaxSize(failureCache, MAX_CACHE_SIZE);
+}
 
 function cacheKey(ctx: InsightContext): string {
     return `${ctx.scope}|${ctx.userDistrict ?? ''}|${ctx.userState ?? ''}`;
 }
 function getSuccessCached(ctx: InsightContext): AIInsight | null {
-    const e = successCache.get(cacheKey(ctx));
+    purgeExpiredCacheEntries();
+    const key = cacheKey(ctx);
+    const e = successCache.get(key);
     if (e && Date.now() < e.expiresAt) return e.insight;
+    if (e) successCache.delete(key);
     return null;
 }
 function isFailureCached(ctx: InsightContext): boolean {
-    const exp = failureCache.get(cacheKey(ctx));
-    return !!exp && Date.now() < exp;
+    purgeExpiredCacheEntries();
+    const key = cacheKey(ctx);
+    const entry = failureCache.get(key);
+    if (!entry) return false;
+    if (Date.now() < entry.expiresAt) return true;
+    failureCache.delete(key);
+    return false;
 }
 function setSuccessCache(ctx: InsightContext, insight: AIInsight) {
-    successCache.set(cacheKey(ctx), { insight, expiresAt: Date.now() + SUCCESS_TTL });
+    purgeExpiredCacheEntries();
+    const now = Date.now();
+    upsertCacheEntry(successCache, cacheKey(ctx), { insight, createdAt: now, expiresAt: now + SUCCESS_TTL });
+    trimMapToMaxSize(successCache, MAX_CACHE_SIZE);
 }
 function setFailureCache(ctx: InsightContext) {
-    failureCache.set(cacheKey(ctx), Date.now() + FAILURE_TTL);
+    purgeExpiredCacheEntries();
+    const now = Date.now();
+    upsertCacheEntry(failureCache, cacheKey(ctx), { createdAt: now, expiresAt: now + FAILURE_TTL });
+    trimMapToMaxSize(failureCache, MAX_CACHE_SIZE);
 }
 
 // ── GLOBAL SERIALIZED REQUEST QUEUE ─────────────────────────────────────────
 let _queueBusy = false;
 let _lastRequestAt = 0;
 const MIN_REQUEST_GAP_MS = 4200;
+const MAX_PENDING_QUEUE = 25;
 const _pendingQueue: Array<() => void> = [];
 
-function enqueueRequest(fn: () => void) {
+function enqueueRequest(fn: () => void): boolean {
+    if (_pendingQueue.length >= MAX_PENDING_QUEUE) {
+        console.warn(`[OpenRouter] Queue full (${_pendingQueue.length}/${MAX_PENDING_QUEUE}); rejecting new request.`);
+        return false;
+    }
     _pendingQueue.push(fn);
     drainQueue();
+    return true;
 }
 
 function drainQueue() {
@@ -108,21 +161,6 @@ interface OpenRouterProxyResponse {
     error?: string;
     status?: number;
     detail?: string;
-}
-
-function extractOpenRouterContent(data: any): string {
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content === 'string' && content.trim()) return content;
-
-    if (Array.isArray(content)) {
-        const joined = content
-            .map((c: any) => (typeof c?.text === 'string' ? c.text : ''))
-            .join('')
-            .trim();
-        if (joined) return joined;
-    }
-
-    throw new Error('Empty response from OpenRouter');
 }
 
 async function callOpenRouterModel(
@@ -249,7 +287,7 @@ export function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
     }
 
     return new Promise<AIInsight>((resolve) => {
-        enqueueRequest(async () => {
+        const enqueued = enqueueRequest(async () => {
             const cached2 = getSuccessCached(ctx);
             if (cached2) {
                 drainQueueWhenDone();
@@ -293,6 +331,11 @@ export function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
                 drainQueueWhenDone();
             }
         });
+
+        if (!enqueued) {
+            setFailureCache(ctx);
+            resolve(fallbackInsight(ctx, emoji, accentColor));
+        }
     });
 }
 
@@ -301,7 +344,7 @@ let _chatCooldownUntil = 0;
 
 export function getChatResponse(
     messages: ChatMessage[],
-    userContext: { role: string; district?: string; state?: string; fullName?: string }
+    userContext: { role: string; district?: string; state?: string; fullName?: string; consentToExternalProcessing?: boolean }
 ): Promise<string> {
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage || lastMessage.role !== 'user') {
@@ -309,19 +352,20 @@ export function getChatResponse(
     }
 
     return new Promise<string>((resolve) => {
-        enqueueRequest(async () => {
+        const enqueued = enqueueRequest(async () => {
             const now = Date.now();
             if (now < _chatCooldownUntil) {
                 await new Promise(r => setTimeout(r, _chatCooldownUntil - now));
             }
             _chatCooldownUntil = Date.now() + 3000;
 
-            const systemPrompt = `You are HealthDrop AI, a friendly health assistant for India.\nAssisting: ${userContext.fullName ?? 'user'} (${userContext.role}${userContext.district ? `, ${userContext.district}` : ''}).\nHelp with: disease symptoms, prevention, water quality, health campaigns, app guidance.\nBe concise (3-4 sentences max), simple language, never diagnose, recommend doctor for medical issues.`;
+            const userDisplayName = userContext.consentToExternalProcessing ? (userContext.fullName ?? 'user') : 'user';
+            const systemPrompt = `You are HealthDrop AI, a friendly health assistant for India.\nAssisting: ${userDisplayName} (${userContext.role}${userContext.district ? `, ${userContext.district}` : ''}).\nHelp with: disease symptoms, prevention, water quality, health campaigns, app guidance.\nBe concise (3-4 sentences max), simple language, never diagnose, recommend doctor for medical issues.`;
 
             const history: ORMessage[] = [
                 { role: 'system', content: systemPrompt },
                 ...messages.map((m) => ({
-                    role: m.role === 'model' ? 'assistant' : 'user',
+                    role: m.role,
                     content: m.text,
                 } as ORMessage)),
             ];
@@ -334,8 +378,8 @@ export function getChatResponse(
                 const msg = String(err?.message ?? '');
                 if (msg.includes('quota') || msg.includes('429') || msg.includes('unavailable')) {
                     resolve('I am currently at capacity. Please wait a moment and try again.');
-                } else if (msg.includes('OPENROUTER_API_KEY') || msg.includes('proxy')) {
-                    resolve('AI features are temporarily unavailable due to server configuration.');
+                } else if (msg.includes('proxy')) {
+                    resolve('AI features are temporarily unavailable due to server proxy configuration.');
                 } else {
                     resolve('I am having trouble connecting. Please check your internet and try again.');
                 }
@@ -343,5 +387,9 @@ export function getChatResponse(
                 drainQueueWhenDone();
             }
         });
+
+        if (!enqueued) {
+            resolve('I am currently handling many requests. Please try again in a moment.');
+        }
     });
 }

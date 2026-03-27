@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
-  ScrollView, Platform
+  ScrollView, Platform, ViewStyle
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -45,6 +45,8 @@ interface HealthAlert {
   immediate_actions?: string; precautionary_measures?: string; created_at: string;
 }
 
+type QueueItem = DiseaseReport | WaterReport | Campaign | HealthAlert;
+
 const URGENCY_COLOR: Record<string,string> = {
   critical: '#DC2626', high: '#F59E0B', medium: '#3B82F6', low: '#10B981',
 };
@@ -64,6 +66,12 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const { colors, isDark } = useTheme();
   const accent   = ROLE_ACCENT[profile.role] ?? '#42A5F5';
   const gradient = ROLE_GRADIENTS[profile.role] ?? ['#0F172A','#1E3A5F','#1976D2'];
+  const webSheetStyle: ViewStyle | undefined = Platform.OS === 'web'
+    ? ({
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+      } as React.CSSProperties as unknown as ViewStyle)
+    : undefined;
 
   const isClinic = profile.role === 'clinic';
   const isDistrictOfficer = profile.role === 'district_officer';
@@ -81,7 +89,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const [alerts, setAlerts]                 = useState<HealthAlert[]>([]);
   const [pendingCounts, setPendingCounts]   = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0 });
 
-  const [selectedItem, setSelectedItem]   = useState<any>(null);
+  const [selectedItem, setSelectedItem]   = useState<QueueItem | null>(null);
   const [selectedType, setSelectedType]   = useState<QueueTab>('disease');
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [rejectReason, setRejectReason]   = useState('');
@@ -90,6 +98,17 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   // Confirm-delete modal (replaces Alert.alert — needed for web)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: QueueTab } | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackTitle, setFeedbackTitle] = useState('');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [feedbackType, setFeedbackType] = useState<'success' | 'error' | 'warning'>('success');
+
+  const showFeedback = (title: string, message: string, type: 'success' | 'error' | 'warning' = 'success') => {
+    setFeedbackTitle(title);
+    setFeedbackMessage(message);
+    setFeedbackType(type);
+    setShowFeedbackModal(true);
+  };
 
   // ── Tabs based on role ───────────────────────────────────────────────────
   const allTabs: { id: QueueTab; label: string; icon: string }[] = [
@@ -116,24 +135,24 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   useEffect(() => { load(); }, []);
 
   const loadDiseaseReports = async () => {
-    const q = supabase.from('disease_reports').select('*').order('created_at', { ascending: false });
-    if (isDistrictOfficer && profile.district) q.eq('district', profile.district);
+    let q = supabase.from('disease_reports').select('*').order('created_at', { ascending: false });
+    if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
     const { data } = await q;
     const rows = data ?? [];
     setDiseaseReports(rows);
     setPendingCounts(p => ({ ...p, disease: rows.filter(r => r.approval_status === 'pending_approval').length }));
   };
   const loadWaterReports = async () => {
-    const q = supabase.from('water_quality_reports').select('*').order('created_at', { ascending: false });
-    if (isDistrictOfficer && profile.district) q.eq('district', profile.district);
+    let q = supabase.from('water_quality_reports').select('*').order('created_at', { ascending: false });
+    if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
     const { data } = await q;
     const rows = data ?? [];
     setWaterReports(rows);
     setPendingCounts(p => ({ ...p, water: rows.filter(r => r.approval_status === 'pending_approval').length }));
   };
   const loadCampaigns = async () => {
-    const q = supabase.from('health_campaigns').select('*').order('created_at', { ascending: false });
-    if (isDistrictOfficer && profile.district) q.eq('district', profile.district);
+    let q = supabase.from('health_campaigns').select('*').order('created_at', { ascending: false });
+    if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
     const { data } = await q;
     const rows = data ?? [];
     setCampaigns(rows);
@@ -175,7 +194,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       const table = type === 'disease' ? 'disease_reports' : 'water_quality_reports';
       const { error } = await supabase.from(table).update({ status: newStatus }).eq('id', id);
       if (error) throw error;
-      setSelectedItem((prev: any) => prev ? { ...prev, status: newStatus } : prev);
+      setSelectedItem(prev => prev ? { ...prev, status: newStatus } : prev);
       load();
     } catch (e: any) { Alert.alert('Error', e.message); }
     finally { setActionLoading(false); }
@@ -191,10 +210,12 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         .update({ approval_status: 'approved', approved_by: user?.id, approved_at: new Date().toISOString() })
         .eq('id', id);
       if (error) throw error;
-      Alert.alert('Approved', 'Item approved successfully.');
       setShowDetailModal(false);
+      setShowRejectInput(false);
+      setRejectReason('');
+      showFeedback('Approved', 'Item approved successfully.', 'success');
       load();
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) { showFeedback('Error', e?.message ?? 'Failed to approve item.', 'error'); }
     finally { setActionLoading(false); }
   };
 
@@ -207,14 +228,21 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         .update({ approval_status: 'rejected', approved_by: user?.id, approved_at: new Date().toISOString(), rejection_reason: reason || 'Rejected by admin' })
         .eq('id', id);
       if (error) throw error;
-      Alert.alert('Rejected', 'Item has been rejected.');
       setShowDetailModal(false);
       setShowRejectInput(false);
       setRejectReason('');
+      showFeedback('Rejected', 'Item has been rejected.', 'warning');
       load();
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) { showFeedback('Error', e?.message ?? 'Failed to reject item.', 'error'); }
     finally { setActionLoading(false); }
   };
+
+  const feedbackVisual: { icon: keyof typeof Ionicons.glyphMap; color: string } =
+    feedbackType === 'error'
+      ? { icon: 'alert-circle', color: '#EF4444' }
+      : feedbackType === 'warning'
+      ? { icon: 'warning', color: '#F59E0B' }
+      : { icon: 'checkmark-circle', color: '#10B981' };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const statusChip = (s?: string) => (
@@ -233,7 +261,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const fAlerts    = alerts.filter(r => !q || r.title?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
 
   // ── Card renderer ─────────────────────────────────────────────────────────
-  const renderCard = (item: any, type: QueueTab) => {
+  const renderCard = (item: QueueItem, type: QueueTab) => {
     const isPending = item.approval_status === 'pending_approval';
     let iconColor = accent;
     let iconName: string = 'document-text';
@@ -291,9 +319,26 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     );
   };
 
-  const currentData   = tab === 'disease' ? fDisease : tab === 'water' ? fWater : tab === 'campaigns' ? fCampaigns : fAlerts;
+  const currentData: QueueItem[] = tab === 'disease' ? fDisease : tab === 'water' ? fWater : tab === 'campaigns' ? fCampaigns : fAlerts;
   const pendingOfTab  = tab === 'disease' ? pendingCounts.disease : tab === 'water' ? pendingCounts.water : tab === 'campaigns' ? pendingCounts.campaigns : pendingCounts.alerts;
   const totalPending  = pendingCounts.disease + pendingCounts.water + pendingCounts.campaigns + pendingCounts.alerts;
+
+  const isDiseaseItem = (item: QueueItem): item is DiseaseReport =>
+    selectedType === 'disease' && 'disease_name' in item;
+  const isWaterItem = (item: QueueItem): item is WaterReport =>
+    selectedType === 'water' && 'source_name' in item;
+  const isCampaignItem = (item: QueueItem): item is Campaign =>
+    selectedType === 'campaigns' && 'campaign_type' in item && 'name' in item;
+  const isAlertItem = (item: QueueItem): item is HealthAlert =>
+    selectedType === 'alerts' && 'alert_type' in item && 'title' in item;
+
+  const getSelectedTitle = (item: QueueItem): string => {
+    if (isDiseaseItem(item)) return item.disease_name ?? 'Detail';
+    if (isWaterItem(item)) return item.source_name ?? 'Detail';
+    if (isCampaignItem(item)) return item.name ?? 'Detail';
+    if (isAlertItem(item)) return item.title ?? 'Detail';
+    return 'Detail';
+  };
 
   // ── Detail modal fields ───────────────────────────────────────────────────
   const DetailRow = ({ label, value }: { label: string; value?: string|number }) => (
@@ -374,7 +419,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         ? <ActivityIndicator size="large" color={accent} style={{ marginTop: 40 }} />
         : (
           <FlatList
-            data={currentData as any[]}
+            data={currentData}
             keyExtractor={item => item.id}
             renderItem={({ item }) => renderCard(item, tab)}
             contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
@@ -397,17 +442,17 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
           onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}
         >
           {selectedItem && (
-            <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <TouchableOpacity activeOpacity={1} onPress={() => {}} accessible={false}>
             <View style={[
               qst.sheet, 
               { backgroundColor: colors.card },
-              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+              webSheetStyle,
             ]}>
               {/* Modal header */}
               <View style={[qst.modalHeader, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[qst.modalTitle, { color: colors.text }]} numberOfLines={2}>
-                    {selectedItem.disease_name ?? selectedItem.source_name ?? selectedItem.name ?? selectedItem.title ?? 'Detail'}
+                    {getSelectedTitle(selectedItem)}
                   </Text>
                   <Text style={[qst.modalSub, { color: colors.textSecondary }]}>{selectedItem.district}, {selectedItem.state}</Text>
                 </View>
@@ -432,7 +477,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                 )}
 
                 {/* Fields based on type */}
-                {selectedType === 'disease' && <>
+                {isDiseaseItem(selectedItem) && <>
                   <DetailRow label="Disease" value={selectedItem.disease_name} />
                   <DetailRow label="Type" value={selectedItem.disease_type} />
                   <DetailRow label="Severity" value={selectedItem.severity} />
@@ -443,7 +488,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <DetailRow label="Treatment" value={selectedItem.treatment_status} />
                   <DetailRow label="Location" value={`${selectedItem.location_name}, ${selectedItem.district}, ${selectedItem.state}`} />
                 </>}
-                {selectedType === 'water' && <>
+                {isWaterItem(selectedItem) && <>
                   <DetailRow label="Source" value={selectedItem.source_name} />
                   <DetailRow label="Type" value={selectedItem.source_type} />
                   <DetailRow label="Quality" value={selectedItem.overall_quality} />
@@ -451,7 +496,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <DetailRow label="Location" value={`${selectedItem.location_name}, ${selectedItem.district}, ${selectedItem.state}`} />
                   <DetailRow label="Notes" value={selectedItem.notes} />
                 </>}
-                {selectedType === 'campaigns' && <>
+                {isCampaignItem(selectedItem) && <>
                   <DetailRow label="Name" value={selectedItem.name} />
                   <DetailRow label="Type" value={selectedItem.campaign_type} />
                   <DetailRow label="Status" value={selectedItem.status} />
@@ -461,7 +506,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <DetailRow label="Volunteers" value={selectedItem.volunteers_needed} />
                   <DetailRow label="Location" value={`${selectedItem.district}, ${selectedItem.state}`} />
                 </>}
-                {selectedType === 'alerts' && <>
+                {isAlertItem(selectedItem) && <>
                   <DetailRow label="Title" value={selectedItem.title} />
                   <DetailRow label="Type" value={selectedItem.alert_type} />
                   <DetailRow label="Urgency" value={selectedItem.urgency_level} />
@@ -587,11 +632,11 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       {/* ── Delete Confirm Modal (web-compatible) ───────────────────────── */}
       <Modal visible={showDeleteConfirm} transparent animationType="fade" onRequestClose={() => setShowDeleteConfirm(false)}>
         <TouchableOpacity style={qst.overlay} activeOpacity={1} onPress={() => setShowDeleteConfirm(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} accessible={false}>
           <View style={[
             qst.confirmCard, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            webSheetStyle,
           ]}>
             <View style={qst.confirmIconWrap}>
               <Ionicons name="trash" size={32} color="#EF4444" />
@@ -619,6 +664,31 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
               </TouchableOpacity>
             </View>
           </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Feedback Modal (web-compatible) ─────────────────────────────── */}
+      <Modal visible={showFeedbackModal} transparent animationType="fade" onRequestClose={() => setShowFeedbackModal(false)}>
+        <TouchableOpacity style={qst.overlay} activeOpacity={1} onPress={() => setShowFeedbackModal(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} accessible={false}>
+            <View style={[qst.feedbackCard, { backgroundColor: colors.card }, webSheetStyle]}>
+              <View style={qst.feedbackIconWrap}>
+                <Ionicons
+                  name={feedbackVisual.icon}
+                  size={30}
+                  color={feedbackVisual.color}
+                />
+              </View>
+              <Text style={[qst.feedbackTitle, { color: colors.text }]}>{feedbackTitle}</Text>
+              <Text style={[qst.feedbackMessage, { color: colors.textSecondary }]}>{feedbackMessage}</Text>
+              <TouchableOpacity
+                style={[qst.confirmBtn, { marginTop: 16, width: '100%', backgroundColor: accent }]}
+                onPress={() => setShowFeedbackModal(false)}
+              >
+                <Text style={[qst.confirmBtnText, { color: '#FFF' }]}>OK</Text>
+              </TouchableOpacity>
+            </View>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
@@ -683,6 +753,11 @@ const qst = StyleSheet.create({
   confirmBtnRow:  { flexDirection: 'row', gap: 12, width: '100%' },
   confirmBtn:     { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
   confirmBtnText: { fontWeight: '700', fontSize: 15 },
+  // Feedback modal
+  feedbackCard:     { margin: 24, borderRadius: 20, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 20, elevation: 14, minWidth: 300 },
+  feedbackIconWrap: { width: 64, height: 64, borderRadius: 20, backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  feedbackTitle:    { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
+  feedbackMessage:  { fontSize: 14, textAlign: 'center', lineHeight: 20 },
 });
 
 export default ApprovalQueueScreen;

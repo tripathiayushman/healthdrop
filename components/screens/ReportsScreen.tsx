@@ -9,15 +9,13 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Dimensions,
+  ActivityIndicator,
   Modal,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
-
-const { width } = Dimensions.get('window');
 
 interface ReportsScreenProps {
   profile: Profile;
@@ -72,8 +70,6 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
   const canAccessDiseaseReports = ['health_admin', 'clinic'].includes(profile.role);
   const canAccessWaterReports = ['health_admin', 'clinic', 'asha_worker'].includes(profile.role);
   const canCreateReports = ['health_admin', 'clinic', 'asha_worker'].includes(profile.role);
-  const canApproveReports = ['health_admin', 'clinic'].includes(profile.role);
-  const isVolunteer = profile.role === 'volunteer';
   
   const [activeTab, setActiveTab] = useState<'disease' | 'water'>(canAccessDiseaseReports ? 'disease' : 'water');
   const [refreshing, setRefreshing] = useState(false);
@@ -164,16 +160,6 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
     return qualityColors[quality?.toLowerCase()] || colors.textSecondary;
   };
 
-  const getContaminationColor = (level: string) => {
-    const levelColors: Record<string, string> = {
-      high: '#DC2626',
-      moderate: '#F59E0B',
-      low: '#10B981',
-      none: '#059669',
-    };
-    return levelColors[level] || colors.textSecondary;
-  };
-
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-IN', {
@@ -238,7 +224,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Cases:</Text>
             <Text style={[styles.detailValue, { color: colors.text }]}>
-              {report.cases_count || 1} case(s){report.deaths_count ? `, ${report.deaths_count} death(s)` : ''}
+              {report.cases_count ?? 1} case(s){report.deaths_count ? `, ${report.deaths_count} death(s)` : ''}
             </Text>
           </View>
           {report.symptoms && (
@@ -312,7 +298,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
           </View>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>pH Level:</Text>
-            <Text style={[styles.detailValue, { color: colors.text }]}>{report.ph_level?.toFixed(1) || 'N/A'}</Text>
+            <Text style={[styles.detailValue, { color: colors.text }]}>{report.ph_level?.toFixed(2) || 'N/A'}</Text>
           </View>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>TDS Level:</Text>
@@ -399,13 +385,21 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
         }
         showsVerticalScrollIndicator={false}
       >
-        {loadError && (
-          <View style={[styles.errorBanner, { backgroundColor: colors.dangerBg || 'rgba(239,68,68,0.15)', borderColor: colors.danger || '#EF4444' }]}>
-            <Text style={[styles.errorBannerText, { color: colors.danger || '#EF4444' }]}>{loadError}</Text>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={colors.primary} />
           </View>
+        ) : (
+          <>
+            {loadError && (
+              <View style={[styles.errorBanner, { backgroundColor: colors.dangerBg || 'rgba(239,68,68,0.15)', borderColor: colors.danger || '#EF4444' }]}>
+                <Text style={[styles.errorBannerText, { color: colors.danger || '#EF4444' }]}>{loadError}</Text>
+              </View>
+            )}
+            {activeTab === 'disease' ? renderDiseaseReports() : renderWaterReports()}
+            <View style={styles.bottomSpacer} />
+          </>
         )}
-        {activeTab === 'disease' ? renderDiseaseReports() : renderWaterReports()}
-        <View style={styles.bottomSpacer} />
       </ScrollView>
 
       {/* FAB - Only for roles that can create (NOT volunteers) */}
@@ -434,7 +428,12 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
               <Text style={[styles.modalTitle, { color: colors.text }]}>
                 {selectedDiseaseReport ? 'Disease Report Details' : 'Water Quality Report Details'}
               </Text>
-              <TouchableOpacity onPress={() => setShowDetailModal(false)}>
+              <TouchableOpacity
+                onPress={() => setShowDetailModal(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="Close report details modal"
+              >
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
@@ -460,7 +459,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
                   </View>
                   <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Cases Reported</Text>
-                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedDiseaseReport.cases_count || 1}</Text>
+                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedDiseaseReport.cases_count ?? 1}</Text>
                   </View>
                   {selectedDiseaseReport.deaths_count > 0 && (
                     <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
@@ -533,7 +532,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
                   </View>
                   <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>pH Level</Text>
-                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedWaterReport.ph_level?.toFixed(1) || 'N/A'}</Text>
+                    <Text style={[styles.modalValue, { color: colors.text }]}>{selectedWaterReport.ph_level?.toFixed(2) || 'N/A'}</Text>
                   </View>
                   <View style={[styles.modalSection, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>TDS Level</Text>
@@ -620,6 +619,11 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 16,
+  },
+  loadingContainer: {
+    paddingVertical: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   errorBanner: {
     borderWidth: 1,

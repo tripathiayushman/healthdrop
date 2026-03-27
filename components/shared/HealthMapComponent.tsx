@@ -10,7 +10,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal,
-  Platform, ActivityIndicator, ScrollView, Dimensions,
+  Platform, ActivityIndicator, ScrollView, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -42,6 +42,43 @@ function getCachedLocation(): { lat: number; lon: number } | null {
 
 // ── Layer type ────────────────────────────────────────
 type Layer = 'alerts' | 'disease' | 'water' | 'campaigns';
+
+interface HealthMapRow {
+  district?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+interface AlertRow extends HealthMapRow {
+  id: string;
+  title: string;
+  description: string;
+  location_name: string;
+  district: string;
+  state?: string;
+  created_at: string;
+  urgency_level: string;
+  alert_type?: string;
+  disease_or_issue?: string;
+  cases_reported?: number;
+  affected_population?: number;
+  immediate_actions?: string;
+  precautionary_measures?: string;
+}
+
+interface DiseaseRow extends HealthMapRow {
+  disease_name?: string | null;
+  severity?: string | null;
+}
+
+interface WaterRow extends HealthMapRow {
+  overall_quality?: string | null;
+}
+
+interface CampaignRow extends HealthMapRow {
+  campaign_type?: string | null;
+  status?: string | null;
+}
 
 // ── Fallback district centroids (only used when no GPS data available) ─
 const DISTRICT_CENTROIDS: Record<string, [number, number]> = {
@@ -110,11 +147,11 @@ const LAYER_COLOR: Record<Layer, string> = {
 };
 
 // ── Build markers — GROUP BY DISTRICT, use avg GPS if available ──
-function groupByDistrict(
-  rows: any[],
-  getDistrict: (r: any) => string,
-  getColor:    (r: any) => string,
-  getLabel:    (r: any) => string,
+function groupByDistrict<T extends HealthMapRow>(
+  rows: T[],
+  getDistrict: (r: T) => string | null | undefined,
+  getColor:    (r: T) => string,
+  getLabel:    (r: T) => string,
   hasCoords = true,
 ): MapMarker[] {
   const map: Record<string, {
@@ -127,7 +164,12 @@ function groupByDistrict(
     if (!map[dist]) map[dist] = { lats: [], lons: [], colors: new Set(), labels: [], count: 0, district: dist };
     map[dist].count++;
     // Use ACTUAL GPS from the record if present and valid (not 0,0 which is default/empty)
-    if (hasCoords && r.latitude && r.longitude && !(r.latitude === 0 && r.longitude === 0)) {
+    if (
+      hasCoords &&
+      r.latitude !== undefined && r.latitude !== null &&
+      r.longitude !== undefined && r.longitude !== null &&
+      !(r.latitude === 0 && r.longitude === 0)
+    ) {
       map[dist].lats.push(Number(r.latitude));
       map[dist].lons.push(Number(r.longitude));
     }
@@ -151,19 +193,19 @@ function groupByDistrict(
     const distPretty = info.district.replace(/\b\w/g, c => c.toUpperCase());
 
     return { lat, lon, district: distPretty, color, count: info.count, label: uniqueLabels };
-  }).filter(Boolean) as MapMarker[];
+  }) as MapMarker[];
 }
 
-function buildAlertMarkers(alerts: any[]): MapMarker[] {
+function buildAlertMarkers(alerts: AlertRow[]): MapMarker[] {
   return groupByDistrict(
     alerts,
     r => r.district,
-    r => URGENCY_COLOR[r.urgency_level] ?? '#F59E0B',
+    r => URGENCY_COLOR[r.urgency_level ?? ''] ?? '#F59E0B',
     r => `${(r.urgency_level ?? '').charAt(0).toUpperCase() + (r.urgency_level ?? '').slice(1)} Alert`,
   );
 }
 
-function buildDiseaseMarkers(data: any[]): MapMarker[] {
+function buildDiseaseMarkers(data: DiseaseRow[]): MapMarker[] {
   return groupByDistrict(
     data,
     r => r.district,
@@ -172,7 +214,7 @@ function buildDiseaseMarkers(data: any[]): MapMarker[] {
   );
 }
 
-function buildWaterMarkers(data: any[]): MapMarker[] {
+function buildWaterMarkers(data: WaterRow[]): MapMarker[] {
   return groupByDistrict(
     data,
     r => r.district,
@@ -181,7 +223,7 @@ function buildWaterMarkers(data: any[]): MapMarker[] {
   );
 }
 
-function buildCampaignMarkers(data: any[]): MapMarker[] {
+function buildCampaignMarkers(data: CampaignRow[]): MapMarker[] {
   // campaigns table has no lat/lon columns — use district centroid only
   return groupByDistrict(
     data,
@@ -190,6 +232,15 @@ function buildCampaignMarkers(data: any[]): MapMarker[] {
     r => (r.campaign_type ?? '').replace(/_/g, ' '),
     false,  // hasCoords = false
   );
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ── Leaflet HTML ──────────────────────────────────────
@@ -253,14 +304,17 @@ var colorLabels = {
 
 markers.forEach(function(m) {
   var r = 20000 + (m.count * 4000);
+  var safeDistrict = escapeHtml(m.district);
+  var safeLabel = escapeHtml(m.label);
+  var safeCount = escapeHtml(m.count);
   L.circleMarker([m.lat, m.lon], {
     radius: 10 + Math.min(m.count * 2, 14),
     color: m.color, fillColor: m.color,
     fillOpacity: 0.5, opacity: 0.9, weight: 2
   }).addTo(map).bindPopup(
-    '<b style="font-size:13px">' + m.district + '</b><br/>' +
-    '<span style="font-size:12px">' + m.label + '</span><br/>' +
-    '<span style="font-size:11px;color:#666">' + m.count + ' record' + (m.count>1?'s':'') + '</span>'
+    '<b style="font-size:13px">' + safeDistrict + '</b><br/>' +
+    '<span style="font-size:12px">' + safeLabel + '</span><br/>' +
+    '<span style="font-size:11px;color:#666">' + safeCount + ' record' + (m.count>1?'s':'') + '</span>'
   );
   seenColors[m.color] = colorLabels[m.color] || 'Data';
 });
@@ -332,7 +386,7 @@ const LAYERS: { id: Layer; label: string; icon: string }[] = [
 // ══════════════════════════════════════════════════════
 interface MapPanelProps {
   profile: Profile;
-  alerts: any[];
+  alerts: AlertRow[];
   userLat?: number;
   userLon?: number;
   onRequestLocate: () => void;
@@ -345,9 +399,9 @@ const MapPanel: React.FC<MapPanelProps> = ({
 }) => {
   const { colors } = useTheme();
   const [activeLayer, setActiveLayer] = useState<Layer>('alerts');
-  const [diseaseData,  setDiseaseData]  = useState<any[]>([]);
-  const [waterData,    setWaterData]    = useState<any[]>([]);
-  const [campaignData, setCampaignData] = useState<any[]>([]);
+  const [diseaseData,  setDiseaseData]  = useState<DiseaseRow[]>([]);
+  const [waterData,    setWaterData]    = useState<WaterRow[]>([]);
+  const [campaignData, setCampaignData] = useState<CampaignRow[]>([]);
   const [loadingData,  setLoadingData]  = useState(false);
   const [layersFetched, setLayersFetched] = useState(false);
 
@@ -366,12 +420,33 @@ const MapPanel: React.FC<MapPanelProps> = ({
           .select('district,campaign_type,status')
           .eq('status','active').limit(300),
       ]);
-      if (d.data) setDiseaseData(d.data);
-      if (w.data) setWaterData(w.data);
-      if (c.data) setCampaignData(c.data);
-      setLayersFetched(true);
-    } catch {}
-    setLoadingData(false);
+
+      if (d.error) {
+        console.error('Failed to load disease layer data:', d.error);
+      } else if (d.data) {
+        setDiseaseData(d.data);
+      }
+
+      if (w.error) {
+        console.error('Failed to load water layer data:', w.error);
+      } else if (w.data) {
+        setWaterData(w.data);
+      }
+
+      if (c.error) {
+        console.error('Failed to load campaign layer data:', c.error);
+      } else if (c.data) {
+        setCampaignData(c.data);
+      }
+
+      if (!d.error && !w.error && !c.error) {
+        setLayersFetched(true);
+      }
+    } catch (error) {
+      console.error('Unexpected layer fetch error:', error);
+    } finally {
+      setLoadingData(false);
+    }
   }, [layersFetched]);
 
   const markers = React.useMemo((): MapMarker[] => {
@@ -452,9 +527,9 @@ const mp = StyleSheet.create({
 // ══════════════════════════════════════════════════════
 interface MapAndAlertsSectionProps {
   profile: Profile;
-  alerts: any[];
+  alerts: AlertRow[];
   alertSectionTitle?: string;
-  onAlertPress?: (alert: any) => void;
+  onAlertPress?: (alert: AlertRow) => void;
   emptyTitle?: string;
   emptySubtitle?: string;
 }
@@ -473,6 +548,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
   const [userLon,     setUserLon    ] = useState<number | undefined>(getCachedLocation()?.lon);
   const [locating,    setLocating   ] = useState(false);
   const [showLocPrompt, setShowLocPrompt] = useState(false);
+  const [webLocationAlert, setWebLocationAlert] = useState<{ title: string; message: string } | null>(null);
   const mounted = useRef(false);
 
   // On first mount: if location not yet cached & not yet asked → show prompt
@@ -486,12 +562,23 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
     }
   }, []);
 
+  const showLocationAlert = useCallback((title: string, message: string) => {
+    if (Platform.OS === 'web') {
+      setWebLocationAlert({ title, message });
+      return;
+    }
+    Alert.alert(title, message);
+  }, []);
+
   const requestGPS = useCallback(async () => {
     setLocating(true);
     try {
       if (Platform.OS === 'web') {
         if (typeof navigator === 'undefined' || !navigator.geolocation) {
-          setLocating(false);
+          showLocationAlert(
+            'Location Unavailable',
+            'Geolocation is not supported in this browser. Please enable location services or try another browser.'
+          );
           return;
         }
         await new Promise<void>((resolve, reject) =>
@@ -516,16 +603,56 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
           _cachedLon = pos.coords.longitude;
           setUserLat(pos.coords.latitude);
           setUserLon(pos.coords.longitude);
+        } else {
+          Alert.alert('Permission Needed', 'Location permission was not granted. Enable it in settings to center the map on your current location.');
         }
       }
-    } catch {}
-    setLocating(false);
-  }, []);
+    } catch (error: any) {
+      const reason = error?.message ? `\n\nReason: ${error.message}` : '';
+      Alert.alert('Unable To Get Location', `We could not retrieve your current location.${reason}`);
+    } finally {
+      setLocating(false);
+    }
+  }, [showLocationAlert]);
 
   const accentColor = '#3B82F6';
 
   return (
     <>
+      {/* ── Web-only fallback modal for location alerts ── */}
+      <Modal
+        visible={Platform.OS === 'web' && !!webLocationAlert}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setWebLocationAlert(null)}
+      >
+        <View style={s.popupOverlay}>
+          <View style={[s.popup, {
+            backgroundColor: isDark ? 'rgba(10,10,10,0.97)' : '#FFFFFF',
+            borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(59,130,246,0.3)',
+          }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
+            <View style={[s.popupIconWrap, { backgroundColor: '#3B82F618' }]}>
+              <Ionicons name="information-circle" size={32} color="#3B82F6" />
+            </View>
+            <Text style={[s.popupTitle, { color: isDark ? '#F1F5F9' : '#1E293B' }]}>
+              {webLocationAlert?.title}
+            </Text>
+            <Text style={[s.popupBody, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+              {webLocationAlert?.message}
+            </Text>
+            <TouchableOpacity style={s.popupAllow} onPress={() => setWebLocationAlert(null)}>
+              <LinearGradient
+                colors={['#3B82F6', '#2563EB']}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                style={s.popupAllowGrad}
+              >
+                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>OK</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Location permission — MODAL POPUP on first load ── */}
       <Modal visible={showLocPrompt} transparent animationType="fade" onRequestClose={() => setShowLocPrompt(false)}>
         <View style={s.popupOverlay}>
@@ -679,8 +806,6 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
     </>
   );
 };
-
-const SCREEN_W = Dimensions.get('window').width;
 
 const s = StyleSheet.create({
   // Section heading

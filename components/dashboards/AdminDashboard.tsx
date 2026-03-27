@@ -9,10 +9,10 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Dimensions,
   ActivityIndicator,
   Modal,
   Platform,
+  ViewStyle,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -21,9 +21,6 @@ import { diseaseReportsService, waterQualityService, campaignsService, usersServ
 import { supabase } from '../../lib/supabase';
 import { DiseaseReport, WaterQualityReport, Campaign, Profile } from '../../types';
 import { format } from 'date-fns';
-
-const { width } = Dimensions.get('window');
-const isSmallScreen = width < 768;
 
 interface AdminDashboardProps {
   profile: Profile;
@@ -55,6 +52,13 @@ interface UserFeedback {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
+  const webModalStyle: ViewStyle | undefined = Platform.OS === 'web'
+    ? ({
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        backgroundColor: 'rgba(255,255,255,0.82)',
+      } as React.CSSProperties as unknown as ViewStyle)
+    : undefined;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<DashboardStats>({
@@ -71,6 +75,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
   const [recentReports, setRecentReports] = useState<DiseaseReport[]>([]);
   const [recentWaterReports, setRecentWaterReports] = useState<WaterQualityReport[]>([]);
   const [activeCampaigns, setActiveCampaigns] = useState<Campaign[]>([]);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   
   // Feedback states
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -82,6 +87,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
   }, []);
 
   const loadDashboardData = async () => {
+    setDashboardError(null);
     try {
       setLoading(true);
 
@@ -123,6 +129,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
       setActiveCampaigns(campaigns.data?.slice(0, 3) || []);
     } catch (error) {
       console.error('Error loading dashboard data:', error);
+      setDashboardError('Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
@@ -133,7 +140,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
     try {
       const { data, error } = await supabase
         .from('user_feedback')
-        .select('*')
+        .select('id,user_id,user_name,user_email,category,feedback_text,status,created_at')
         .order('created_at', { ascending: false })
         .limit(50);
 
@@ -154,10 +161,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
         .eq('id', id);
 
       if (error) throw error;
-      
-      // Refresh feedback list
-      loadFeedback();
-      loadDashboardData();
+
+      const previousFeedback = feedbackList.find((item) => item.id === id);
+      setFeedbackList((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status } : item))
+      );
+
+      if (previousFeedback) {
+        const wasPending = previousFeedback.status === 'pending';
+        const isPendingNow = status === 'pending';
+        if (wasPending !== isPendingNow) {
+          const delta = isPendingNow ? 1 : -1;
+          setStats((prev) => ({
+            ...prev,
+            pendingFeedback: Math.max(0, prev.pendingFeedback + delta),
+          }));
+        }
+      }
     } catch (error) {
       console.error('Error updating feedback:', error);
     }
@@ -190,6 +210,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
       case 'resolved': return colors.success;
       default: return colors.textSecondary;
     }
+  };
+
+  const withOpacity = (color: string, opacity: number) => {
+    const alpha = Math.max(0, Math.min(1, opacity));
+
+    // Hex support: #RGB, #RGBA, #RRGGBB, #RRGGBBAA
+    const shortHex = /^#([0-9a-fA-F]{3,4})$/;
+    const longHex = /^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$/;
+
+    if (shortHex.test(color)) {
+      const hex = color.slice(1);
+      const expanded = hex.length === 3 || hex.length === 4
+        ? hex.split('').map((c) => c + c).join('')
+        : hex;
+      const rgb = expanded.slice(0, 6);
+      const alphaHex = Math.round(alpha * 255).toString(16).padStart(2, '0');
+      return `#${rgb}${alphaHex}`;
+    }
+
+    if (longHex.test(color)) {
+      const match = color.match(longHex);
+      const rgb = match?.[1] ?? '6B7280';
+      const alphaHex = Math.round(alpha * 255).toString(16).padStart(2, '0');
+      return `#${rgb}${alphaHex}`;
+    }
+
+    // rgb()/rgba() fallback
+    const rgbMatch = color.match(/rgba?\(([^)]+)\)/i);
+    if (rgbMatch) {
+      const parts = rgbMatch[1].split(',').map((p) => p.trim());
+      const r = parts[0] ?? '107';
+      const g = parts[1] ?? '114';
+      const b = parts[2] ?? '128';
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    // Safe neutral fallback when color format is unknown
+    return `rgba(107, 114, 128, ${alpha})`;
   };
 
   if (loading) {
@@ -271,6 +329,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
         />
       </View>
 
+      {dashboardError && (
+        <View style={[styles.dashboardErrorBanner, { backgroundColor: colors.dangerBg || 'rgba(239,68,68,0.12)', borderColor: colors.danger || '#EF4444' }]}>
+          <Ionicons name="alert-circle" size={16} color={colors.danger || '#EF4444'} />
+          <Text style={[styles.dashboardErrorText, { color: colors.danger || '#EF4444' }]}>{dashboardError}</Text>
+        </View>
+      )}
+
       {/* Stats Overview */}
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Overview</Text>
@@ -341,8 +406,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
           <TouchableOpacity
             onPress={() => onNavigate('DiseaseReports', { severity: 'critical' })}
             style={[styles.alertButton, { backgroundColor: colors.danger }]}
+            accessibilityRole="button"
+            accessibilityLabel="View critical disease reports"
+            accessibilityHint="Opens Disease Reports filtered by critical severity"
           >
-            <Text style={styles.alertButtonText}>View</Text>
+            <Text style={[styles.alertButtonText, { color: colors.textInverse }]}>View</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -392,6 +460,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
                 key={campaign.id}
                 onPress={() => onNavigate('CampaignDetails', { id: campaign.id })}
                 style={[styles.campaignCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                accessibilityRole="button"
+                accessibilityLabel={`Open campaign details for ${campaign.title}`}
+                accessibilityHint="Navigates to the selected campaign details screen"
               >
                 <View style={styles.campaignHeader}>
                   <StatusBadge status={campaign.status} size="small" />
@@ -451,13 +522,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
 
       {/* ==================== FEEDBACK MODAL ==================== */}
       <Modal visible={showFeedbackModal} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            webModalStyle,
           ]}>
-            <View style={styles.modalHeader}>
+            <View style={[styles.modalHeader, { borderBottomColor: withOpacity(colors.text, 0.1) }]}>
               <View style={styles.modalTitleRow}>
                 <Ionicons name="chatbox-ellipses" size={24} color={colors.primary} />
                 <Text style={[styles.modalTitle, { color: colors.text }]}>User Feedbacks</Text>
@@ -501,7 +572,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
                             </Text>
                           </View>
                         </View>
-                        <View style={[styles.feedbackStatus, { backgroundColor: getStatusColor(feedback.status) + '20' }]}>
+                        <View style={[styles.feedbackStatus, { backgroundColor: withOpacity(getStatusColor(feedback.status), 0.125) }]}>
                           <Text style={[styles.feedbackStatusText, { color: getStatusColor(feedback.status) }]}>
                             {feedback.status.toUpperCase()}
                           </Text>
@@ -519,7 +590,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
                         {feedback.feedback_text}
                       </Text>
 
-                      <View style={styles.feedbackFooter}>
+                      <View style={[styles.feedbackFooter, { borderTopColor: withOpacity(colors.text, 0.08) }]}>
                         <View style={styles.feedbackDate}>
                           <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
                           <Text style={[styles.feedbackDateText, { color: colors.textSecondary }]}>
@@ -649,7 +720,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   alertButtonText: {
-    color: '#FFFFFF',
     fontWeight: '600',
     fontSize: 14,
   },
@@ -719,6 +789,22 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
+  dashboardErrorBanner: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dashboardErrorText: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
   waterSummary: {
     flexDirection: 'row',
     gap: 12,
@@ -745,7 +831,6 @@ const styles = StyleSheet.create({
   // Feedback Modal Styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 16,
@@ -764,7 +849,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.1)',
   },
   modalTitleRow: {
     flexDirection: 'row',
@@ -841,7 +925,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.08)',
   },
   feedbackDate: {
     flexDirection: 'row',

@@ -11,11 +11,19 @@ import {
   Animated,
   Dimensions,
   Platform,
+  ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 
 const { width } = Dimensions.get('window');
+
+const webBlurStyle: ViewStyle | undefined = Platform.OS === 'web'
+  ? ({
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
+    } as ViewStyle & Record<string, string>)
+  : undefined;
 
 interface SubmissionModalProps {
   visible: boolean;
@@ -127,7 +135,7 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
               backgroundColor: isDark ? 'rgba(31,41,55,0.92)' : 'rgba(255,255,255,0.92)',
               transform: [{ scale: scaleAnim }],
             },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            webBlurStyle
           ]}
         >
           {/* Icon */}

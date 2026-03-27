@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Modal, ScrollView, TextInput, ActivityIndicator, RefreshControl, Platform
+  Modal, ScrollView, TextInput, ActivityIndicator, RefreshControl, Platform, ViewStyle
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -38,6 +38,15 @@ const URGENCY_COLORS: Record<string, string> = {
 
 const getUrgencyColor = (level: string) => URGENCY_COLORS[level?.toLowerCase()] ?? '#6B7280';
 
+// Intentional cast for react-native-web: backdropFilter/WebkitBackdropFilter are web CSS props, not ViewStyle keys.
+const WEB_MODAL_SHEET_STYLE: ViewStyle | undefined = Platform.OS === 'web'
+  ? ({
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
+      backgroundColor: 'rgba(255,255,255,0.82)',
+    } as React.CSSProperties as unknown as ViewStyle)
+  : undefined;
+
 const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
   const { colors, isDark } = useTheme();
   const gradient: [string, string] = isDark ? ['#1E293B', '#0F172A'] : ['#DC2626', '#991B1B'];
@@ -48,8 +57,10 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
   const [search, setSearch] = useState('');
   const [urgencyFilter, setUrgencyFilter] = useState('');
   const [selected, setSelected] = useState<Alert | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setFetchError(null);
     try {
       let q = supabase
         .from('health_alerts')
@@ -66,13 +77,23 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
 
       const { data } = await q;
       if (data) setAlerts(data);
-    } catch {}
+    } catch (err: any) {
+      console.error('Failed to load alerts:', err);
+      setFetchError(err?.message || 'Unable to load alerts right now. Please try again.');
+    }
     finally { setLoading(false); }
   }, [urgencyFilter, search, profile]);
 
   useEffect(() => { load(); }, [load]);
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+
+  const formatSafeDate = (value: string | null | undefined, pattern: string, fallback = ''): string => {
+    if (!value) return fallback;
+    const parsed = new Date(value);
+    if (isNaN(parsed.getTime())) return fallback;
+    return format(parsed, pattern);
+  };
 
   return (
     <View style={[as.container, { backgroundColor: colors.background }]}>
@@ -124,6 +145,11 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
       </View>
 
       {/* List */}
+      {fetchError && (
+        <View style={[as.errorBanner, { backgroundColor: colors.dangerBg || 'rgba(239,68,68,0.12)', borderColor: colors.danger || '#EF4444' }]}>
+          <Text style={[as.errorText, { color: colors.danger || '#EF4444' }]}>{fetchError}</Text>
+        </View>
+      )}
       {loading ? (
         <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
       ) : (
@@ -162,7 +188,7 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                   {a.location_name}, {a.district}
                 </Text>
                 <Text style={[as.cardDate, { color: colors.textSecondary }]}>
-                  {format(new Date(a.created_at), 'dd MMM yyyy')}
+                  {formatSafeDate(a.created_at, 'dd MMM yyyy', '—')}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -177,7 +203,7 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
             <View style={[
               as.sheet, 
               { backgroundColor: colors.card },
-              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+              WEB_MODAL_SHEET_STYLE,
             ]}>
               <LinearGradient colors={gradient} style={as.modalHeader}>
                 <View style={{ flex: 1 }}>
@@ -202,7 +228,7 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                 {[
                   { label: 'Description',  value: selected.description },
                   { label: 'Location',     value: `${selected.location_name}, ${selected.district}, ${selected.state}` },
-                  { label: 'Reported On',  value: format(new Date(selected.created_at), 'MMMM d, yyyy · h:mm a') },
+                  { label: 'Reported On',  value: formatSafeDate(selected.created_at, 'MMMM d, yyyy · h:mm a', 'Unknown') },
                 ].map((row, i) => (
                   <View key={i} style={[as.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[as.detailLabel, { color: colors.textSecondary }]}>{row.label}</Text>
@@ -231,6 +257,8 @@ const as = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 12, marginBottom: 8 },
   chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1.5 },
   chipText: { fontSize: 12, fontWeight: '600' },
+  errorBanner: { marginHorizontal: 12, marginBottom: 8, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  errorText: { fontSize: 13, fontWeight: '600' },
   card: { borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 10 },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   cardTitle: { fontSize: 15, fontWeight: '600', flex: 1, marginRight: 8 },

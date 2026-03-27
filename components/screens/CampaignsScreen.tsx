@@ -9,7 +9,6 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Dimensions,
   Modal,
   Alert,
   ActivityIndicator,
@@ -18,8 +17,6 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
-
-const { width } = Dimensions.get('window');
 
 interface CampaignsScreenProps {
   profile: Profile;
@@ -52,11 +49,12 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   const { colors } = useTheme();
   const [activeTab, setActiveTab] = useState<'active' | 'upcoming' | 'past'>('active');
   const [refreshing, setRefreshing] = useState(false);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
+  const [campaignsError, setCampaignsError] = useState<string | null>(null);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [enrolling, setEnrolling] = useState(false);
+  const [enrollingCampaignId, setEnrollingCampaignId] = useState<string | null>(null);
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
   const [enrolledCampaigns, setEnrolledCampaigns] = useState<Set<string>>(new Set());
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
@@ -69,19 +67,26 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
   const loadCampaigns = async () => {
     setLoading(true);
+    setCampaignsError(null);
     try {
       const { data, error } = await supabase
         .from('health_campaigns')
         .select('*')
         .order('start_date', { ascending: false });
 
-      if (data && !error) {
-        setCampaigns(data);
+      if (error) {
+        setCampaignsError('Failed to load campaigns. Please try again.');
+        console.error('[CampaignsScreen.loadCampaigns] Query failed', { error });
+        return;
       }
+
+      setCampaigns(data || []);
     } catch (error) {
-      console.log('Campaigns loading - table may not exist yet');
+      setCampaignsError('Failed to load campaigns. Please try again.');
+      console.error('[CampaignsScreen.loadCampaigns] Unexpected error', { error });
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const loadUserEnrollments = async () => {
@@ -103,7 +108,9 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
       if (data) {
         const enrolledIds = new Set(data.map(item => item.campaign_id));
-        console.log('Loaded enrolled campaigns:', enrolledIds.size);
+        if (__DEV__) {
+          console.info('[CampaignsScreen] Loaded enrolled campaigns', { count: enrolledIds.size });
+        }
         setEnrolledCampaigns(enrolledIds);
       }
     } catch (error: any) {
@@ -148,6 +155,17 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     });
   };
 
+  const isCampaignActive = (campaign: Campaign) => {
+    const now = new Date();
+    const startDate = new Date(campaign.start_date);
+    const endDate = new Date(campaign.end_date);
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return false;
+
+    const status = (campaign.status || '').toLowerCase();
+    const statusAllowsEnrollment = status === 'active' || status === 'ongoing';
+    return statusAllowsEnrollment && startDate <= now && endDate >= now;
+  };
+
   const filterCampaigns = () => {
     const now = new Date();
     return campaigns.filter((campaign) => {
@@ -168,12 +186,36 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   };
 
   const handleEnroll = async (campaignId: string, campaignName: string) => {
-    setEnrolling(true);
+    setEnrollingCampaignId(campaignId);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         Alert.alert('Error', 'You must be logged in to enroll');
-        setEnrolling(false);
+        return;
+      }
+
+      const { data: campaignRecord, error: campaignFetchError } = await supabase
+        .from('health_campaigns')
+        .select('id, status, start_date, end_date')
+        .eq('id', campaignId)
+        .single();
+
+      if (campaignFetchError || !campaignRecord) {
+        Alert.alert('Campaign Unavailable', 'Could not verify campaign status. Please refresh and try again.');
+        setEnrollingCampaignId(null);
+        return;
+      }
+
+      const now = new Date();
+      const startDate = new Date(campaignRecord.start_date);
+      const endDate = new Date(campaignRecord.end_date);
+      const status = (campaignRecord.status || '').toLowerCase();
+      const hasValidDates = !isNaN(startDate.getTime()) && !isNaN(endDate.getTime());
+      const isEnrollable = hasValidDates && (status === 'active' || status === 'ongoing') && startDate <= now && endDate >= now;
+
+      if (!isEnrollable) {
+        Alert.alert('Campaign Closed', 'This campaign is no longer active for enrollment.');
+        setEnrollingCampaignId(null);
         return;
       }
 
@@ -184,6 +226,12 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         .eq('campaign_id', campaignId)
         .eq('user_id', user.id)
         .single();
+
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('Enrollment check failed:', checkError);
+        Alert.alert('Error', checkError.message || 'Failed to verify campaign enrollment status');
+        return;
+      }
 
       if (existingEnrollment) {
         if (existingEnrollment.status === 'cancelled') {
@@ -208,7 +256,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           );
         }
         await Promise.all([loadCampaigns(), loadUserEnrollments()]);
-        setEnrolling(false);
         return;
       }
 
@@ -242,7 +289,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       console.error('Enrollment error:', error);
       Alert.alert('Error', error.message || 'Failed to enroll in campaign');
     } finally {
-      setEnrolling(false);
+      setEnrollingCampaignId(null);
     }
   };
 
@@ -256,14 +303,12 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     if (!withdrawTarget) return;
     
     const { id: campaignId, name: campaignName } = withdrawTarget;
-    console.log('Confirming withdraw for:', campaignId, campaignName);
     
     setShowWithdrawModal(false);
     setWithdrawing(campaignId);
     
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      console.log('User ID:', user?.id);
       if (!user) {
         Alert.alert('Error', 'You must be logged in to withdraw');
         setWithdrawing(null);
@@ -277,16 +322,13 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         return newSet;
       });
 
-      console.log('Updating campaign_participants status to cancelled...');
       // Update status to cancelled
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('campaign_participants')
         .update({ status: 'cancelled', updated_at: new Date().toISOString() })
         .eq('campaign_id', campaignId)
         .eq('user_id', user.id)
         .select();
-
-      console.log('Update result - data:', data, 'error:', error);
 
       if (error) {
         console.error('Withdraw error:', error);
@@ -298,7 +340,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         });
         Alert.alert('Error', error.message || 'Failed to withdraw');
       } else {
-        console.log('Withdraw successful!');
         // Refresh to get updated participant count
         loadCampaigns();
       }
@@ -358,6 +399,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       const maxPart = campaign.max_participants || campaign.target_beneficiaries || 0;
       const currentPart = campaign.current_participants || 0;
       const progressPercent = maxPart > 0 ? (currentPart / maxPart) * 100 : 0;
+      const campaignIsActive = isCampaignActive(campaign);
 
       return (
         <View
@@ -434,7 +476,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               <Ionicons name="eye-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
               <Text style={[styles.actionButtonText, { color: colors.text }]}>View Details</Text>
             </TouchableOpacity>
-            {activeTab !== 'past' && (
+            {campaignIsActive && (
               enrolledCampaigns.has(campaign.id) ? (
                 <TouchableOpacity
                   style={[styles.actionButton, styles.primaryButton, { backgroundColor: '#EF4444' }]}
@@ -454,9 +496,9 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                 <TouchableOpacity
                   style={[styles.actionButton, styles.primaryButton, { backgroundColor: typeInfo.color }]}
                   onPress={() => handleEnroll(campaign.id, getCampaignTitle(campaign))}
-                  disabled={enrolling}
+                  disabled={campaign.id === enrollingCampaignId}
                 >
-                  {enrolling ? (
+                  {campaign.id === enrollingCampaignId ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
                     <>
@@ -515,7 +557,23 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         }
         showsVerticalScrollIndicator={false}
       >
-        {renderCampaigns()}
+        {loading ? (
+          <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <ActivityIndicator size="large" color={colors.accent} />
+            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading campaigns...</Text>
+          </View>
+        ) : campaignsError ? (
+          <View style={[styles.errorState, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Ionicons name="alert-circle-outline" size={42} color={colors.accent} />
+            <Text style={[styles.errorTitle, { color: colors.text }]}>Unable to Load Campaigns</Text>
+            <Text style={[styles.errorDescription, { color: colors.textSecondary }]}>{campaignsError}</Text>
+            <TouchableOpacity style={[styles.retryButton, { backgroundColor: colors.accent }]} onPress={loadCampaigns}>
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          renderCampaigns()
+        )}
         <View style={styles.bottomSpacer} />
       </ScrollView>
 
@@ -624,7 +682,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                   </View>
                 )}
 
-                {activeTab !== 'past' && (
+                {isCampaignActive(selectedCampaign) && (
                   enrolledCampaigns.has(selectedCampaign.id) ? (
                     <TouchableOpacity
                       style={[styles.enrollModalButton, { backgroundColor: '#EF4444' }]}
@@ -643,9 +701,9 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                         setShowDetailModal(false);
                         handleEnroll(selectedCampaign.id, getCampaignTitle(selectedCampaign));
                       }}
-                      disabled={enrolling}
+                      disabled={selectedCampaign.id === enrollingCampaignId}
                     >
-                      {enrolling ? (
+                      {selectedCampaign.id === enrollingCampaignId ? (
                         <ActivityIndicator size="small" color="#FFFFFF" />
                       ) : (
                         <>
@@ -718,6 +776,52 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
+  },
+  loadingState: {
+    marginTop: 16,
+    marginHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  errorState: {
+    marginTop: 16,
+    marginHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  errorTitle: {
+    marginTop: 10,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  errorDescription: {
+    marginTop: 6,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  retryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 13,
   },
   headerTitle: {
     fontSize: 28,

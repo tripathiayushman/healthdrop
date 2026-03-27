@@ -14,6 +14,7 @@ import {
   TextInput,
   ActivityIndicator,
   Platform,
+  ViewStyle,
 } from 'react-native';
 import * as Location from 'expo-location';
 
@@ -28,6 +29,13 @@ interface ProfileScreenProps {
   onSignOut: () => void;
   onProfileUpdate?: (profile: Profile) => void;
 }
+
+const WEB_BACKDROP_STYLE: ViewStyle | undefined = Platform.OS === 'web'
+  ? ({
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
+    } as React.CSSProperties as unknown as ViewStyle)
+  : undefined;
 
 const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onProfileUpdate }) => {
   const { colors, isDark, toggleTheme } = useTheme();
@@ -439,7 +447,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="person" size={24} color={colors.primary} />
@@ -495,7 +503,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="lock-closed" size={24} color={colors.primary} />
@@ -554,7 +562,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="location" size={24} color={colors.primary} />
@@ -648,7 +656,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="help-circle" size={24} color={colors.primary} />
@@ -698,7 +706,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
           <View style={[
             styles.modalContent, 
             { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+            WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
               <Ionicons name="chatbox-ellipses" size={24} color={colors.primary} />
@@ -774,7 +782,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
         onRequestClose={() => setShowSignOutModal(false)}
       >
         <View style={styles.signOutModalOverlay}>
-          <View style={[styles.signOutModalContainer, { backgroundColor: colors.card }]}>
+          <View style={[styles.signOutModalContainer, { backgroundColor: colors.card }, WEB_BACKDROP_STYLE]}>
             <View style={[styles.signOutModalIcon, { backgroundColor: '#FEE2E2' }]}>
               <Ionicons name="log-out-outline" size={32} color="#EF4444" />
             </View>

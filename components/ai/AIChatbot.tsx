@@ -4,6 +4,7 @@
 // properly positioned above tab bar + existing FABs
 // =====================================================
 import React, { useState, useRef, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -14,7 +15,6 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   Dimensions,
   Modal,
   PanResponder,
@@ -22,7 +22,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 import { Profile } from '../../types';
-import { getChatResponse, ChatMessage } from '../../lib/services/gemini';
+import { getChatResponse } from '../../lib/services/gemini';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const PANEL_HEIGHT = SCREEN_HEIGHT * 0.62;
@@ -36,28 +36,77 @@ interface AIChatbotProps {
   activeTab?: string; // hide FAB on profile tab
 }
 
+const AI_EXTERNAL_PROCESSING_CONSENT_KEY = 'healthdrop_ai_external_processing_consent';
+
 export interface LocalChatMessage {
-  role: 'user' | 'model';
+  id: string;
+  role: 'user' | 'assistant';
   text: string;
   timestamp?: Date;
 }
 
 const INITIAL_MESSAGE: LocalChatMessage = {
-  role: 'model',
+  id: 'initial-message',
+  role: 'assistant',
   text: "Hello! I am your HealthDrop assistant.\n\nI can help with disease information, water quality guidance, app navigation, and general health advice. What would you like to know?",
 };
 
 export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const { colors, isDark } = useTheme();
+  const messageCounterRef = useRef(0);
+  const createMessageId = () => {
+    messageCounterRef.current += 1;
+    return `msg-${Date.now()}-${messageCounterRef.current}`;
+  };
+
+  const createLocalMessage = (role: 'user' | 'assistant', text: string): LocalChatMessage => ({
+    id: createMessageId(),
+    role,
+    text,
+    timestamp: new Date(),
+  });
+
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<LocalChatMessage[]>(() => [
-    { ...INITIAL_MESSAGE, timestamp: new Date() },
+    { ...INITIAL_MESSAGE, id: createMessageId(), timestamp: new Date() },
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [consentToExternalProcessing, setConsentToExternalProcessing] = useState<boolean | null>(null);
 
-  const slideAnim = useRef(new Animated.Value(PANEL_HEIGHT)).current;
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadConsent = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(AI_EXTERNAL_PROCESSING_CONSENT_KEY);
+        if (!mounted) return;
+        if (stored === 'granted') setConsentToExternalProcessing(true);
+        else if (stored === 'denied') setConsentToExternalProcessing(false);
+      } catch (error) {
+        console.warn('Failed to load AI privacy consent:', error);
+      }
+    };
+
+    loadConsent();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const persistConsent = async (consent: boolean) => {
+    setConsentToExternalProcessing(consent);
+    try {
+      await AsyncStorage.setItem(
+        AI_EXTERNAL_PROCESSING_CONSENT_KEY,
+        consent ? 'granted' : 'denied'
+      );
+    } catch (error) {
+      console.warn('Failed to persist AI privacy consent:', error);
+    }
+  };
 
   // ── Draggable FAB (native only) ──────────────────────────────
   const IS_MOBILE = Platform.OS !== 'web';
@@ -69,8 +118,6 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const posRef = useRef({ x: defaultFabX, y: defaultFabY });
   const dragStartRef = useRef({ x: defaultFabX, y: defaultFabY });
   const isDragging = useRef(false);
-  const lastTap = useRef(0);
-
   const fabPanResponder = useRef(
     IS_MOBILE
       ? PanResponder.create({
@@ -128,7 +175,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     const text = inputText.trim();
     if (!text || isTyping) return;
 
-    const userMsg: LocalChatMessage = { role: 'user', text, timestamp: new Date() };
+    const userMsg = createLocalMessage('user', text);
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInputText('');
@@ -141,14 +188,17 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
         district: profile.district,
         state: profile.state,
         fullName: profile.full_name,
+        consentToExternalProcessing: consentToExternalProcessing === true,
       });
-      setMessages(prev => [...prev, { role: 'model', text: reply, timestamp: new Date() }]);
-    } catch {
-      setMessages(prev => [...prev, {
-        role: 'model',
-        text: "Sorry, I could not connect right now. Please try again shortly.",
-        timestamp: new Date(),
-      }]);
+      setMessages(prev => [...prev, createLocalMessage('assistant', reply)]);
+    } catch (err) {
+      console.error('[AIChatbot.sendMessage] Failed to fetch assistant response', {
+        error: err,
+        activeTab,
+        userRole: profile.role,
+        messageLength: text.length,
+      });
+      setMessages(prev => [...prev, createLocalMessage('assistant', "Sorry, I could not connect right now. Please try again shortly.")]);
     } finally {
       setIsTyping(false);
       scrollToBottom();
@@ -166,7 +216,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     <>
       <Modal visible={isOpen} animationType="slide" transparent onRequestClose={closeChat}>
         <View style={styles.overlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'flex-end' }}>
             <View
               style={[
                 styles.sheet,
@@ -206,12 +256,12 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
             showsVerticalScrollIndicator={false}
             onContentSizeChange={scrollToBottom}
           >
-            {messages.map((msg, i) => (
+            {messages.map((msg) => (
               <View
-                key={i}
+                key={msg.id}
                 style={[styles.bubbleRow, msg.role === 'user' ? styles.userRow : styles.aiRow]}
               >
-                {msg.role === 'model' && (
+                {msg.role === 'assistant' && (
                   <View style={[styles.aiAvatarSmall, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]}>
                     <Ionicons name="hardware-chip" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
                   </View>
@@ -253,6 +303,27 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
 
           {/* Input Area */}
           <View style={[styles.inputArea, { borderTopColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', backgroundColor: 'transparent' }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
+            {consentToExternalProcessing === null && (
+              <View style={[styles.privacyBanner, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', borderColor: colors.border }]}>
+                <Text style={[styles.privacyText, { color: colors.textSecondary }]}>
+                  Messages are processed by an external AI service. Share your name for personalized responses?
+                </Text>
+                <View style={styles.privacyActions}>
+                  <TouchableOpacity
+                    style={[styles.privacyButton, { borderColor: colors.border, backgroundColor: colors.background }]}
+                    onPress={() => persistConsent(false)}
+                  >
+                    <Text style={[styles.privacyButtonText, { color: colors.text }]}>No, stay anonymous</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.privacyButton, { borderColor: '#10B981', backgroundColor: '#10B981' }]}
+                    onPress={() => persistConsent(true)}
+                  >
+                    <Text style={[styles.privacyButtonText, { color: '#FFFFFF' }]}>Allow name</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
             <TextInput
               style={[styles.input, {
                 backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
@@ -336,15 +407,21 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
 const BouncingDot: React.FC<{ delay: number; color: string }> = ({ delay, color }) => {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
         Animated.timing(anim, { toValue: -5, duration: 280, useNativeDriver: false }),
         Animated.timing(anim, { toValue: 0, duration: 280, useNativeDriver: false }),
         Animated.delay(600 - delay),
       ])
-    ).start();
-  }, []);
+    );
+
+    loop.start();
+
+    return () => {
+      loop.stop();
+    };
+  }, [delay]);
   return <Animated.View style={[styles.dot, { backgroundColor: color, transform: [{ translateY: anim }] }]} />;
 };
 
@@ -411,8 +488,36 @@ const styles = StyleSheet.create({
   // ── Input area
   inputArea: {
     flexDirection: 'row', alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 8, paddingHorizontal: 12, paddingVertical: 10,
     borderTopWidth: 1,
+  },
+  privacyBanner: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 2,
+  },
+  privacyText: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  privacyActions: {
+    marginTop: 8,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  privacyButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  privacyButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   input: {
     flex: 1, borderRadius: 20,

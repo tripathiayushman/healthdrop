@@ -121,11 +121,13 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
   const deleteUser = (u: User) => {
     if (u.id === profile.id) { Alert.alert('Warning', 'Cannot delete your own account.'); return; }
     setConfirmAction({
-      title: 'Delete User',
-      message: `Permanently delete ${u.full_name}? This cannot be undone.`,
+      title: 'Soft Delete User',
+      message: `Soft-delete ${u.full_name}? The account will be marked inactive and can be reactivated later.`,
       type: 'danger',
       onConfirm: async () => {
-        const { error } = await supabase.from('profiles').delete().eq('id', u.id);
+        const { error } = await supabase.from('profiles')
+          .update({ is_active: false, updated_at: new Date().toISOString() })
+          .eq('id', u.id);
         if (error) throw error;
         setConfirmModal(false);
         setShowModal(false);
@@ -263,7 +265,13 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
             <View style={[
               s.modalSheet, 
               { backgroundColor: colors.card },
-              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+              Platform.OS === 'web'
+                ? {
+                    backdropFilter: 'blur(16px)',
+                    WebkitBackdropFilter: 'blur(16px)',
+                    backgroundColor: isDark ? 'rgba(15,23,42,0.82)' : 'rgba(255,255,255,0.82)',
+                  } as any
+                : {}
             ]}>
               {/* Modal Header */}
               <View style={[s.modalHeader, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
@@ -339,7 +347,7 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
                       onPress={() => deleteUser(selectedUser)}
                     >
                       <Ionicons name="trash" size={16} color="#FFF" />
-                      <Text style={s.actionBtnText}>Delete User</Text>
+                      <Text style={s.actionBtnText}>Soft Delete User</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -356,7 +364,7 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
             <View style={[
               s.confirmSheet, 
               { backgroundColor: colors.card },
-              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' } as any : {}
             ]}>
               <Ionicons
                 name={confirmAction.type === 'danger' ? 'warning' : 'alert-circle'}

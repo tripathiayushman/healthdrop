@@ -10,7 +10,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Platform,
-  Dimensions,
   PanResponder,
   StatusBar,
 } from 'react-native';
@@ -38,7 +37,6 @@ import { AIChatbot } from './ai/AIChatbot';
 // Role-based Dashboard Router
 import { DashboardRouter } from './dashboards/DashboardRouter';
 
-const { width } = Dimensions.get('window');
 const IS_MOBILE = Platform.OS !== 'web';
 
 type TabType = 'home' | 'reports' | 'campaigns' | 'profile';
@@ -80,7 +78,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         if (Platform.OS === 'android') {
           import('expo-navigation-bar').then(NavBar => {
             NavBar.setVisibilityAsync('visible');
-            NavBar.setBehaviorAsync('hide');
+            NavBar.setBehaviorAsync('inset-swipe');
           }).catch((error) => {
             console.error('Failed to restore Android navigation bar:', error);
           });
@@ -94,15 +92,12 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const activeTabRef = useRef<TabType>(activeTab);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
-  const swipeX = useRef(0);
   const panResponder = useRef(
     IS_MOBILE
       ? PanResponder.create({
           onStartShouldSetPanResponder: () => false,
           onMoveShouldSetPanResponder: (_, gs) =>
             Math.abs(gs.dx) > 12 && Math.abs(gs.dy) < 40,
-          onPanResponderGrant: (_, gs) => { swipeX.current = gs.dx; },
-          onPanResponderMove: (_, gs) => { swipeX.current = gs.dx; },
           onPanResponderRelease: (_, gs) => {
             const dx = gs.dx;
             if (Math.abs(dx) < 50) return; // threshold
@@ -119,8 +114,16 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
 
   const navigateToForm = (formType: string) => {
     if (formType.startsWith('approval-queue:')) {
-      const tab = formType.split(':')[1] as 'disease' | 'water' | 'campaigns' | 'alerts';
-      setApprovalQueueInitialTab(tab);
+      const tab = formType.split(':')[1];
+      const isApprovalQueueTab = (value: string): value is 'disease' | 'water' | 'campaigns' | 'alerts' =>
+        ['disease', 'water', 'campaigns', 'alerts'].includes(value);
+
+      if (!isApprovalQueueTab(tab)) {
+        console.error('Invalid approval queue tab received:', tab);
+        setApprovalQueueInitialTab('disease');
+      } else {
+        setApprovalQueueInitialTab(tab);
+      }
       setCurrentScreen('approval-queue');
     } else {
       setCurrentScreen(formType as ScreenType);
@@ -218,6 +221,30 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {},
   ];
 
+  const renderTabItems = () => tabs.map((tab) => {
+    const isActive = activeTab === tab.id;
+    return (
+      <TouchableOpacity
+        key={tab.id}
+        style={styles.tabItem}
+        onPress={() => setActiveTab(tab.id)}
+        activeOpacity={0.7}
+      >
+        {isActive && (
+          <View style={[styles.activePill, { backgroundColor: colors.primary + '18' }]} />
+        )}
+        <Ionicons
+          name={isActive ? tab.activeIcon : tab.icon}
+          size={22}
+          color={isActive ? colors.primary : colors.textSecondary}
+        />
+        <Text style={[styles.tabLabel, { color: isActive ? colors.primary : colors.textSecondary, fontWeight: isActive ? '700' : '400' }]}>
+          {tab.label}
+        </Text>
+      </TouchableOpacity>
+    );
+  });
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Main Content — swipe gesture area (mobile only) */}
@@ -228,55 +255,11 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       {/* ── Glass Bottom Tab Bar ─── */}
       {Platform.OS !== 'web' ? (
         <BlurView intensity={80} tint={isDark ? 'dark' : 'light'} style={tabBarStyle}>
-          {tabs.map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <TouchableOpacity
-                key={tab.id}
-                style={styles.tabItem}
-                onPress={() => setActiveTab(tab.id)}
-                activeOpacity={0.7}
-              >
-                {isActive && (
-                  <View style={[styles.activePill, { backgroundColor: colors.primary + '18' }]} />
-                )}
-                <Ionicons
-                  name={isActive ? tab.activeIcon : tab.icon}
-                  size={22}
-                  color={isActive ? colors.primary : colors.textSecondary}
-                />
-                <Text style={[styles.tabLabel, { color: isActive ? colors.primary : colors.textSecondary, fontWeight: isActive ? '700' : '400' }]}>
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+          {renderTabItems()}
         </BlurView>
       ) : (
         <View style={tabBarStyle}>
-          {tabs.map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <TouchableOpacity
-                key={tab.id}
-                style={styles.tabItem}
-                onPress={() => setActiveTab(tab.id)}
-                activeOpacity={0.7}
-              >
-                {isActive && (
-                  <View style={[styles.activePill, { backgroundColor: colors.primary + '18' }]} />
-                )}
-                <Ionicons
-                  name={isActive ? tab.activeIcon : tab.icon}
-                  size={22}
-                  color={isActive ? colors.primary : colors.textSecondary}
-                />
-                <Text style={[styles.tabLabel, { color: isActive ? colors.primary : colors.textSecondary, fontWeight: isActive ? '700' : '400' }]}>
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+          {renderTabItems()}
         </View>
       )}
 

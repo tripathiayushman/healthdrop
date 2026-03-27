@@ -5,7 +5,7 @@
 // =====================================================
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity,
+  View, Text, StyleSheet, TouchableOpacity, Pressable,
   Animated, ViewStyle, Modal, ScrollView, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -52,6 +52,14 @@ const ROLE_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
   district_officer: 'business',
 };
 
+const useGlassStyle = () => {
+  const { isDark } = useTheme();
+
+  return isDark && Platform.OS === 'web'
+    ? ({ backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' } as any)
+    : {};
+};
+
 // ─────────────────────────────────────────────────────
 //  DashboardHeader — animated gradient with role badge
 // ─────────────────────────────────────────────────────
@@ -68,8 +76,8 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim,  { toValue: 1, duration: 500, useNativeDriver: false }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: false }),
+      Animated.timing(fadeAnim,  { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
     ]).start();
   }, []);
 
@@ -156,16 +164,20 @@ interface StatCardProps {
 export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, iconFamily = 'ionicons', onPress }) => {
   const { colors, isDark } = useTheme();
   const scaleAnim = useRef(new Animated.Value(0.92)).current;
+  const glassStyle = useGlassStyle();
 
   useEffect(() => {
-    Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: false, tension: 80, friction: 7 }).start();
+    Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 7 }).start();
   }, []);
 
-  const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }
-    : {};
+  type StatCardWrapperProps = {
+    style?: any;
+    children?: React.ReactNode;
+    onPress?: () => void;
+    activeOpacity?: number;
+  };
 
-  const Wrapper: any = onPress ? TouchableOpacity : View;
+  const Wrapper: React.ComponentType<StatCardWrapperProps> = onPress ? TouchableOpacity : View;
   const gradColors: readonly [string, string, ...string[]] = isDark
     ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.03)']
     : [color + '0A', color + '03'];
@@ -216,8 +228,8 @@ export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color,
   const { colors } = useTheme();
   const pressAnim = useRef(new Animated.Value(1)).current;
 
-  const onPressIn  = () => Animated.spring(pressAnim, { toValue: 0.93, useNativeDriver: false, tension: 120 }).start();
-  const onPressOut = () => Animated.spring(pressAnim, { toValue: 1, useNativeDriver: false, tension: 80  }).start();
+  const onPressIn  = () => Animated.spring(pressAnim, { toValue: 0.93, useNativeDriver: true, tension: 120 }).start();
+  const onPressOut = () => Animated.spring(pressAnim, { toValue: 1, useNativeDriver: true, tension: 80  }).start();
 
   return (
     <Animated.View style={[{ flex: 1 }, { transform: [{ scale: pressAnim }] }]}>
@@ -281,15 +293,13 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
   const { colors, isDark } = useTheme();
   const uc = urgencyColor(alert.urgency_level);
   const [showDetail, setShowDetail] = useState(false);
+  const glassStyle = useGlassStyle();
 
   const handlePress = () => {
     setShowDetail(true);
     onPress?.();
   };
 
-  const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }
-    : {};
   const cardBg = isDark ? 'rgba(12,12,16,0.88)' : colors.card;
 
   return (
@@ -329,12 +339,8 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
 
       {/* Detail Modal */}
       <Modal visible={showDetail} transparent animationType="slide" onRequestClose={() => setShowDetail(false)}>
-        <TouchableOpacity
-          style={adStyles.overlay}
-          activeOpacity={1}
-          onPress={() => setShowDetail(false)}
-        >
-          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+        <View style={adStyles.overlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setShowDetail(false)} />
           <View style={[
             adStyles.sheet, 
             { backgroundColor: colors.card },
@@ -380,14 +386,14 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
                     {new Date(alert.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
                   </Text>
                 </View>
-                {alert.cases_reported && (
+                {alert.cases_reported !== null && alert.cases_reported !== undefined && (
                   <View style={[adStyles.infoBox, { backgroundColor: '#EF444412', borderColor: '#EF444430' }]}>
                     <Ionicons name="people-outline" size={16} color="#EF4444" />
                     <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Cases</Text>
                     <Text style={[adStyles.infoValue, { color: colors.text }]}>{alert.cases_reported}</Text>
                   </View>
                 )}
-                {alert.affected_population && (
+                {alert.affected_population !== null && alert.affected_population !== undefined && (
                   <View style={[adStyles.infoBox, { backgroundColor: '#F59E0B12', borderColor: '#F59E0B30' }]}>
                     <Ionicons name="stats-chart-outline" size={16} color="#F59E0B" />
                     <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Affected</Text>
@@ -417,8 +423,7 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
               <View style={{ height: 32 }} />
             </ScrollView>
           </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
+        </View>
       </Modal>
     </>
   );
@@ -459,9 +464,7 @@ interface ToolCardProps {
 
 export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subtitle, onPress, badge }) => {
   const { colors, isDark } = useTheme();
-  const glassStyle: any = isDark && Platform.OS === 'web'
-    ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }
-    : {};
+  const glassStyle = useGlassStyle();
   const cardBg = isDark ? 'rgba(12,12,16,0.85)' : colors.card;
   return (
     <TouchableOpacity

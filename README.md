@@ -116,6 +116,17 @@ EXPO_PUBLIC_OPENROUTER_API_KEY=your-openrouter-api-key
 EXPO_PUBLIC_OPENROUTER_MODEL=openrouter/free
 ```
 
+#### Migration from Gemini
+If you are upgrading from the old Gemini setup, update your `.env` as follows:
+
+- Remove: `EXPO_PUBLIC_GEMINI_API_KEY`
+- Add/keep: `EXPO_PUBLIC_OPENROUTER_API_KEY`
+- Add/keep: `EXPO_PUBLIC_OPENROUTER_MODEL`
+- Add/keep: `EXPO_PUBLIC_SUPABASE_URL`
+- Add/keep: `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+
+Create your OpenRouter API key at [openrouter.ai](https://openrouter.ai/keys).
+
 > **Supabase:** Create a project at [supabase.com](https://supabase.com)
 > **OpenRouter:** Get a key at [openrouter.ai](https://openrouter.ai/keys)
 
@@ -197,6 +208,42 @@ The app uses **OpenRouter free models** to generate contextual health insights:
 - **AIInsightsPanel** — Embedded in every dashboard; shows district/state/global health trends
 - **AIChatbot** — Floating button → slide-up chat for health Q&A
 - 30-minute insight caching, model cascade fallback, 2-second chat cooldown
+
+Model cascade fallback means the app tries a primary model first, then automatically retries with fallback models if the primary is unavailable or rate-limited. Common OpenRouter free models used as fallbacks include `meta-llama/llama-3.1-8b-instruct:free`, `mistralai/mistral-7b-instruct:free`, `google/gemma-2-9b-it:free`, and `qwen/qwen-2.5-7b-instruct:free`. OpenRouter free-tier usage can be constrained by request/throughput limits and availability windows; check OpenRouter docs for current limits: https://openrouter.ai/docs
+
+---
+
+## 🧾 Recent Major Updates (2026-03-27)
+
+- Consolidated and applied a large CodeRabbit review batch across dashboards, reports, campaigns, queue flows, AI chat, and shared components.
+- Added stronger runtime safety and UX handling: loading/error states, guarded async updates, safer date rendering, cleaner logs.
+- Improved accessibility for icon-only actions and modal controls.
+- Improved type safety in map and approval queue flows with stricter unions/interfaces.
+- Added CI/CD release automation:
+   - `prepare-release.yml` (manual release prep + tag)
+   - `build-android-release.yml` (tag-triggered EAS APK + GitHub release)
+   - `eas.json` and `scripts/sync-version.cjs`
+
+## 🌍 External Setup Needed (Outside VS Code)
+
+Only required if you have not already configured these:
+
+1. Supabase Edge Function
+- Set function secrets: `OPENROUTER_API_KEY` (and optional `OPENROUTER_MODEL`).
+- Deploy function: `supabase functions deploy openrouter-proxy`.
+
+2. OpenRouter account
+- Create/manage your API key at `https://openrouter.ai/keys`.
+
+3. GitHub repository secrets
+- Add `EXPO_TOKEN` for Android release workflow.
+
+4. Expo/EAS project setup
+- Ensure EAS project linkage and Android credentials are configured for release builds.
+
+5. Database patching (if pending)
+- Execute `database_structure/FIX_CLINIC_RLS_POLICIES.sql`.
+- Execute `database_structure/FIX_VERIFICATION_AND_VISIBILITY.sql`.
 
 ---
 
