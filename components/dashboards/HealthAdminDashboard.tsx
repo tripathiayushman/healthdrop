@@ -25,20 +25,25 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
 
   const load = async () => {
     try {
-      const [d, w, c, a, pending] = await Promise.allSettled([
+      const [d, w, c, a, pendingDisease, pendingWater] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }),
         supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active'),
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
       ]);
       const alertData = await supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(3);
+      const pendingReportsCount =
+        (pendingDisease.status === 'fulfilled' ? pendingDisease.value.count ?? 0 : 0) +
+        (pendingWater.status === 'fulfilled' ? pendingWater.value.count ?? 0 : 0);
+
       setStats({
         disease: d.status === 'fulfilled' ? d.value.count ?? 0 : 0,
         water:   w.status === 'fulfilled' ? w.value.count ?? 0 : 0,
         campaigns: c.status === 'fulfilled' ? c.value.count ?? 0 : 0,
         alerts:  a.status === 'fulfilled' ? a.value.count ?? 0 : 0,
-        pendingReports: pending.status === 'fulfilled' ? pending.value.count ?? 0 : 0,
+        pendingReports: pendingReportsCount,
       });
       if (alertData.data) setAlerts(alertData.data);
     } catch {}
@@ -83,6 +88,8 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
       <MapAndAlertsSection
         profile={profile}
         alerts={alerts}
+        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+        onViewAllAlerts={() => onNavigate('all-alerts')}
         alertSectionTitle="Active Alerts"
         emptyTitle="No Active Alerts"
         emptySubtitle="No alerts are currently active in the system."

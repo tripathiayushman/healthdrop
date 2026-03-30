@@ -13,6 +13,7 @@ import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
+import { filterAlertsForProfile, isRadiusScopedRole } from '../../lib/services/alertRadius';
 
 interface Props { profile: Profile; onBack: () => void; }
 
@@ -67,16 +68,20 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
         .select('*')
         .eq('status', 'active')
         .eq('approval_status', 'approved')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(200);
 
-      if (profile.district && profile.role === 'volunteer') {
-        q = q.eq('district', profile.district);
-      }
       if (urgencyFilter) q = q.eq('urgency_level', urgencyFilter);
       if (search.trim()) q = q.ilike('title', `%${search.trim()}%`);
 
       const { data } = await q;
-      if (data) setAlerts(data);
+      if (data) {
+        if (isRadiusScopedRole(profile.role)) {
+          setAlerts(filterAlertsForProfile(data, profile));
+        } else {
+          setAlerts(data);
+        }
+      }
     } catch (err: any) {
       console.error('Failed to load alerts:', err);
       setFetchError(err?.message || 'Unable to load alerts right now. Please try again.');

@@ -139,7 +139,7 @@ function AppContent() {
       const Constants = ConstantsModule?.default ?? ConstantsModule;
       const constantsAny = Constants as any;
       if (constantsAny?.appOwnership === 'expo') {
-        console.warn('[Push] Token registration skipped: Expo Go does not support remote push on SDK 53+. Use a development build.');
+        // Expo Go cannot register remote push tokens on this SDK range.
         return;
       }
 
@@ -156,14 +156,14 @@ function AppContent() {
         constantsAny?.expoConfig?.extra?.eas?.projectId ??
         constantsAny?.easConfig?.projectId;
       if (!projectId) {
-        console.warn('[Push] Token registration skipped: No EAS projectId configured.');
+        // Skip silently when projectId is not configured.
         return;
       }
 
       const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
       await usersService.registerExpoPushToken(tokenData.data);
     } catch (err) {
-      console.warn('[Push] Token registration skipped:', err);
+      console.log('[Push] Token registration skipped.');
     }
   };
 

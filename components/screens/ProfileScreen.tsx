@@ -39,6 +39,7 @@ const WEB_BACKDROP_STYLE: ViewStyle | undefined = Platform.OS === 'web'
 
 const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onProfileUpdate }) => {
   const { colors, isDark, toggleTheme } = useTheme();
+  const modalSurfaceColor = isDark ? '#1A1A1A' : '#FFFFFF';
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   
   // Modal states
@@ -220,28 +221,52 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
   const handleGPSFetch = async () => {
     setGpsLoading(true);
     try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        Alert.alert('Location Disabled', 'Please enable location services (GPS) on your device and try again.');
+        return;
+      }
+
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Denied', 'Location permission is required to auto-fill address.');
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&format=json&addressdetails=1`,
-        { headers: { 'Accept-Language': 'en', 'User-Agent': 'HealthDropApp/1.0' } }
-      );
-      const data = await res.json();
-      const addr = data?.address ?? {};
+
+      // First try last known location for fast UX, then fall back to active GPS fix.
+      let pos = await Location.getLastKnownPositionAsync({ maxAge: 120000, requiredAccuracy: 200 });
+      if (!pos) {
+        pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+          mayShowUserSettingsDialog: true,
+        });
+      }
+
+      const [addr] = await Location.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+
+      if (!addr) {
+        Alert.alert('Location Found', 'GPS location was detected, but address lookup was unavailable. Please fill details manually.');
+        return;
+      }
+
       setLocationData(d => ({
         ...d,
-        village: addr.village || addr.town || addr.suburb || addr.city_district || '',
-        district: addr.state_district || addr.county || addr.city || d.district,
-        state: addr.state || d.state,
-        pincode: addr.postcode || d.pincode,
+        village: addr.district || addr.subregion || addr.city || addr.street || d.village,
+        district: addr.subregion || addr.city || addr.region || d.district,
+        state: addr.region || d.state,
+        pincode: addr.postalCode || d.pincode,
       }));
       Alert.alert('Location Detected', 'Address fields have been auto-filled. Please verify and save.');
-    } catch {
-      Alert.alert('Error', 'Could not determine location. Please enter manually.');
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('timeout')) {
+        Alert.alert('Location Timeout', 'GPS took too long to respond. Move to an open area and try again.');
+      } else {
+        Alert.alert('Error', 'Could not determine location. Please enter manually.');
+      }
     } finally {
       setGpsLoading(false);
     }
@@ -652,10 +677,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
 
       {/* Help & FAQ Modal */}
       <Modal visible={showHelpFAQ} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
           <View style={[
             styles.modalContent, 
-            { backgroundColor: colors.card },
+            { backgroundColor: modalSurfaceColor, borderColor: colors.border },
             WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
@@ -702,10 +727,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
 
       {/* Send Feedback Modal */}
       <Modal visible={showFeedback} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
           <View style={[
             styles.modalContent, 
-            { backgroundColor: colors.card },
+            { backgroundColor: modalSurfaceColor, borderColor: colors.border },
             WEB_BACKDROP_STYLE,
           ]}>
             <View style={styles.modalHeader}>
@@ -779,10 +804,12 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
         visible={showSignOutModal}
         animationType="fade"
         transparent={true}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={true}
         onRequestClose={() => setShowSignOutModal(false)}
       >
         <View style={styles.signOutModalOverlay}>
-          <View style={[styles.signOutModalContainer, { backgroundColor: colors.card }, WEB_BACKDROP_STYLE]}>
+          <View style={[styles.signOutModalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }, WEB_BACKDROP_STYLE]}>
             <View style={[styles.signOutModalIcon, { backgroundColor: '#FEE2E2' }]}>
               <Ionicons name="log-out-outline" size={32} color="#EF4444" />
             </View>
@@ -826,21 +853,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingTop: 30,
-    paddingBottom: 30,
+    paddingTop: 20,
+    paddingBottom: 22,
     paddingHorizontal: 20,
     alignItems: 'center',
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
+    borderBottomLeftRadius: 22,
+    borderBottomRightRadius: 22,
   },
   avatarContainer: {
     position: 'relative',
     marginBottom: 16,
   },
   avatar: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 4,
@@ -848,13 +875,13 @@ const styles = StyleSheet.create({
   },
   onlineIndicator: {
     position: 'absolute',
-    bottom: 5,
-    right: 5,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    bottom: 4,
+    right: 4,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: '#10B981',
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: '#FFFFFF',
   },
   userName: {
@@ -941,7 +968,7 @@ const styles = StyleSheet.create({
   // Modal styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -950,6 +977,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
     borderRadius: 20,
+    borderWidth: 1,
     padding: 24,
     maxHeight: '80%',
   },
@@ -1047,6 +1075,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
     borderRadius: 20,
+    borderWidth: 1,
     padding: 24,
     alignItems: 'center',
     shadowColor: '#000',

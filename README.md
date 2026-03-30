@@ -23,11 +23,11 @@
 |---|---|
 | 🦠 **Disease Reporting** | Document outbreaks with severity, location, and patient details |
 | 💧 **Water Quality Monitoring** | Report contaminated water sources with chemical parameters |
-| 🚨 **Health Alerts** | Urgency-graded alerts (Low → Critical) broadcast to relevant zones |
+| 🚨 **Health Alerts** | Urgency-graded alerts propagate to affected districts within a 10 km radius |
 | 📋 **Campaign Management** | Create, manage, and enroll in health campaigns |
 | ✅ **Approval Workflow** | Verify → Approve → Reject pipeline with rejection reasons |
-| 🤖 **AI Health Insights** | Location-aware insights powered by OpenRouter free models |
-| 🔔 **Push Notifications** | Real-time alerts via Expo push notifications |
+| 🤖 **AI Health Insights** | Location-aware insights powered by direct OpenRouter Chat Completions |
+| 🔔 **Push Notifications** | Real-time Expo push notifications sent to users in the affected 10 km alert zone |
 | 📡 **Offline Sync** | Reports queued locally and synced when connectivity resumes |
 
 ---
@@ -40,8 +40,8 @@
 | Web | react-native-web (Android / iOS / Web) |
 | Language | TypeScript 5.9 |
 | Backend | Supabase (PostgreSQL + Auth + Row-Level Security) |
-| AI | OpenRouter Chat Completions API (`openrouter/free` + free fallbacks) |
-| Location | expo-location + Nominatim reverse geocoding |
+| AI | Direct OpenRouter Chat Completions API (`EXPO_PUBLIC_OPENROUTER_MODEL`) |
+| Location | expo-location + district centroid fallback + 10 km radius matching |
 | Gradients | expo-linear-gradient |
 | Icons | @expo/vector-icons (Ionicons, MaterialCommunityIcons) |
 | Dates | date-fns |
@@ -113,17 +113,10 @@ Create a `.env` file in the project root:
 EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 EXPO_PUBLIC_OPENROUTER_API_KEY=your-openrouter-api-key
-EXPO_PUBLIC_OPENROUTER_MODEL=openrouter/free
+EXPO_PUBLIC_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 ```
 
-#### Migration from Gemini
-If you are upgrading from the old Gemini setup, update your `.env` as follows:
-
-- Remove: `EXPO_PUBLIC_GEMINI_API_KEY`
-- Add/keep: `EXPO_PUBLIC_OPENROUTER_API_KEY`
-- Add/keep: `EXPO_PUBLIC_OPENROUTER_MODEL`
-- Add/keep: `EXPO_PUBLIC_SUPABASE_URL`
-- Add/keep: `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+If you are upgrading from older builds, remove `EXPO_PUBLIC_GEMINI_API_KEY` and keep only OpenRouter variables.
 
 Create your OpenRouter API key at [openrouter.ai](https://openrouter.ai/keys).
 
@@ -175,7 +168,7 @@ healthdrop/
 
 - **Row-Level Security (RLS)** enforced at database level for all tables
 - SECURITY DEFINER functions prevent RLS recursion (`get_my_role()`, `get_my_district()`)
-- Automatic role-scoping: district officers and clinics see only their geographic data
+- Automatic geographic scoping for district roles with 10 km alert-radius propagation
 - `.env` file never committed to source control
 - Auth tokens stored in `expo-secure-store` (encrypted on device)
 
@@ -203,17 +196,27 @@ Campaigns and alerts also go through the same `pending_approval → approved/rej
 
 ## 🤖 AI Integration
 
-The app uses **OpenRouter free models** to generate contextual health insights:
+The app uses **direct OpenRouter Chat Completions** for insights and chat:
 
-- **AIInsightsPanel** — Embedded in every dashboard; shows district/state/global health trends
+- **AIInsightsPanel** — Embedded in every dashboard; uses district/state/global context
 - **AIChatbot** — Floating button → slide-up chat for health Q&A
-- 30-minute insight caching, model cascade fallback, 2-second chat cooldown
+- Uses `EXPO_PUBLIC_OPENROUTER_API_KEY` and `EXPO_PUBLIC_OPENROUTER_MODEL` directly
+- Radius-filtered alert/report context is used for district-scoped users
 
-Model cascade fallback means the app tries a primary model first, then automatically retries with fallback models if the primary is unavailable or rate-limited. Common OpenRouter free models used as fallbacks include `meta-llama/llama-3.1-8b-instruct:free`, `mistralai/mistral-7b-instruct:free`, `google/gemma-2-9b-it:free`, and `qwen/qwen-2.5-7b-instruct:free`. OpenRouter free-tier usage can be constrained by request/throughput limits and availability windows; check OpenRouter docs for current limits: https://openrouter.ai/docs
+OpenRouter free-tier usage can be constrained by request/throughput limits and availability windows; check OpenRouter docs for current limits: https://openrouter.ai/docs
 
 ---
 
-## 🧾 Recent Major Updates (2026-03-27)
+## 🧾 Recent Major Updates (2026-03-30)
+
+- Implemented 10 km alert propagation for district-scoped roles (district officer, clinic, ASHA worker, volunteer).
+- Unified alert visibility across dashboards, All Alerts screen, map alert layer, and AI insights context.
+- Updated push notification targeting so recipients match affected users in the same 10 km zone.
+- Moved AI flow to direct OpenRouter calls from app service layer (`lib/services/gemini.ts`) with environment-driven model selection.
+- Improved map location fallback with district aliases and centroid-based geographic matching.
+- Reduced noisy runtime warnings (Expo push setup and Android navigation behavior).
+
+## 🧾 Previous Major Updates (2026-03-27)
 
 - Consolidated and applied a large CodeRabbit review batch across dashboards, reports, campaigns, queue flows, AI chat, and shared components.
 - Added stronger runtime safety and UX handling: loading/error states, guarded async updates, safer date rendering, cleaner logs.
@@ -228,20 +231,16 @@ Model cascade fallback means the app tries a primary model first, then automatic
 
 Only required if you have not already configured these:
 
-1. Supabase Edge Function
-- Set function secrets: `OPENROUTER_API_KEY` (and optional `OPENROUTER_MODEL`).
-- Deploy function: `supabase functions deploy openrouter-proxy`.
-
-2. OpenRouter account
+1. OpenRouter account
 - Create/manage your API key at `https://openrouter.ai/keys`.
 
-3. GitHub repository secrets
+2. GitHub repository secrets
 - Add `EXPO_TOKEN` for Android release workflow.
 
-4. Expo/EAS project setup
+3. Expo/EAS project setup
 - Ensure EAS project linkage and Android credentials are configured for release builds.
 
-5. Database patching (if pending)
+4. Database patching (if pending)
 - Execute `database_structure/FIX_CLINIC_RLS_POLICIES.sql`.
 - Execute `database_structure/FIX_VERIFICATION_AND_VISIBILITY.sql`.
 
@@ -251,11 +250,11 @@ Only required if you have not already configured these:
 
 | Screen | Access | Description |
 |---|---|---|
-| Dashboard | All roles | Role-specific statistics, alerts, quick actions |
+| Dashboard | All roles | Role-specific statistics, radius-filtered alerts, quick actions |
 | Reports | All roles | Disease + water reports with role-aware filters |
-| Campaigns | All roles | Campaign list; create/manage (admin+DO only); enroll (volunteer+asha) |
-| All Alerts | All roles | Full alert list with search + urgency filter |
-| Approval Queue | Admin + Clinic + DO | Verify/Approve/Reject disease, water, campaign, alert submissions |
+| Campaigns | All roles | Campaign list; create/manage (super_admin+health_admin+district_officer+asha_worker); enroll (volunteer+asha_worker) |
+| All Alerts | All roles | Full alert list with search + urgency filter + 10 km radius visibility for district roles |
+| Approval Queue | Super Admin + Health Admin + District Officer + Clinic | Verify/Approve/Reject with role-scoped tabs and permissions |
 | User Management | Super Admin + Health Admin | User role management and account status |
 | Profile | All roles | Settings, theme toggle, logout |
 

@@ -33,9 +33,20 @@ interface WaterReport {
   reporter_id: string; status: string; approval_status?: string; notes: string; created_at: string;
 }
 interface Campaign {
-  id: string; name: string; campaign_type: string; district: string; state: string;
-  start_date: string; end_date: string; status: string; target_population: number;
-  volunteers_needed: number; approval_status?: string; created_at: string;
+  id: string;
+  name?: string;
+  campaign_name?: string;
+  title?: string;
+  campaign_type: string;
+  district: string;
+  state: string;
+  start_date: string;
+  end_date: string;
+  status: string;
+  target_population: number;
+  volunteers_needed: number;
+  approval_status?: string;
+  created_at: string;
 }
 interface HealthAlert {
   id: string; title: string; description: string; alert_type: string;
@@ -76,7 +87,13 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const isClinic = profile.role === 'clinic';
   const isDistrictOfficer = profile.role === 'district_officer';
   const isAdmin = profile.role === 'super_admin' || profile.role === 'health_admin';
-  const canVerify = isAdmin || isClinic || isDistrictOfficer; // can verify/approve/reject reports & campaigns
+  const canVerifyReports = isAdmin || isClinic || isDistrictOfficer;
+  const canApproveReports = isAdmin || isClinic || isDistrictOfficer;
+  const canApproveCampaigns = isAdmin || isDistrictOfficer;
+  const canApproveAlerts = isAdmin;
+  const canReReviewReports = isAdmin || isClinic;
+  const canReReviewCampaigns = isAdmin;
+  const canReReviewAlerts = isAdmin;
 
   const [tab, setTab] = useState<QueueTab>(initialTab ?? 'disease');
   const [loading, setLoading]     = useState(true);
@@ -117,11 +134,13 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     { id: 'campaigns', label: 'Campaigns', icon: 'megaphone' },
     { id: 'alerts',    label: 'Alerts',    icon: 'alert-circle' },
   ];
-  // Clinic sees all 4; district_officer sees disease/water/campaigns; others same
-  const visibleTabs = isClinic
+  // Admins see all; district_officer sees disease/water/campaigns; clinic sees disease/water only
+  const visibleTabs = isAdmin
     ? allTabs
     : isDistrictOfficer
     ? allTabs.filter(t => ['disease','water','campaigns'].includes(t.id))
+    : isClinic
+    ? allTabs.filter(t => ['disease','water'].includes(t.id))
     : allTabs;
 
   // ── Load ─────────────────────────────────────────────────────────────────
@@ -151,6 +170,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     setPendingCounts(p => ({ ...p, water: rows.filter(r => r.approval_status === 'pending_approval').length }));
   };
   const loadCampaigns = async () => {
+    if (isClinic) return; // clinics dont approve campaigns
     let q = supabase.from('health_campaigns').select('*').order('created_at', { ascending: false });
     if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
     const { data } = await q;
@@ -159,7 +179,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     setPendingCounts(p => ({ ...p, campaigns: rows.filter(r => r.approval_status === 'pending_approval').length }));
   };
   const loadAlerts = async () => {
-    if (isClinic) return; // clinics dont approve alerts
+    if (!isAdmin) return; // only admins approve alerts
     const { data } = await supabase.from('health_alerts').select('*').order('created_at', { ascending: false });
     const rows = data ?? [];
     setAlerts(rows);
@@ -257,7 +277,10 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const q = search.toLowerCase();
   const fDisease   = diseaseReports.filter(r => !q || r.disease_name?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
   const fWater     = waterReports.filter(r => !q || r.source_name?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
-  const fCampaigns = campaigns.filter(r => !q || r.name?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
+  const fCampaigns = campaigns.filter(r => {
+    const campaignTitle = r.campaign_name || r.title || r.name || '';
+    return !q || campaignTitle.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q);
+  });
   const fAlerts    = alerts.filter(r => !q || r.title?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
 
   // ── Card renderer ─────────────────────────────────────────────────────────
@@ -269,30 +292,38 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     let subtitleText = '';
 
     switch (type) {
-      case 'disease':
-        iconColor = SEVERITY_COLOR[item.severity] ?? '#EF4444';
+      case 'disease': {
+        const diseaseItem = item as DiseaseReport;
+        iconColor = SEVERITY_COLOR[diseaseItem.severity] ?? '#EF4444';
         iconName = 'medkit';
-        titleText = item.disease_name ?? 'Unknown Disease';
-        subtitleText = `Cases: ${item.cases_count ?? 0} · ${item.district}, ${item.state}`;
+        titleText = diseaseItem.disease_name ?? 'Unknown Disease';
+        subtitleText = `Cases: ${diseaseItem.cases_count ?? 0} · ${diseaseItem.district}, ${diseaseItem.state}`;
         break;
-      case 'water':
-        iconColor = QUALITY_COLOR[item.overall_quality] ?? '#3B82F6';
+      }
+      case 'water': {
+        const waterItem = item as WaterReport;
+        iconColor = QUALITY_COLOR[waterItem.overall_quality] ?? '#3B82F6';
         iconName = 'water';
-        titleText = item.source_name ?? 'Unknown Source';
-        subtitleText = `${item.source_type} · ${item.district}, ${item.state}`;
+        titleText = waterItem.source_name ?? 'Unknown Source';
+        subtitleText = `${waterItem.source_type} · ${waterItem.district}, ${waterItem.state}`;
         break;
-      case 'campaigns':
+      }
+      case 'campaigns': {
+        const campaignItem = item as Campaign;
         iconColor = '#8B5CF6';
         iconName = 'megaphone';
-        titleText = item.name ?? 'Unnamed Campaign';
-        subtitleText = `${item.campaign_type} · ${item.district}, ${item.state}`;
+        titleText = campaignItem.campaign_name || campaignItem.title || campaignItem.name || 'Unnamed Campaign';
+        subtitleText = `${campaignItem.campaign_type} · ${campaignItem.district}, ${campaignItem.state}`;
         break;
-      case 'alerts':
-        iconColor = URGENCY_COLOR[item.urgency_level] ?? '#F59E0B';
+      }
+      case 'alerts': {
+        const alertItem = item as HealthAlert;
+        iconColor = URGENCY_COLOR[alertItem.urgency_level] ?? '#F59E0B';
         iconName = 'alert-circle';
-        titleText = item.title ?? 'Untitled Alert';
-        subtitleText = `${item.alert_type ?? ''} · ${item.district}, ${item.state}`;
+        titleText = alertItem.title ?? 'Untitled Alert';
+        subtitleText = `${alertItem.alert_type ?? ''} · ${alertItem.district}, ${alertItem.state}`;
         break;
+      }
     }
 
     return (
@@ -328,14 +359,28 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const isWaterItem = (item: QueueItem): item is WaterReport =>
     selectedType === 'water' && 'source_name' in item;
   const isCampaignItem = (item: QueueItem): item is Campaign =>
-    selectedType === 'campaigns' && 'campaign_type' in item && 'name' in item;
+    selectedType === 'campaigns' && 'campaign_type' in item;
   const isAlertItem = (item: QueueItem): item is HealthAlert =>
     selectedType === 'alerts' && 'alert_type' in item && 'title' in item;
+
+  const canApproveSelected =
+    selectedType === 'campaigns'
+      ? canApproveCampaigns
+      : selectedType === 'alerts'
+      ? canApproveAlerts
+      : canApproveReports;
+
+  const canReReviewSelected =
+    selectedType === 'campaigns'
+      ? canReReviewCampaigns
+      : selectedType === 'alerts'
+      ? canReReviewAlerts
+      : canReReviewReports;
 
   const getSelectedTitle = (item: QueueItem): string => {
     if (isDiseaseItem(item)) return item.disease_name ?? 'Detail';
     if (isWaterItem(item)) return item.source_name ?? 'Detail';
-    if (isCampaignItem(item)) return item.name ?? 'Detail';
+    if (isCampaignItem(item)) return item.campaign_name || item.title || item.name || 'Detail';
     if (isAlertItem(item)) return item.title ?? 'Detail';
     return 'Detail';
   };
@@ -497,7 +542,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <DetailRow label="Notes" value={selectedItem.notes} />
                 </>}
                 {isCampaignItem(selectedItem) && <>
-                  <DetailRow label="Name" value={selectedItem.name} />
+                  <DetailRow label="Name" value={selectedItem.campaign_name || selectedItem.title || selectedItem.name} />
                   <DetailRow label="Type" value={selectedItem.campaign_type} />
                   <DetailRow label="Status" value={selectedItem.status} />
                   <DetailRow label="Start" value={selectedItem.start_date ? format(new Date(selectedItem.start_date), 'MMM d, yyyy') : ''} />
@@ -536,7 +581,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                 )}
 
                 {/* Verify / Unverify buttons — disease + water only, for admins and clinics */}
-                {canVerify && (selectedType === 'disease' || selectedType === 'water') && (
+                {canVerifyReports && (selectedType === 'disease' || selectedType === 'water') && (
                   <View style={[qst.actionRow, { marginTop: 12 }]}>
                     <TouchableOpacity
                       style={[qst.actionBtn, {
@@ -561,8 +606,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   </View>
                 )}
 
-                {/* Approve/Reject buttons — always available for admins AND clinics */}
-                {(selectedItem.approval_status === 'pending_approval' || canVerify) && (
+                {/* Approve/Reject buttons — role + type aware */}
+                {canApproveSelected && (selectedItem.approval_status === 'pending_approval' || canReReviewSelected) && (
                   <View style={qst.actionRow}>
                     {!showRejectInput
                       ? <>

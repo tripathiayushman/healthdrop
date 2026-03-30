@@ -33,7 +33,13 @@
     },
     "sdkVersion": "54.0.0",
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow HealthDrop to access your location to auto-fill district and state."
+        }
+      ]
     ],
     "extra": {
       "eas": {

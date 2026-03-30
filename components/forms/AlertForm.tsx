@@ -18,6 +18,7 @@ import { supabase } from '../../lib/supabase';
 import { StateDropdown, SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { Profile } from '../../types';
+import { ALERT_RADIUS_KM, shouldReceiveAlert } from '../../lib/services/alertRadius';
 
 interface AlertFormProps {
   onSuccess: () => void;
@@ -125,18 +126,37 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
   };
 
   // ── Push notification sender ─────────────────────────────────────────────
-  const sendPushNotifications = async (alertTitle: string, alertBody: string, scope: 'officials' | 'all', district: string) => {
+  const sendPushNotifications = async (
+    alertTitle: string,
+    alertBody: string,
+    scope: 'officials' | 'all',
+    alertLocation: { district: string; state?: string; location_name?: string }
+  ) => {
     try {
       // Fetch push tokens from profiles
-      let query = supabase.from('profiles').select('expo_push_token').not('expo_push_token', 'is', null);
+      let query = supabase
+        .from('profiles')
+        .select('expo_push_token,role,district,state')
+        .not('expo_push_token', 'is', null);
       if (scope === 'officials') {
-        // Only district officials, clinics, ASHA workers — filtered by district
         query = query.in('role', ['district_officer', 'clinic', 'asha_worker', 'health_admin']);
-        if (district) query = query.eq('district', district);
       }
-      // For 'all': all users with push tokens
+
       const { data: profilesWithTokens } = await query;
-      const tokens = (profilesWithTokens ?? []).map((p: any) => p.expo_push_token).filter(Boolean);
+
+      const tokens = Array.from(new Set((profilesWithTokens ?? [])
+        .filter((p: any) => {
+          const role = String(p.role ?? '').toLowerCase();
+          if (role === 'health_admin' || role === 'super_admin') return true;
+          return shouldReceiveAlert(alertLocation, {
+            role,
+            district: p.district,
+            state: p.state,
+          });
+        })
+        .map((p: any) => p.expo_push_token)
+        .filter(Boolean)));
+
       if (tokens.length === 0) return;
 
       // Send via Expo Push API (best-effort, chunked)
@@ -156,7 +176,7 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
           }))),
         });
       }
-      console.log(`[Push] Sent health alert to ${tokens.length} device(s)`);
+      console.log(`[Push] Sent health alert to ${tokens.length} device(s) within ${ALERT_RADIUS_KM} km targeting scope`);
     } catch (e) {
       console.warn('[Push] Push notification send failed (non-critical):', e);
     }
@@ -202,7 +222,11 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
       // Send push notifications (non-blocking)
       const pushBody = `${formData.urgency_level.toUpperCase()} • ${formData.location_name}, ${formData.district}${formData.disease_or_issue ? ' • ' + formData.disease_or_issue : ''}`;
-      sendPushNotifications(formData.title, pushBody, formData.notify_scope, formData.district);
+      sendPushNotifications(formData.title, pushBody, formData.notify_scope, {
+        district: formData.district,
+        state: formData.state,
+        location_name: formData.location_name,
+      });
 
       // Role-aware success message
       const isAshaWorker = profile?.role === 'asha_worker';
@@ -213,8 +237,8 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         );
       } else {
         const scopeMsg = formData.notify_scope === 'all'
-          ? 'All app users have been notified via push notification.'
-          : 'District officials, clinics, and ASHA workers have been notified.';
+          ? `All relevant users in the affected ${ALERT_RADIUS_KM} km zone have been notified via push notification.`
+          : `Relevant district officials, clinics, and ASHA workers within ${ALERT_RADIUS_KM} km have been notified.`;
         setModalType('success');
         setModalMessage(`Your health alert has been published successfully.\n\n${scopeMsg}`);
       }

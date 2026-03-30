@@ -82,7 +82,9 @@ interface WaterReport {
 
 interface Campaign {
   id: string;
-  name: string;
+  name?: string;
+  title?: string;
+  campaign_name?: string;
   campaign_type: string;
   district: string;
   state: string;
@@ -664,7 +666,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   const filteredCampaigns = campaigns.filter(
     (campaign) =>
-      campaign.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (campaign.campaign_name || campaign.title || campaign.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       campaign.district?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -679,7 +681,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
   ];
   
   const tabs = isClinic 
-    ? allTabs.filter(tab => ['disease', 'water', 'campaigns'].includes(tab.id))
+    ? allTabs.filter(tab => ['disease', 'water'].includes(tab.id))
     : allTabs;
 
   // ==================== RENDER USER ITEM ====================
@@ -881,7 +883,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         </View>
         <View style={styles.itemInfo}>
           <Text style={[styles.itemTitle, { color: colors.text }]} numberOfLines={1}>
-            {item.name}
+            {item.campaign_name || item.title || item.name || 'Untitled Campaign'}
           </Text>
           <Text style={[styles.itemSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
             {item.campaign_type}

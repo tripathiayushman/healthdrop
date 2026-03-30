@@ -11,6 +11,7 @@ import { Profile } from '../../types';
 import { DashboardHeader, Section, StatCard, AlertCard, EmptyState, SectionDivider, InfoBanner } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
+import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -23,11 +24,18 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
 
   const load = async () => {
     try {
-      const alertData = await supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(5);
-      const campaignData = await supabase.from('health_campaigns').select('id,title,description,campaign_type,start_date,end_date,district,state').eq('status', 'active').order('start_date', { ascending: true }).limit(4);
-      setAlerts(alertData.data ?? []);
+      const alertData = await supabase
+        .from('health_alerts')
+        .select('*')
+        .eq('status', 'active')
+        .eq('approval_status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(80);
+      const campaignData = await supabase.from('health_campaigns').select('id,name,title,campaign_name,description,campaign_type,start_date,end_date,district,state').eq('status', 'active').order('start_date', { ascending: true }).limit(4);
+      const visibleAlerts = filterAlertsForProfile(alertData.data ?? [], profile);
+      setAlerts(visibleAlerts.slice(0, 5));
       setCampaigns(campaignData.data ?? []);
-      setStats({ alerts: alertData.data?.length ?? 0, campaigns: campaignData.data?.length ?? 0 });
+      setStats({ alerts: visibleAlerts.length, campaigns: campaignData.data?.length ?? 0 });
     } catch {}
   };
 
@@ -46,6 +54,8 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
       <MapAndAlertsSection
         profile={profile}
         alerts={alerts}
+        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+        onViewAllAlerts={() => onNavigate('all-alerts')}
         alertSectionTitle="Active Health Alerts"
         emptyTitle="No Active Alerts"
         emptySubtitle="Your community is safe! No health alerts at this time."
@@ -68,7 +78,9 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
                 <Ionicons name="megaphone" size={20} color="#16A34A" />
               </View>
               <View style={styles.campaignInfo}>
-                <Text style={[styles.campaignTitle, { color: colors.text }]} numberOfLines={1}>{c.title}</Text>
+                <Text style={[styles.campaignTitle, { color: colors.text }]} numberOfLines={1}>
+                  {c.campaign_name || c.title || c.name || 'Untitled Campaign'}
+                </Text>
                 <Text style={[styles.campaignDesc, { color: colors.textSecondary }]} numberOfLines={2}>{c.description}</Text>
                 <View style={styles.campaignMeta}>
                   {c.district && <>

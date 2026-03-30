@@ -17,7 +17,6 @@ import {
   Platform,
   Dimensions,
   Modal,
-  PanResponder,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -29,7 +28,7 @@ const PANEL_HEIGHT = SCREEN_HEIGHT * 0.62;
 
 // FAB sits just above the tab bar (70px) + an extra gap from add buttons (58px)
 // Total safe bottom offset = tab bar(70) + add-button-height(56) + gap(12) = 138
-const FAB_BOTTOM = 144;
+const FAB_BOTTOM = 96;
 
 interface AIChatbotProps {
   profile: Profile;
@@ -108,59 +107,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     }
   };
 
-  // ── Draggable FAB (native only) ──────────────────────────────
   const IS_MOBILE = Platform.OS !== 'web';
-  const { width: SW, height: SH } = Dimensions.get('window');
-  const FAB_SIZE = 64;
-  const defaultFabX = SW - FAB_SIZE - 16;
-  const defaultFabY = SH - FAB_BOTTOM - FAB_SIZE;
-  const fabPos = useRef(new Animated.ValueXY({ x: defaultFabX, y: defaultFabY })).current;
-  const posRef = useRef({ x: defaultFabX, y: defaultFabY });
-  const dragStartRef = useRef({ x: defaultFabX, y: defaultFabY });
-  const isDragging = useRef(false);
-  const fabPanResponder = useRef(
-    IS_MOBILE
-      ? PanResponder.create({
-          onStartShouldSetPanResponder: () => true,
-          onMoveShouldSetPanResponder: (_, gs) =>
-            Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4,
-          onPanResponderGrant: () => {
-            isDragging.current = false;
-            dragStartRef.current = { ...posRef.current };
-          },
-          onPanResponderMove: (_, gs) => {
-            if (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5) {
-              isDragging.current = true;
-            }
-            const nextX = dragStartRef.current.x + gs.dx;
-            const nextY = dragStartRef.current.y + gs.dy;
-            posRef.current = { x: nextX, y: nextY };
-            fabPos.setValue({ x: nextX, y: nextY });
-          },
-          onPanResponderRelease: (_, gs) => {
-            if (!isDragging.current) {
-              toggleChat();
-              return;
-            }
-            // Snap to nearest horizontal edge
-            const currentX = posRef.current.x ?? defaultFabX;
-            const snapX = currentX + FAB_SIZE / 2 < SW / 2 ? 16 : SW - FAB_SIZE - 16;
-            // Clamp Y within screen
-            const rawY = posRef.current.y ?? defaultFabY;
-            const clampedY = Math.max(50, Math.min(rawY, SH - FAB_BOTTOM - FAB_SIZE - 8));
-            posRef.current = { x: snapX, y: clampedY };
-            Animated.spring(fabPos, {
-              toValue: { x: snapX, y: clampedY },
-              useNativeDriver: false,
-              tension: 60,
-              friction: 10,
-            }).start(() => {
-              fabPos.setValue(posRef.current);
-            });
-          },
-        })
-      : { panHandlers: {} }
-  ).current;
 
   const openChat = () => setIsOpen(true);
   const closeChat = () => setIsOpen(false);
@@ -354,49 +301,22 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
       </Modal>
 
       {/* ── FLOATING ACTION BUTTON ─────────────────────────────── */}
-      {activeTab !== 'profile' && !isOpen && (
-        IS_MOBILE ? (
-          // Draggable FAB — native only
-          <Animated.View
+      {activeTab === 'home' && !isOpen && (
+        <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}> 
+          <TouchableOpacity
             style={[
-              styles.fabContainer,
-              {
-                position: 'absolute',
-                transform: fabPos.getTranslateTransform(),
-                bottom: undefined, right: undefined, top: 0, left: 0,
-              }
+              styles.fab,
+              isDark
+                ? { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.18)', borderWidth: 1 }
+                : { backgroundColor: '#000000' },
+              Platform.OS === 'web' ? ({ backdropFilter: 'blur(16px)' } as any) : {},
             ]}
-            {...fabPanResponder.panHandlers}
+            onPress={toggleChat}
+            activeOpacity={0.85}
           >
-            <View
-              style={[
-                styles.fab,
-                isDark
-                  ? { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)', borderWidth: 1 }
-                  : { backgroundColor: '#000000' },
-              ]}
-            >
-              <Ionicons name="sparkles" size={30} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
-            </View>
-          </Animated.View>
-        ) : (
-          // Fixed FAB — web only
-          <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}>
-            <TouchableOpacity
-              style={[
-                styles.fab,
-                isDark
-                  ? { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)', borderWidth: 1 }
-                  : { backgroundColor: '#000000' },
-                { backdropFilter: 'blur(16px)' } as any
-              ]}
-              onPress={toggleChat}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="sparkles" size={30} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
-            </TouchableOpacity>
-          </View>
-        )
+            <Ionicons name="sparkles" size={24} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
+          </TouchableOpacity>
+        </View>
       )}
     </>
   );
@@ -536,9 +456,9 @@ const styles = StyleSheet.create({
     zIndex: 999,
   },
   fab: {
-    width: 64, // Increased from 54
-    height: 64, // Increased from 54
-    borderRadius: 32, // Increased from 27
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 6,

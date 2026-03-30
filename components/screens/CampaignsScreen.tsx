@@ -12,6 +12,7 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -26,6 +27,7 @@ interface CampaignsScreenProps {
 interface Campaign {
   id: string;
   campaign_name?: string;
+  name?: string;
   title?: string;
   description: string;
   campaign_type: string;
@@ -39,14 +41,18 @@ interface Campaign {
   contact_phone?: string;
   target_beneficiaries?: number;
   status: string;
+  approval_status?: string;
   max_participants?: number;
   current_participants?: number;
   notes?: string;
   created_at: string;
 }
 
+type CampaignEligibilityFields = Pick<Campaign, 'status' | 'approval_status' | 'start_date' | 'end_date'>;
+
 const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const modalSurfaceColor = isDark ? '#1A1A1A' : '#FFFFFF';
   const [activeTab, setActiveTab] = useState<'active' | 'upcoming' | 'past'>('active');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -155,15 +161,21 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     });
   };
 
-  const isCampaignActive = (campaign: Campaign) => {
+  const isCampaignEnrollable = (campaign: CampaignEligibilityFields) => {
     const now = new Date();
     const startDate = new Date(campaign.start_date);
     const endDate = new Date(campaign.end_date);
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return false;
 
     const status = (campaign.status || '').toLowerCase();
-    const statusAllowsEnrollment = status === 'active' || status === 'ongoing';
-    return statusAllowsEnrollment && startDate <= now && endDate >= now;
+    const closedStatuses = ['completed', 'cancelled', 'inactive', 'closed', 'archived'];
+    const isClosed = closedStatuses.includes(status);
+    const isApproved = !campaign.approval_status || campaign.approval_status === 'approved';
+    return isApproved && !isClosed && endDate >= now;
+  };
+
+  const isCampaignActive = (campaign: Campaign) => {
+    return isCampaignEnrollable(campaign);
   };
 
   const filterCampaigns = () => {
@@ -196,7 +208,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
       const { data: campaignRecord, error: campaignFetchError } = await supabase
         .from('health_campaigns')
-        .select('id, status, start_date, end_date')
+        .select('id, status, approval_status, start_date, end_date')
         .eq('id', campaignId)
         .single();
 
@@ -206,15 +218,10 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         return;
       }
 
-      const now = new Date();
-      const startDate = new Date(campaignRecord.start_date);
-      const endDate = new Date(campaignRecord.end_date);
-      const status = (campaignRecord.status || '').toLowerCase();
-      const hasValidDates = !isNaN(startDate.getTime()) && !isNaN(endDate.getTime());
-      const isEnrollable = hasValidDates && (status === 'active' || status === 'ongoing') && startDate <= now && endDate >= now;
+      const isEnrollable = isCampaignEnrollable(campaignRecord as CampaignEligibilityFields);
 
       if (!isEnrollable) {
-        Alert.alert('Campaign Closed', 'This campaign is no longer active for enrollment.');
+        Alert.alert('Campaign Closed', 'Enrollment is available only for upcoming or ongoing approved campaigns.');
         setEnrollingCampaignId(null);
         return;
       }
@@ -364,10 +371,13 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   };
 
   const getCampaignTitle = (campaign: Campaign) => {
-    return campaign.campaign_name || campaign.title || 'Untitled Campaign';
+    return campaign.campaign_name || campaign.title || campaign.name || 'Untitled Campaign';
   };
 
   const filteredCampaigns = filterCampaigns();
+
+  const canCreateCampaigns = ['super_admin', 'health_admin', 'district_officer', 'asha_worker'].includes(profile.role);
+  const canEnroll = profile.role === 'asha_worker' || profile.role === 'volunteer';
 
   const renderCampaigns = () => {
     if (filteredCampaigns.length === 0) {
@@ -382,7 +392,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               ? 'No upcoming campaigns scheduled'
               : 'No past campaigns found'}
           </Text>
-          {(profile.role === 'health_admin' || profile.role === 'clinic') && (
+          {canCreateCampaigns && (
             <TouchableOpacity
               style={[styles.emptyButton, { backgroundColor: colors.primary }]}
               onPress={() => onNavigateToForm('new-campaign')}
@@ -476,7 +486,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               <Ionicons name="eye-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
               <Text style={[styles.actionButtonText, { color: colors.text }]}>View Details</Text>
             </TouchableOpacity>
-            {campaignIsActive && (
+            {campaignIsActive && canEnroll && (
               enrolledCampaigns.has(campaign.id) ? (
                 <TouchableOpacity
                   style={[styles.actionButton, styles.primaryButton, { backgroundColor: '#EF4444' }]}
@@ -578,7 +588,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       </ScrollView>
 
       {/* FAB - Only for admin/clinic */}
-      {(profile.role === 'health_admin' || profile.role === 'clinic') && (
+      {canCreateCampaigns && !showDetailModal && !showWithdrawModal && (
         <TouchableOpacity
           style={[styles.fab, { backgroundColor: colors.accent }]}
           onPress={() => onNavigateToForm('new-campaign')}
@@ -592,10 +602,12 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         visible={showDetailModal}
         animationType="slide"
         transparent={true}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={true}
         onRequestClose={() => setShowDetailModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContainer, { backgroundColor: colors.card }]}>
+        <View style={[styles.modalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
+          <View style={[styles.modalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }]}>
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Campaign Details</Text>
               <TouchableOpacity onPress={() => setShowDetailModal(false)}>
@@ -682,7 +694,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                   </View>
                 )}
 
-                {isCampaignActive(selectedCampaign) && (
+                {isCampaignActive(selectedCampaign) && canEnroll && (
                   enrolledCampaigns.has(selectedCampaign.id) ? (
                     <TouchableOpacity
                       style={[styles.enrollModalButton, { backgroundColor: '#EF4444' }]}
@@ -725,13 +737,15 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         visible={showWithdrawModal}
         animationType="fade"
         transparent={true}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={true}
         onRequestClose={() => {
           setShowWithdrawModal(false);
           setWithdrawTarget(null);
         }}
       >
-        <View style={styles.confirmModalOverlay}>
-          <View style={[styles.confirmModalContainer, { backgroundColor: colors.card }]}>
+        <View style={[styles.confirmModalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
+          <View style={[styles.confirmModalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }]}>
             <View style={[styles.confirmModalIcon, { backgroundColor: '#FEE2E2' }]}>
               <Ionicons name="warning" size={32} color="#EF4444" />
             </View>
@@ -1001,13 +1015,14 @@ const styles = StyleSheet.create({
   // Modal Styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
   modalContainer: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '85%',
+    borderWidth: 1,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1078,6 +1093,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
     borderRadius: 20,
+    borderWidth: 1,
     padding: 24,
     alignItems: 'center',
     shadowColor: '#000',

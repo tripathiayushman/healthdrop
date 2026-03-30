@@ -12,6 +12,7 @@ import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { getAIInsights, AIInsight, InsightContext, InsightScope } from '../../lib/services/gemini';
+import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 interface AIInsightsPanelProps { profile: Profile }
 
@@ -70,20 +71,20 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
       const allAlerts:  RawAlert[]   = alertsRes.status  === 'fulfilled' ? alertsRes.value.data  || [] : [];
       const allDisease: RawDisease[] = diseaseRes.status === 'fulfilled' ? diseaseRes.value.data || [] : [];
       const allWater:   RawWater[]   = waterRes.status   === 'fulfilled' ? waterRes.value.data   || [] : [];
-
-      const inDistrict = (items: { district: string }[]) =>
-        items.some(i => district && i.district?.toLowerCase() === district.toLowerCase());
+      const visibleAlerts = filterAlertsForProfile(allAlerts, profile);
+      const visibleDisease = filterAlertsForProfile(allDisease, profile);
+      const visibleWater = filterAlertsForProfile(allWater, profile);
 
       let detectedScope: InsightScope = 'global';
       let ctx: InsightContext;
 
-      if (district && (inDistrict(allAlerts) || inDistrict(allDisease) || inDistrict(allWater))) {
+      if (district && (visibleAlerts.length || visibleDisease.length || visibleWater.length)) {
         detectedScope = 'district';
         ctx = {
           scope: 'district', userDistrict: district, userState: state,
-          alerts: allAlerts.filter(a => a.district?.toLowerCase() === district.toLowerCase()),
-          diseaseReports: allDisease.filter(r => r.district?.toLowerCase() === district.toLowerCase()),
-          waterReports: allWater.filter(r => r.district?.toLowerCase() === district.toLowerCase()),
+          alerts: visibleAlerts,
+          diseaseReports: visibleDisease,
+          waterReports: visibleWater,
         };
       } else if (state && (allAlerts.length || allDisease.length || allWater.length)) {
         detectedScope = 'state';
@@ -119,8 +120,8 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
     ? { backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }
     : {};
   const cardBg = isDark ? 'rgba(18,18,22,0.88)' : '#FFFFFF';
-  const cardBorder = isDark ? 'rgba(255,255,255,0.12)' : (accentColor + '30');
-  const cardTopBorder = accentColor;
+  const cardBorder = isDark ? 'rgba(255,255,255,0.12)' : (colors.primary + '30');
+  const cardTopBorder = colors.primary;
 
   return (
     <View style={styles.section}>

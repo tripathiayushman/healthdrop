@@ -11,6 +11,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Modal,
+  Platform,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -20,6 +21,8 @@ import { Profile } from '../../types';
 interface ReportsScreenProps {
   profile: Profile;
   onNavigateToForm: (formType: string) => void;
+  focusReport?: { type: 'disease' | 'water'; id: string } | null;
+  onFocusHandled?: () => void;
 }
 
 interface DiseaseReport {
@@ -61,15 +64,14 @@ interface WaterReport {
   reporter_id?: string;
 }
 
-const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors } = useTheme();
+const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm, focusReport, onFocusHandled }) => {
+  const { colors, isDark } = useTheme();
   // Role-based access:
-  // Admin & Clinic: Can create disease & water reports, can approve reports
-  // ASHA Worker: Can create water reports only
+  // Admin, Clinic, District Officer, ASHA: Can create disease & water reports
   // Volunteer: Can only VIEW reports (no create)
-  const canAccessDiseaseReports = ['health_admin', 'clinic'].includes(profile.role);
-  const canAccessWaterReports = ['health_admin', 'clinic', 'asha_worker'].includes(profile.role);
-  const canCreateReports = ['health_admin', 'clinic', 'asha_worker'].includes(profile.role);
+  const canAccessDiseaseReports = ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'].includes(profile.role);
+  const canAccessWaterReports = ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'].includes(profile.role);
+  const canCreateReports = ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'].includes(profile.role);
   
   const [activeTab, setActiveTab] = useState<'disease' | 'water'>(canAccessDiseaseReports ? 'disease' : 'water');
   const [refreshing, setRefreshing] = useState(false);
@@ -80,10 +82,66 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
   const [selectedDiseaseReport, setSelectedDiseaseReport] = useState<DiseaseReport | null>(null);
   const [selectedWaterReport, setSelectedWaterReport] = useState<WaterReport | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const modalSurfaceColor = isDark ? '#1A1A1A' : '#FFFFFF';
 
   useEffect(() => {
     loadReports();
   }, []);
+
+  useEffect(() => {
+    if (!focusReport) return;
+
+    const openFocusedReport = async () => {
+      if (focusReport.type === 'disease') {
+        setActiveTab('disease');
+        const match = diseaseReports.find(r => r.id === focusReport.id);
+        if (match) {
+          setSelectedDiseaseReport(match);
+          setSelectedWaterReport(null);
+          setShowDetailModal(true);
+          onFocusHandled?.();
+          return;
+        }
+
+        const { data } = await supabase
+          .from('disease_reports')
+          .select('*')
+          .eq('id', focusReport.id)
+          .single();
+        if (data) {
+          setSelectedDiseaseReport(data);
+          setSelectedWaterReport(null);
+          setShowDetailModal(true);
+        }
+        onFocusHandled?.();
+        return;
+      }
+
+      setActiveTab('water');
+      const match = waterReports.find(r => r.id === focusReport.id);
+      if (match) {
+        setSelectedWaterReport(match);
+        setSelectedDiseaseReport(null);
+        setShowDetailModal(true);
+        onFocusHandled?.();
+        return;
+      }
+
+      const { data } = await supabase
+        .from('water_quality_reports')
+        .select('*')
+        .eq('id', focusReport.id)
+        .single();
+      if (data) {
+        setSelectedWaterReport(data);
+        setSelectedDiseaseReport(null);
+        setShowDetailModal(true);
+      }
+      onFocusHandled?.();
+    };
+
+    openFocusedReport();
+  }, [focusReport, diseaseReports, waterReports, onFocusHandled]);
 
   const loadReports = async () => {
     setLoading(true);
@@ -403,7 +461,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
       </ScrollView>
 
       {/* FAB - Only for roles that can create (NOT volunteers) */}
-      {canCreateReports && ((activeTab === 'disease' && canAccessDiseaseReports) || (activeTab === 'water' && canAccessWaterReports)) && (
+      {canCreateReports && !showDetailModal && ((activeTab === 'disease' && canAccessDiseaseReports) || (activeTab === 'water' && canAccessWaterReports)) && (
         <TouchableOpacity
           style={[
             styles.fab,
@@ -420,10 +478,17 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
         visible={showDetailModal}
         animationType="slide"
         transparent={true}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={true}
         onRequestClose={() => setShowDetailModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContainer, { backgroundColor: colors.card }]}>
+        <View style={[
+          styles.modalOverlay,
+          Platform.OS === 'web'
+            ? ({ backdropFilter: 'blur(12px)' } as any)
+            : {}
+        ]}>
+          <View style={[styles.modalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }]}> 
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>
                 {selectedDiseaseReport ? 'Disease Report Details' : 'Water Quality Report Details'}
@@ -743,13 +808,14 @@ const styles = StyleSheet.create({
   // Modal Styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.72)',
     justifyContent: 'flex-end',
   },
   modalContainer: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '85%',
+    borderWidth: 1,
   },
   modalHeader: {
     flexDirection: 'row',

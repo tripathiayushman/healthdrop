@@ -95,7 +95,7 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
           <Text style={[styles.rolePillText, { color: accent }]}>{ROLE_LABEL[role]}</Text>
         </View>
 
-        <Text style={styles.greeting}>{greeting},</Text>
+        <Text style={styles.greeting}>{greeting}</Text>
         <Text style={styles.userName} numberOfLines={1}>
           {profile.full_name || 'User'}
         </Text>
@@ -114,10 +114,7 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
 };
 
 function getGreeting(): string {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
+  return 'Welcome back';
 }
 
 // ─────────────────────────────────────────────────────
@@ -539,8 +536,8 @@ const styles = StyleSheet.create({
   /* ── Header ── */
   header: {
     paddingHorizontal: 20,
-    paddingTop: 52,
-    paddingBottom: 36,
+    paddingTop: 42,
+    paddingBottom: 24,
     overflow: 'hidden',
   },
   blob1: { position: 'absolute', top: -50, right: -50, width: 180, height: 180, borderRadius: 90 },
@@ -555,7 +552,7 @@ const styles = StyleSheet.create({
   },
   rolePillText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.4 },
   greeting: { fontSize: 14, color: 'rgba(255,255,255,0.65)', marginBottom: 2 },
-  userName: { fontSize: 26, color: '#FFFFFF', fontWeight: '800', letterSpacing: -0.6, marginBottom: 8 },
+  userName: { fontSize: 24, color: '#FFFFFF', fontWeight: '800', letterSpacing: -0.6, marginBottom: 7 },
   locationRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   locationText: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
 
@@ -569,7 +566,7 @@ const styles = StyleSheet.create({
   statCard: {
     borderRadius: 14, borderWidth: 1,
     padding: 14, alignItems: 'center',
-    minHeight: 110, justifyContent: 'center',
+    height: 122, justifyContent: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 3,
   },
   statIconWrap: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },

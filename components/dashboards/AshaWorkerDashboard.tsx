@@ -13,6 +13,7 @@ import {
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
+import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -24,23 +25,41 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
   const load = async () => {
     try {
-      // ASHA workers submit water reports (and campaigns/alerts), not disease reports
-      const [all, pending, approved, campaigns] = await Promise.allSettled([
+      const [diseaseAll, waterAll, diseasePending, waterPending, diseaseApproved, waterApproved, campaigns] = await Promise.allSettled([
+        supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id),
+        supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id).eq('approval_status', 'pending_approval'),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id).eq('approval_status', 'pending_approval'),
+        supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id).eq('approval_status', 'approved'),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id).eq('approval_status', 'approved'),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('status', 'active'),
       ]);
-      let alertQ = supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(4);
-      if (profile.district) alertQ = alertQ.eq('district', profile.district);
-      const alertData = await alertQ;
+      const alertData = await supabase
+        .from('health_alerts')
+        .select('*')
+        .eq('status', 'active')
+        .eq('approval_status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(60);
+      const totalSubmitted =
+        (diseaseAll.status === 'fulfilled' ? diseaseAll.value.count ?? 0 : 0) +
+        (waterAll.status === 'fulfilled' ? waterAll.value.count ?? 0 : 0);
+      const totalPending =
+        (diseasePending.status === 'fulfilled' ? diseasePending.value.count ?? 0 : 0) +
+        (waterPending.status === 'fulfilled' ? waterPending.value.count ?? 0 : 0);
+      const totalApproved =
+        (diseaseApproved.status === 'fulfilled' ? diseaseApproved.value.count ?? 0 : 0) +
+        (waterApproved.status === 'fulfilled' ? waterApproved.value.count ?? 0 : 0);
+
       setStats({
-        myReports: all.status === 'fulfilled' ? all.value.count ?? 0 : 0,
-        myPending: pending.status === 'fulfilled' ? pending.value.count ?? 0 : 0,
-        myApproved: approved.status === 'fulfilled' ? approved.value.count ?? 0 : 0,
+        myReports: totalSubmitted,
+        myPending: totalPending,
+        myApproved: totalApproved,
         campaigns: campaigns.status === 'fulfilled' ? campaigns.value.count ?? 0 : 0,
       });
-      if (alertData.data) setAlerts(alertData.data);
+      if (alertData.data) {
+        setAlerts(filterAlertsForProfile(alertData.data, profile).slice(0, 4));
+      }
     } catch {}
   };
 
@@ -77,6 +96,8 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <MapAndAlertsSection
         profile={profile}
         alerts={alerts}
+        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+        onViewAllAlerts={() => onNavigate('all-alerts')}
         alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
         emptyTitle="District is Clear"
         emptySubtitle="No active health alerts in your district."

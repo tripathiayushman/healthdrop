@@ -14,6 +14,7 @@ import {
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
+import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -27,29 +28,38 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
     try {
       let dQ = supabase.from('disease_reports').select('id', { count: 'exact', head: true });
       let wQ = supabase.from('water_quality_reports').select('id', { count: 'exact', head: true });
-      let aQ = supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active');
-      let pQ = supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval');
+      let pDiseaseQ = supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval');
+      let pWaterQ = supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval');
       if (profile.district) {
         dQ = dQ.eq('district', profile.district);
         wQ = wQ.eq('district', profile.district);
-        aQ = aQ.eq('district', profile.district);
-        pQ = pQ.eq('district', profile.district);
+        pDiseaseQ = pDiseaseQ.eq('district', profile.district);
+        pWaterQ = pWaterQ.eq('district', profile.district);
       }
-      const [d, w, a, pending, campaigns] = await Promise.allSettled([
-        dQ, wQ, aQ, pQ,
+      const [d, w, pendingDisease, pendingWater, campaigns] = await Promise.allSettled([
+        dQ, wQ, pDiseaseQ, pWaterQ,
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('status', 'active'),
       ]);
-      let alertListQ = supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(4);
-      if (profile.district) alertListQ = alertListQ.eq('district', profile.district);
-      const alertData = await alertListQ;
+      const alertData = await supabase
+        .from('health_alerts')
+        .select('*')
+        .eq('status', 'active')
+        .eq('approval_status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(120);
+      const visibleAlerts = filterAlertsForProfile(alertData.data ?? [], profile);
+      const pendingReportsCount =
+        (pendingDisease.status === 'fulfilled' ? pendingDisease.value.count ?? 0 : 0) +
+        (pendingWater.status === 'fulfilled' ? pendingWater.value.count ?? 0 : 0);
+
       setStats({
         districtReports: d.status === 'fulfilled' ? d.value.count ?? 0 : 0,
         districtWater:   w.status === 'fulfilled' ? w.value.count ?? 0 : 0,
-        alerts:          a.status === 'fulfilled' ? a.value.count ?? 0 : 0,
-        pendingReports:  pending.status === 'fulfilled' ? pending.value.count ?? 0 : 0,
+        alerts:          visibleAlerts.length,
+        pendingReports:  pendingReportsCount,
         campaigns:       campaigns.status === 'fulfilled' ? campaigns.value.count ?? 0 : 0,
       });
-      if (alertData.data) setAlerts(alertData.data);
+      setAlerts(visibleAlerts.slice(0, 4));
     } catch {}
   };
 
@@ -89,6 +99,8 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
       <MapAndAlertsSection
         profile={profile}
         alerts={alerts}
+        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+        onViewAllAlerts={() => onNavigate('all-alerts')}
         alertSectionTitle={`${profile.district ?? 'District'} Alerts`}
         emptyTitle={`${profile.district ?? 'District'} is Clear`}
         emptySubtitle="No active health alerts in your district."

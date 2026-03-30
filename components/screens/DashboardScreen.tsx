@@ -21,6 +21,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format, isValid } from 'date-fns';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
+import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 const { width } = Dimensions.get('window');
 
@@ -102,12 +103,12 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         .eq('status', 'active')
         .eq('approval_status', 'approved')
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(80);
 
       if (!isMountedRef.current) return;
       
       if (data && !error) {
-        setAlerts(data);
+        setAlerts(filterAlertsForProfile(data, profile).slice(0, 5));
       }
     } catch (error) {
       console.error('[DashboardScreen.loadAlerts] Alerts loading failed', {
@@ -250,15 +251,16 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
   };
 
   // Role-based quick actions
-  // Admin & Clinic: Disease, Water, Campaign, Alert
-  // ASHA Worker: Water, Campaign, Alert (NO disease)
+  // Admin & District Officer: Disease, Water, Campaign, Alert (alerts admin/DO only)
+  // Clinic: Disease + Water
+  // ASHA Worker: Disease, Water, Campaign (submit)
   // Volunteer: NO quick actions (can only view and enroll in campaigns)
   const getAllQuickActions = () => {
     const allActions = [
-      { id: 'disease', icon: 'virus' as const, iconFamily: 'material' as const, label: 'Report Disease', color: '#EF4444', screen: 'new-disease-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer'] },
-      { id: 'water', icon: 'water' as const, iconFamily: 'ionicons' as const, label: 'Water Quality', color: '#3B82F6', screen: 'new-water-report', roles: ['super_admin', 'health_admin', 'clinic', 'asha_worker', 'district_officer'] },
-      { id: 'campaign', icon: 'megaphone' as const, iconFamily: 'ionicons' as const, label: 'New Campaign', color: '#10B981', screen: 'new-campaign', roles: ['super_admin', 'health_admin', 'clinic', 'asha_worker', 'district_officer'] },
-      { id: 'alert', icon: 'alert-circle' as const, iconFamily: 'ionicons' as const, label: 'Send Alert', color: '#F59E0B', screen: 'new-alert', roles: ['super_admin', 'health_admin', 'clinic', 'asha_worker', 'district_officer'] },
+      { id: 'disease', icon: 'virus' as const, iconFamily: 'material' as const, label: 'Report Disease', color: '#EF4444', screen: 'new-disease-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'] },
+      { id: 'water', icon: 'water' as const, iconFamily: 'ionicons' as const, label: 'Water Quality', color: '#3B82F6', screen: 'new-water-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'] },
+      { id: 'campaign', icon: 'megaphone' as const, iconFamily: 'ionicons' as const, label: 'New Campaign', color: '#10B981', screen: 'new-campaign', roles: ['super_admin', 'health_admin', 'district_officer', 'asha_worker'] },
+      { id: 'alert', icon: 'alert-circle' as const, iconFamily: 'ionicons' as const, label: 'Send Alert', color: '#F59E0B', screen: 'new-alert', roles: ['super_admin', 'health_admin', 'district_officer'] },
     ];
     
     // Volunteers don't get any quick actions - they can only view and enroll
@@ -440,7 +442,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
             <TouchableOpacity onPress={() => onNavigateToForm('all-alerts')}>
               <Text style={[styles.seeAllText, { color: colors.primary }]}>View All</Text>
             </TouchableOpacity>
-            {(profile.role === 'super_admin' || profile.role === 'health_admin' || profile.role === 'clinic' || profile.role === 'district_officer') && (
+            {(profile.role === 'super_admin' || profile.role === 'health_admin' || profile.role === 'district_officer') && (
               <TouchableOpacity onPress={() => onNavigateToForm('new-alert')}>
                 <Text style={[styles.seeAllText, { color: colors.primary }]}>+ New Alert</Text>
               </TouchableOpacity>

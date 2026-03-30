@@ -25,7 +25,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
   const load = async () => {
     try {
-      const [d, w, c, a, u, f, pa] = await Promise.allSettled([
+      const [d, w, c, a, u, f, pendingDisease, pendingWater, pendingCampaigns, pendingAlerts] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }),
@@ -33,8 +33,17 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true),
         supabase.from('user_feedback').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
       ]);
       const alertData = await supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(3);
+      const pendingApprovalsCount =
+        (pendingDisease.status === 'fulfilled' ? pendingDisease.value.count ?? 0 : 0) +
+        (pendingWater.status === 'fulfilled' ? pendingWater.value.count ?? 0 : 0) +
+        (pendingCampaigns.status === 'fulfilled' ? pendingCampaigns.value.count ?? 0 : 0) +
+        (pendingAlerts.status === 'fulfilled' ? pendingAlerts.value.count ?? 0 : 0);
+
       setStats({
         disease: d.status === 'fulfilled' ? d.value.count ?? 0 : 0,
         water:   w.status === 'fulfilled' ? w.value.count ?? 0 : 0,
@@ -42,7 +51,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         alerts:  a.status === 'fulfilled' ? a.value.count ?? 0 : 0,
         users:   u.status === 'fulfilled' ? u.value.count ?? 0 : 0,
         pendingFeedback: f.status === 'fulfilled' ? f.value.count ?? 0 : 0,
-        pendingApprovals: pa.status === 'fulfilled' ? pa.value.count ?? 0 : 0,
+        pendingApprovals: pendingApprovalsCount,
       });
       if (alertData.data) setAlerts(alertData.data);
     } catch {}
@@ -106,6 +115,8 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       <MapAndAlertsSection
         profile={profile}
         alerts={alerts}
+        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+        onViewAllAlerts={() => onNavigate('all-alerts')}
         alertSectionTitle="Active Alerts"
         emptyTitle="No Active Alerts"
         emptySubtitle="All systems are clear. No health alerts at this time."

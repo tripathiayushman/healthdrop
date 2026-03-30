@@ -69,9 +69,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    const model = body.model || Deno.env.get('OPENROUTER_MODEL') || 'openrouter/free';
+    const model = body.model || Deno.env.get('OPENROUTER_MODEL') || 'meta-llama/llama-3.1-8b-instruct:free';
     const temperature = typeof body.temperature === 'number' ? body.temperature : 0.7;
     const max_tokens = typeof body.max_tokens === 'number' ? body.max_tokens : 350;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort('OpenRouter timeout'), 25000);
 
     const response = await fetch(OPENROUTER_API_BASE, {
       method: 'POST',
@@ -88,7 +91,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         max_tokens,
         stream: false,
       }),
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId));
 
     const rawText = await response.text();
 

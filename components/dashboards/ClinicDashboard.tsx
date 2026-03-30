@@ -13,6 +13,7 @@ import {
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
+import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -24,21 +25,35 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
 
   const load = async () => {
     try {
-      const [myR, pending, campaigns] = await Promise.allSettled([
+      const [myDisease, myWater, pendingDisease, pendingWater, campaigns] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id),
+        supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id),
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('status', 'active'),
       ]);
-      let alertQuery = supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(4);
-      if (profile.district) alertQuery = alertQuery.eq('district', profile.district);
-      const alertData = await alertQuery;
+      const alertData = await supabase
+        .from('health_alerts')
+        .select('*')
+        .eq('status', 'active')
+        .eq('approval_status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(60);
+      const visibleAlerts = filterAlertsForProfile(alertData.data ?? [], profile);
+      const myReportsCount =
+        (myDisease.status === 'fulfilled' ? myDisease.value.count ?? 0 : 0) +
+        (myWater.status === 'fulfilled' ? myWater.value.count ?? 0 : 0);
+      const pendingReportsCount =
+        (pendingDisease.status === 'fulfilled' ? pendingDisease.value.count ?? 0 : 0) +
+        (pendingWater.status === 'fulfilled' ? pendingWater.value.count ?? 0 : 0);
+
       setStats({
-        myReports: myR.status === 'fulfilled' ? myR.value.count ?? 0 : 0,
-        pendingReports: pending.status === 'fulfilled' ? pending.value.count ?? 0 : 0,
+        myReports: myReportsCount,
+        pendingReports: pendingReportsCount,
         campaigns: campaigns.status === 'fulfilled' ? campaigns.value.count ?? 0 : 0,
-        districtAlerts: alertData.data?.length ?? 0,
+        districtAlerts: visibleAlerts.length,
       });
-      if (alertData.data) setAlerts(alertData.data);
+      setAlerts(visibleAlerts.slice(0, 4));
     } catch {}
   };
 
@@ -87,6 +102,8 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       <MapAndAlertsSection
         profile={profile}
         alerts={alerts}
+        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+        onViewAllAlerts={() => onNavigate('all-alerts')}
         alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
         emptyTitle="District is Clear"
         emptySubtitle="No active health alerts in your district."

@@ -461,7 +461,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
                 onPress={() => onNavigate('CampaignDetails', { id: campaign.id })}
                 style={[styles.campaignCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                 accessibilityRole="button"
-                accessibilityLabel={`Open campaign details for ${campaign.title}`}
+                accessibilityLabel={`Open campaign details for ${(campaign as any).campaign_name || campaign.title || (campaign as any).name || 'Untitled Campaign'}`}
                 accessibilityHint="Navigates to the selected campaign details screen"
               >
                 <View style={styles.campaignHeader}>
@@ -470,7 +470,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile, onNavig
                     {campaign.campaign_type.replace('_', ' ').toUpperCase()}
                   </Text>
                 </View>
-                <Text style={[styles.campaignTitle, { color: colors.text }]}>{campaign.title}</Text>
+                <Text style={[styles.campaignTitle, { color: colors.text }]}>
+                  {(campaign as any).campaign_name || campaign.title || (campaign as any).name || 'Untitled Campaign'}
+                </Text>
                 <View style={styles.campaignLocationRow}>
                   <Ionicons name="location" size={14} color={colors.textSecondary} />
                   <Text style={[styles.campaignLocation, { color: colors.textSecondary }]}>

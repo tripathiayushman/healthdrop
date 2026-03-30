@@ -55,6 +55,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('tabs');
   const [approvalQueueInitialTab, setApprovalQueueInitialTab] = useState<'disease' | 'water' | 'campaigns' | 'alerts'>('disease');
+  const [reportFocus, setReportFocus] = useState<{ type: 'disease' | 'water'; id: string } | null>(null);
 
   // Hide status bar and Android navigation bar for immersive experience
   useEffect(() => {
@@ -64,7 +65,6 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       if (Platform.OS === 'android') {
         import('expo-navigation-bar').then(NavBar => {
           NavBar.setVisibilityAsync('hidden');
-          NavBar.setBehaviorAsync('overlay-swipe');
         }).catch((error) => {
           console.error('Failed to configure Android navigation bar:', error);
         });
@@ -78,7 +78,6 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         if (Platform.OS === 'android') {
           import('expo-navigation-bar').then(NavBar => {
             NavBar.setVisibilityAsync('visible');
-            NavBar.setBehaviorAsync('inset-swipe');
           }).catch((error) => {
             console.error('Failed to restore Android navigation bar:', error);
           });
@@ -113,6 +112,16 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   ).current;
 
   const navigateToForm = (formType: string) => {
+    if (formType.startsWith('open-report:')) {
+      const [, reportType, reportId] = formType.split(':');
+      if ((reportType === 'disease' || reportType === 'water') && reportId) {
+        setReportFocus({ type: reportType, id: reportId });
+        setCurrentScreen('tabs');
+        setActiveTab('reports');
+      }
+      return;
+    }
+
     if (formType.startsWith('approval-queue:')) {
       const tab = formType.split(':')[1];
       const isApprovalQueueTab = (value: string): value is 'disease' | 'water' | 'campaigns' | 'alerts' =>
@@ -201,7 +210,14 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const renderTabContent = () => {
     switch (activeTab) {
       case 'home':      return <DashboardRouter profile={profile} onNavigate={navigateToForm} />;
-      case 'reports':   return <ReportsScreen profile={profile} onNavigateToForm={navigateToForm} />;
+      case 'reports':   return (
+        <ReportsScreen
+          profile={profile}
+          onNavigateToForm={navigateToForm}
+          focusReport={reportFocus}
+          onFocusHandled={() => setReportFocus(null)}
+        />
+      );
       case 'campaigns': return <CampaignsScreen profile={profile} onNavigateToForm={navigateToForm} />;
       case 'profile':   return <ProfileScreen profile={profile} onSignOut={onSignOut} onProfileUpdate={onProfileUpdate} />;
       default:          return null;
@@ -263,21 +279,6 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         </View>
       )}
 
-      {/* Swipe hint indicator — mobile only */}
-      {IS_MOBILE && (
-        <View style={styles.swipeIndicator} pointerEvents="none">
-          {TAB_ORDER.map((t) => (
-            <View
-              key={t}
-              style={[
-                styles.swipeDot,
-                { backgroundColor: activeTab === t ? colors.primary : colors.textSecondary + '40' }
-              ]}
-            />
-          ))}
-        </View>
-      )}
-
       {/* AI Chatbot — persistent across all tabs except Profile */}
       <AIChatbot profile={profile} activeTab={activeTab} />
     </SafeAreaView>
@@ -316,19 +317,6 @@ const styles = StyleSheet.create({
   tabLabel: {
     fontSize: 11,
     letterSpacing: 0.2,
-  },
-  // Swipe position dots — mobile only
-  swipeIndicator: {
-    position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 76 : 62,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    gap: 5,
-  },
-  swipeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
   },
 });
 

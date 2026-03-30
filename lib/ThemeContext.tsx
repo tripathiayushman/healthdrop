@@ -297,30 +297,29 @@ export const themes = {
   
   dark: {
     mode: 'dark' as const,
-    // ── Pure black backgrounds ──
+    // ── True black base + opaque elevated surfaces ──
     background:     '#000000',
-    surface:        '#0a0a0a',
-    surfaceVariant: '#111111',
-    // ── Glassmorphic cards over black ──
-    card:     'rgba(255,255,255,0.35)',
-    cardHover:'rgba(255,255,255,0.45)',
+    surface:        '#121212',
+    surfaceVariant: '#1A1A1A',
+    card:           '#1A1A1A',
+    cardHover:      '#242424',
 
     // Text
-    text:          '#F1F5F9',
-    textSecondary: '#94A3B8',
-    textTertiary:  '#5A6A7A',
+    text:          '#FFFFFF',
+    textSecondary: '#A3A3A3',
+    textTertiary:  '#737373',
     textInverse:   '#000000',
 
     // Primary — teal (not blue)
-    primary:        '#26A69A',
-    primaryLight:   'rgba(38,166,154,0.15)',
-    primaryDark:    '#4DB6AC',
-    primaryVariant: '#00897B',
+    primary:        '#0D9488',
+    primaryLight:   'rgba(13,148,136,0.18)',
+    primaryDark:    '#059669',
+    primaryVariant: '#0F766E',
     onPrimary:      '#000000',
 
     // Secondary
-    secondary:      '#38BDF8',
-    secondaryLight: 'rgba(56,189,248,0.12)',
+    secondary:      '#EA580C',
+    secondaryLight: 'rgba(234,88,12,0.14)',
     onSecondary:    '#000000',
 
     // Accent
@@ -344,10 +343,10 @@ export const themes = {
     infoLight: 'rgba(3,155,229,0.15)',
     infoBg:    'rgba(3,155,229,0.20)',
 
-    // Borders: subtle white glow
-    border:      'rgba(255,255,255,0.10)',
-    borderLight: 'rgba(255,255,255,0.05)',
-    borderDark:  'rgba(255,255,255,0.18)',
+    // Borders
+    border:      '#333333',
+    borderLight: '#262626',
+    borderDark:  '#404040',
 
     // Sidebar
     sidebar:           '#000000',
@@ -357,23 +356,23 @@ export const themes = {
     sidebarActive:     '#26A69A',
 
     // Navigation
-    navBackground: 'rgba(0,0,0,0.90)',
-    navBorder:     'rgba(255,255,255,0.07)',
+    navBackground: '#0B0B0B',
+    navBorder:     '#242424',
 
     // Input
-    inputBackground: 'rgba(15,23,42,0.78)',
-    inputBorder:     'rgba(148,163,184,0.55)',
-    inputFocus:      '#26A69A',
-    inputFocusBorder:'#38BDF8',
-    inputFilledBorder:'rgba(148,163,184,0.75)',
+    inputBackground: '#121212',
+    inputBorder:     '#404040',
+    inputFocus:      '#0D9488',
+    inputFocusBorder:'#059669',
+    inputFilledBorder:'#525252',
     inputErrorBorder:'#F87171',
-    inputPlaceholderColor:'#94A3B8',
-    placeholder:     '#94A3B8',
+    inputPlaceholderColor:'#A3A3A3',
+    placeholder:     '#A3A3A3',
 
     // Charts
-    chartLine: '#26A69A',
-    chartArea: 'rgba(38,166,154,0.15)',
-    chartGrid: 'rgba(255,255,255,0.07)',
+    chartLine: '#0D9488',
+    chartArea: 'rgba(13,148,136,0.18)',
+    chartGrid: '#2A2A2A',
 
     // Severity
     severityCritical: colors.danger[400],
@@ -388,19 +387,19 @@ export const themes = {
     waterCritical: colors.danger[300],
 
     // Shadow
-    shadow:       'rgba(0,0,0,0.6)',
-    shadowMedium: 'rgba(0,0,0,0.75)',
-    shadowDark:   'rgba(0,0,0,0.90)',
+    shadow:       'rgba(0,0,0,0.45)',
+    shadowMedium: 'rgba(0,0,0,0.60)',
+    shadowDark:   'rgba(0,0,0,0.80)',
 
     // Overlay
-    overlay: 'rgba(0,0,0,0.80)',
+    overlay: 'rgba(0,0,0,0.60)',
 
     // Badges
     badgeActive:   colors.success[400],
     badgePending:  colors.warning[400],
     badgeInactive: colors.gray[500],
 
-    disabled: '#64748B',
+    disabled: '#525252',
     elevation: {
       low:    'rgba(255,255,255,0.05)',
       medium: 'rgba(255,255,255,0.09)',
