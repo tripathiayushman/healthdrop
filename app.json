@@ -2,7 +2,7 @@
   "expo": {
     "name": "HealthDrop",
     "slug": "health-drop",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.tripathiayushman.healthdrop",
-      "buildNumber": "3"
+      "buildNumber": "4"
     },
     "android": {
       "package": "com.tripathiayushman.healthdrop",
@@ -25,7 +25,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "versionCode": 3
+      "versionCode": 4
     },
     "web": {
       "favicon": "./assets/favicon.png",
