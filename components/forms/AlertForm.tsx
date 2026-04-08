@@ -13,12 +13,14 @@ import {
   Switch,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import NetInfo from '@react-native-community/netinfo';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { StateDropdown, SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { Profile } from '../../types';
 import { ALERT_RADIUS_KM, shouldReceiveAlert } from '../../lib/services/alertRadius';
+import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 
 interface AlertFormProps {
   onSuccess: () => void;
@@ -197,8 +199,9 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
       }
 
       const diseaseValue = formData.disease_or_issue === 'Other' ? formData.custom_disease : formData.disease_or_issue;
+      const isAshaWorker = profile?.role === 'asha_worker';
 
-      const { error } = await supabase.from('health_alerts').insert({
+      const payload = {
         created_by: user.id,
         alert_type: formData.alert_type,
         urgency_level: formData.urgency_level,
@@ -216,7 +219,28 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         contact_person: formData.contact_person,
         contact_phone: formData.contact_phone,
         status: 'active',
-      });
+      };
+
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected && net.isInternetReachable;
+
+      if (!isOnline) {
+        await syncQueue.enqueue('health_alert', payload);
+        setModalType('success');
+        if (isAshaWorker) {
+          setModalMessage(
+            'No internet connection — your alert request has been saved offline and will sync automatically for admin review when connectivity is restored.'
+          );
+        } else {
+          setModalMessage(
+            'No internet connection — your alert has been saved offline and will be published automatically when connectivity is restored.'
+          );
+        }
+        setModalVisible(true);
+        return;
+      }
+
+      const { error } = await supabase.from('health_alerts').insert(payload);
 
       if (error) throw error;
 
@@ -229,7 +253,6 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
       });
 
       // Role-aware success message
-      const isAshaWorker = profile?.role === 'asha_worker';
       if (isAshaWorker) {
         setModalType('success');
         setModalMessage(

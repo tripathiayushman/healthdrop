@@ -14,9 +14,10 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
-import { supabase } from '../../lib/supabase';
+import { waterQualityService } from '../../lib/services/waterQuality';
 import { StateDropdown, SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
+import { SourceType, WaterQuality } from '../../types';
 
 interface WaterQualityReportFormProps {
   onSuccess: () => void;
@@ -112,39 +113,38 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setModalType('error');
-        setModalMessage('You must be logged in to submit a report.');
-        setModalVisible(true);
-        setLoading(false);
-        return;
-      }
-
       const sourceType = formData.source_type === 'other'
-        ? formData.custom_source_type || 'other'
+        ? 'other'
         : formData.source_type;
 
       const contaminationType = formData.contamination_type === 'other'
         ? formData.custom_contamination || 'other'
         : formData.contamination_type;
 
-      const { error, queued } = await supabase.from('water_quality_reports').insert({
-        reporter_id: user.id,
+      const customSourceTypeNote =
+        formData.source_type === 'other' && formData.custom_source_type.trim().length > 0
+          ? `Custom source type: ${formData.custom_source_type.trim()}`
+          : '';
+
+      const mergedNotes = [formData.notes, customSourceTypeNote]
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+
+      const { error, queued } = await waterQualityService.create({
         source_name: formData.source_name,
-        source_type: sourceType,
+        source_type: sourceType as SourceType,
         location_name: formData.location_name,
-        latitude: formData.latitude,
-        longitude: formData.longitude,
+        latitude: formData.latitude ?? undefined,
+        longitude: formData.longitude ?? undefined,
         district: formData.district,
         state: formData.state,
-        overall_quality: formData.quality,
-        ph_level: formData.ph_level ? parseFloat(formData.ph_level) : null,
-        tds_level: formData.tds_level ? parseInt(formData.tds_level) : null,
+        overall_quality: formData.quality as WaterQuality,
+        ph_level: formData.ph_level ? parseFloat(formData.ph_level) : undefined,
+        tds_level: formData.tds_level ? parseInt(formData.tds_level) : undefined,
         contamination_type: contaminationType,
-        notes: formData.notes,
-        status: 'reported',
-      }) as any;
+        notes: mergedNotes || undefined,
+      });
 
       if (error) throw error;
 

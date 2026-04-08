@@ -13,9 +13,10 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
-import { supabase } from '../../lib/supabase';
+import { diseaseReportsService } from '../../lib/services/diseaseReports';
 import { StateDropdown, SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
+import { DiseaseType, Severity, TreatmentStatus } from '../../types';
 
 interface DiseaseReportFormProps {
   onSuccess: () => void;
@@ -71,7 +72,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   const treatmentStatusOptions = [
     { label: 'Pending', value: 'pending', icon: 'time-outline' },
     { label: 'In Treatment', value: 'in_treatment', icon: 'medical-outline' },
-    { label: 'Treatment Complete', value: 'treatment_complete', icon: 'checkmark-circle-outline' },
+    { label: 'Recovered', value: 'recovered', icon: 'checkmark-circle-outline' },
   ];
 
   const ageGroups = [
@@ -125,42 +126,44 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setModalType('error');
-        setModalMessage('You must be logged in to submit a report.');
-        setModalVisible(true);
-        setLoading(false);
-        return;
-      }
-
       const diseaseName = formData.disease_name === 'Other' 
         ? formData.custom_disease_name 
         : formData.disease_name;
 
       const diseaseType = formData.disease_type === 'other'
-        ? formData.custom_disease_type || 'other'
+        ? 'other'
         : formData.disease_type;
 
-      const { error, queued } = await supabase.from('disease_reports').insert({
-        reporter_id: user.id,
+      const normalizedTreatmentStatus: TreatmentStatus =
+        (formData.treatment_status as TreatmentStatus) || 'pending';
+
+      const customDiseaseTypeNote =
+        formData.disease_type === 'other' && formData.custom_disease_type.trim().length > 0
+          ? `Custom disease type: ${formData.custom_disease_type.trim()}`
+          : '';
+
+      const mergedNotes = [formData.notes, customDiseaseTypeNote]
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+
+      const { error, queued } = await diseaseReportsService.create({
         disease_name: diseaseName,
-        disease_type: diseaseType,
-        severity: formData.severity,
+        disease_type: diseaseType as DiseaseType,
+        severity: formData.severity as Severity,
         symptoms: formData.symptoms,
         cases_count: parseInt(formData.cases_count) || 1,
         deaths_count: parseInt(formData.deaths_count) || 0,
         age_group: formData.age_group,
         gender: formData.gender,
         location_name: formData.location_name,
-        latitude: formData.latitude,
-        longitude: formData.longitude,
+        latitude: formData.latitude ?? undefined,
+        longitude: formData.longitude ?? undefined,
         district: formData.district,
         state: formData.state,
-        treatment_status: formData.treatment_status,
-        notes: formData.notes,
-        status: 'reported',
-      }) as any;
+        treatment_status: normalizedTreatmentStatus,
+        notes: mergedNotes || undefined,
+      });
 
       if (error) throw error;
 

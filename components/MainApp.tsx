@@ -9,6 +9,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Alert,
   Platform,
   PanResponder,
   StatusBar,
@@ -40,9 +41,35 @@ import { DashboardRouter } from './dashboards/DashboardRouter';
 const IS_MOBILE = Platform.OS !== 'web';
 
 type TabType = 'home' | 'reports' | 'campaigns' | 'profile';
-type ScreenType = 'tabs' | 'new-disease-report' | 'new-water-report' | 'new-campaign' | 'new-alert' | 'admin-management' | 'user-management' | 'approval-queue' | 'all-alerts';
+type CreateScreenType = 'new-disease-report' | 'new-water-report' | 'new-campaign' | 'new-alert';
+type ScreenType = 'tabs' | CreateScreenType | 'admin-management' | 'user-management' | 'approval-queue' | 'all-alerts';
 
 const TAB_ORDER: TabType[] = ['home', 'reports', 'campaigns', 'profile'];
+
+const CREATE_PERMISSIONS: Record<CreateScreenType, Profile['role'][]> = {
+  'new-disease-report': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker'],
+  'new-water-report': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker'],
+  'new-campaign': ['super_admin', 'health_admin', 'district_officer', 'asha_worker'],
+  'new-alert': ['super_admin', 'health_admin', 'district_officer'],
+};
+
+const CREATE_ACTIONS: Array<{
+  screen: CreateScreenType;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+}> = [
+  { screen: 'new-disease-report', label: 'Disease Report', icon: 'medkit', color: '#EF4444' },
+  { screen: 'new-water-report', label: 'Water Quality', icon: 'water', color: '#3B82F6' },
+  { screen: 'new-campaign', label: 'Campaign', icon: 'megaphone', color: '#10B981' },
+  { screen: 'new-alert', label: 'Health Alert', icon: 'warning', color: '#F59E0B' },
+];
+
+const isCreateScreen = (value: string): value is CreateScreenType =>
+  value in CREATE_PERMISSIONS;
+
+const canCreateOnRole = (role: Profile['role'], screen: CreateScreenType): boolean =>
+  CREATE_PERMISSIONS[screen].includes(role);
 
 interface MainAppProps {
   profile: Profile;
@@ -56,6 +83,15 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('tabs');
   const [approvalQueueInitialTab, setApprovalQueueInitialTab] = useState<'disease' | 'water' | 'campaigns' | 'alerts'>('disease');
   const [reportFocus, setReportFocus] = useState<{ type: 'disease' | 'water'; id: string } | null>(null);
+  const [showCreateMenu, setShowCreateMenu] = useState(false);
+
+  const availableCreateActions = CREATE_ACTIONS.filter(action =>
+    canCreateOnRole(profile.role, action.screen)
+  );
+
+  useEffect(() => {
+    setShowCreateMenu(false);
+  }, [activeTab, currentScreen]);
 
   // Hide status bar and Android navigation bar for immersive experience
   useEffect(() => {
@@ -135,11 +171,21 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       }
       setCurrentScreen('approval-queue');
     } else {
+      if (isCreateScreen(formType) && !canCreateOnRole(profile.role, formType)) {
+        Alert.alert(
+          'Permission Denied',
+          'Your role does not have permission to create this record type.'
+        );
+        return;
+      }
       setCurrentScreen(formType as ScreenType);
     }
   };
 
-  const goBackToTabs = () => setCurrentScreen('tabs');
+  const goBackToTabs = () => {
+    setShowCreateMenu(false);
+    setCurrentScreen('tabs');
+  };
 
   // ── Form / sub-screens ────────────────────────────────────────
   if (currentScreen === 'new-disease-report') {
@@ -261,12 +307,64 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     );
   });
 
+  const showUniversalAddFab =
+    currentScreen === 'tabs' &&
+    (activeTab === 'reports' || activeTab === 'campaigns') &&
+    availableCreateActions.length > 0;
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Main Content — swipe gesture area (mobile only) */}
       <View style={styles.content} {...panResponder.panHandlers}>
         {renderTabContent()}
       </View>
+
+      {showUniversalAddFab && (
+        <>
+          {showCreateMenu && (
+            <TouchableOpacity
+              style={styles.createMenuBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowCreateMenu(false)}
+            />
+          )}
+
+          {showCreateMenu && (
+            <View style={[styles.createMenu, { backgroundColor: colors.card, borderColor: colors.border }]}> 
+              {availableCreateActions.map((action) => (
+                <TouchableOpacity
+                  key={action.screen}
+                  style={styles.createMenuItem}
+                  onPress={() => {
+                    setShowCreateMenu(false);
+                    navigateToForm(action.screen);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.createMenuIcon, { backgroundColor: action.color + '1A' }]}>
+                    <Ionicons name={action.icon} size={16} color={action.color} />
+                  </View>
+                  <Text style={[styles.createMenuLabel, { color: colors.text }]}>{action.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.createFab,
+              isDark
+                ? { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.18)', borderWidth: 1 }
+                : { backgroundColor: '#000000' },
+              Platform.OS === 'web' ? ({ backdropFilter: 'blur(16px)' } as any) : {},
+            ]}
+            onPress={() => setShowCreateMenu(prev => !prev)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name={showCreateMenu ? 'close' : 'add'} size={28} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
+          </TouchableOpacity>
+        </>
+      )}
 
       {/* ── Glass Bottom Tab Bar ─── */}
       {Platform.OS !== 'web' ? (
@@ -291,6 +389,59 @@ const styles = StyleSheet.create({
     paddingTop: 0,
   },
   content: { flex: 1 },
+  createMenuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 18,
+  },
+  createFab: {
+    position: 'absolute',
+    right: 16,
+    bottom: Platform.OS === 'ios' ? 96 : 88,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  createMenu: {
+    position: 'absolute',
+    right: 16,
+    bottom: Platform.OS === 'ios' ? 164 : 156,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingVertical: 6,
+    minWidth: 188,
+    zIndex: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    elevation: 9,
+  },
+  createMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  createMenuIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createMenuLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
   tabBar: {
     flexDirection: 'row',
     borderTopWidth: 1,

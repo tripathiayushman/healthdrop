@@ -15,6 +15,9 @@ import { usersService } from './lib/services';
 // Import Main Dashboard with Navigation
 import MainApp from './components/MainApp';
 
+const OFFLINE_SYNC_ENABLED =
+  String(process.env.EXPO_PUBLIC_OFFLINE_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
+
 function AppContent() {
   const { colors } = useTheme();
   const [session, setSession] = useState<Session | null>(null);
@@ -51,8 +54,10 @@ function AppContent() {
 
     initAuth();
 
-    // Start offline sync service — reconnects on network restore
-    offlineSyncService.start();
+    // Controlled by EXPO_PUBLIC_OFFLINE_SYNC_ENABLED in .env
+    if (OFFLINE_SYNC_ENABLED) {
+      offlineSyncService.start();
+    }
 
     const {
       data: { subscription },
@@ -70,7 +75,9 @@ function AppContent() {
     return () => {
       isMounted = false;
       subscription.unsubscribe();
-      offlineSyncService.stop();
+      if (OFFLINE_SYNC_ENABLED) {
+        offlineSyncService.stop();
+      }
     };
   }, []);
 

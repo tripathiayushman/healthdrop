@@ -27,10 +27,17 @@ const SYNC_DEBOUNCE_MS = 1500; // wait after reconnect before starting sync
  * The localId is stored as `client_idempotency_key` on the server so
  * Supabase can detect and silently ignore duplicate submissions.
  */
-const TABLE_MAP: Record<string, string> = {
-    disease_report: 'disease_reports',
-    water_quality_report: 'water_quality_reports',
-    feedback: 'feedback',
+interface QueueUploadConfig {
+    table: string;
+    usesIdempotencyKey: boolean;
+}
+
+const TABLE_MAP: Record<string, QueueUploadConfig> = {
+    disease_report: { table: 'disease_reports', usesIdempotencyKey: true },
+    water_quality_report: { table: 'water_quality_reports', usesIdempotencyKey: true },
+    campaign: { table: 'health_campaigns', usesIdempotencyKey: false },
+    health_alert: { table: 'health_alerts', usesIdempotencyKey: false },
+    feedback: { table: 'user_feedback', usesIdempotencyKey: false },
 };
 
 /**
@@ -38,24 +45,30 @@ const TABLE_MAP: Record<string, string> = {
  * Throws on network/server error so the caller can record the failure.
  */
 async function uploadItem(item: QueueItem): Promise<void> {
-    const table = TABLE_MAP[item.type];
-    if (!table) throw new Error(`Unknown queue item type: ${item.type}`);
+    const config = TABLE_MAP[item.type];
+    if (!config) throw new Error(`Unknown queue item type: ${item.type}`);
 
-    const payload = {
-        ...item.payload,
-        // Attach the stable localId as an idempotency key.
-        // Supabase handles duplicates via the DB constraint or upsert ON CONFLICT.
-        client_idempotency_key: item.localId,
-    };
+    if (config.usesIdempotencyKey) {
+        const payload = {
+            ...item.payload,
+            // Attach stable localId as idempotency key where schema supports it.
+            client_idempotency_key: item.localId,
+        };
+
+        const { error } = await supabase
+            .from(config.table)
+            .upsert(payload, {
+                onConflict: 'client_idempotency_key',
+                ignoreDuplicates: true,
+            });
+
+        if (error) throw new Error(error.message);
+        return;
+    }
 
     const { error } = await supabase
-        .from(table)
-        .upsert(payload, {
-            // `client_idempotency_key` has a UNIQUE constraint on the table.
-            // ON CONFLICT DO NOTHING means a retry never creates a duplicate row.
-            onConflict: 'client_idempotency_key',
-            ignoreDuplicates: true,
-        });
+        .from(config.table)
+        .insert(item.payload as Record<string, unknown>);
 
     if (error) throw new Error(error.message);
 }

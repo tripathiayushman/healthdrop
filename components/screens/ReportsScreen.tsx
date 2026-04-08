@@ -460,19 +460,6 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
         )}
       </ScrollView>
 
-      {/* FAB - Only for roles that can create (NOT volunteers) */}
-      {canCreateReports && !showDetailModal && ((activeTab === 'disease' && canAccessDiseaseReports) || (activeTab === 'water' && canAccessWaterReports)) && (
-        <TouchableOpacity
-          style={[
-            styles.fab,
-            { backgroundColor: activeTab === 'disease' ? colors.primary : colors.secondary },
-          ]}
-          onPress={() => onNavigateToForm(activeTab === 'disease' ? 'new-disease-report' : 'new-water-report')}
-        >
-          <Ionicons name="add" size={28} color="#FFFFFF" />
-        </TouchableOpacity>
-      )}
-
       {/* Report Detail Modal */}
       <Modal
         visible={showDetailModal}
@@ -776,21 +763,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flex: 1,
     fontWeight: '500',
-  },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
   },
   bottomSpacer: {
     height: 80,

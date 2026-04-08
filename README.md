@@ -25,10 +25,11 @@
 | 💧 **Water Quality Monitoring** | Report contaminated water sources with chemical parameters |
 | 🚨 **Health Alerts** | Urgency-graded alerts propagate to affected districts within a 10 km radius |
 | 📋 **Campaign Management** | Create, manage, and enroll in health campaigns |
+| ➕ **Unified Create Menu** | Role-aware create button shown on Reports and Campaigns tabs |
 | ✅ **Approval Workflow** | Verify → Approve → Reject pipeline with rejection reasons |
 | 🤖 **AI Health Insights** | Location-aware insights powered by direct OpenRouter Chat Completions |
 | 🔔 **Push Notifications** | Real-time Expo push notifications sent to users in the affected 10 km alert zone |
-| 📡 **Offline Sync** | Reports queued locally and synced when connectivity resumes |
+| 📡 **Offline Sync** | Disease, water, campaign, and alert submissions queued locally and synced on reconnect |
 
 ---
 
@@ -114,6 +115,7 @@ EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 EXPO_PUBLIC_OPENROUTER_API_KEY=your-openrouter-api-key
 EXPO_PUBLIC_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+EXPO_PUBLIC_OFFLINE_SYNC_ENABLED=true
 ```
 
 If you are upgrading from older builds, remove `EXPO_PUBLIC_GEMINI_API_KEY` and keep only OpenRouter variables.
@@ -215,6 +217,33 @@ OpenRouter free-tier usage can be constrained by request/throughput limits and a
 - Moved AI flow to direct OpenRouter calls from app service layer (`lib/services/gemini.ts`) with environment-driven model selection.
 - Improved map location fallback with district aliases and centroid-based geographic matching.
 - Reduced noisy runtime warnings (Expo push setup and Android navigation behavior).
+
+## 🧾 Final Fixes (2026-04-08)
+
+- Replaced per-screen duplicate add FABs with one centralized global create menu in `MainApp`.
+- Added strict role-gated create routing for disease, water, campaign, and alert forms.
+- Refactored disease/water forms to use offline-first service submission paths.
+- Added offline queueing for campaign and health-alert forms to match production offline expectations.
+- Hardened map fullscreen expansion to avoid dual map instances during expand/collapse transitions.
+
+## 🧾 UI and Runtime Updates (2026-04-09)
+
+- Shifted the universal create FAB to the right side and limited visibility to Reports and Campaigns tabs.
+- Applied AI-style glassmorphic styling to the universal create FAB for visual consistency.
+- Normalized dashboard quick-action button sizing to enforce even card heights across roles.
+- Added AI insights local cache fallback so previously fetched insights remain visible when network drops.
+- Added runtime toggle `EXPO_PUBLIC_OFFLINE_SYNC_ENABLED`:
+   - `true` enables offline sync service startup (recommended for production)
+   - `false` disables offline sync startup for online-only QA/testing
+
+### Supabase Changes (Final Fixes & Alignment)
+
+- Synced offline queue table mapping to current schema names:
+   - `feedback` sync target corrected to `user_feedback`
+   - campaign queue target `health_campaigns`
+   - alert queue target `health_alerts`
+- Preserved idempotent upsert flow for disease/water (`client_idempotency_key`).
+- Added direct-insert reconnect sync for queued campaign/alert payloads for schema-safe compatibility.
 
 ## 🧾 Previous Major Updates (2026-03-27)
 

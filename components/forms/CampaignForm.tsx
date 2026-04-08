@@ -12,10 +12,12 @@ import {
   TextInput,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import NetInfo from '@react-native-community/netinfo';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { StateDropdown, SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
+import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 
 interface CampaignFormProps {
   onSuccess: () => void;
@@ -130,7 +132,7 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         ? formData.custom_target_audience || 'other'
         : formData.target_audience;
 
-      const { error } = await supabase.from('health_campaigns').insert({
+      const payload = {
         organizer_id: user.id,
         campaign_name: formData.campaign_name,
         campaign_type: campaignType,
@@ -146,7 +148,20 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         contact_phone: formData.contact_phone || null,
         notes: formData.notes || null,
         status: 'planned',
-      });
+      };
+
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected && net.isInternetReachable;
+
+      if (!isOnline) {
+        await syncQueue.enqueue('campaign', payload);
+        setModalType('success');
+        setModalMessage('No internet connection — your campaign has been saved offline and will sync automatically when connectivity is restored.');
+        setModalVisible(true);
+        return;
+      }
+
+      const { error } = await supabase.from('health_campaigns').insert(payload);
 
       if (error) throw error;
 

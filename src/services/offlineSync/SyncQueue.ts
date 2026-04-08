@@ -11,6 +11,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type QueueItemType =
     | 'disease_report'
     | 'water_quality_report'
+    | 'campaign'
+    | 'health_alert'
     | 'feedback';
 
 export type QueueItemStatus =
@@ -50,7 +52,7 @@ export class SyncQueue {
     }
 
     /**
-     * Enqueue a new report.
+    * Enqueue a new item.
      * Returns the localId — callers should show this as a "draft ID" to the user.
      */
     async enqueue<T>(type: QueueItemType, payload: T): Promise<string> {

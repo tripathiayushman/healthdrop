@@ -1132,15 +1132,22 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             <Text style={[s.panelTitle, { color: colors.text }]}>Health Map</Text>
           </View>
           <View style={{ flex: 1, position: 'relative' }}>
-            <MapPanel
-              profile={profile}
-              alerts={alerts}
-              userLat={userLat}
-              userLon={userLon}
-              onRequestLocate={requestGPS}
-              locating={locating}
-              onOpenReport={onOpenReport}
-            />
+            {!expanded ? (
+              <MapPanel
+                profile={profile}
+                alerts={alerts}
+                userLat={userLat}
+                userLon={userLon}
+                onRequestLocate={requestGPS}
+                locating={locating}
+                onOpenReport={onOpenReport}
+              />
+            ) : (
+              <View style={[s.inlineMapPaused, { backgroundColor: colors.background, borderColor: colors.border }]}> 
+                <Ionicons name="expand" size={18} color="#3B82F6" />
+                <Text style={[s.inlineMapPausedText, { color: colors.textSecondary }]}>Map opened in full screen</Text>
+              </View>
+            )}
             <TouchableOpacity
               style={[s.mapExpandFab, { backgroundColor: '#0B1220CC', borderColor: '#3B82F6' }]}
               onPress={() => setExpanded(true)}
@@ -1197,38 +1204,46 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       </View>
 
       {/* ── Full-screen modal ── */}
-      <Modal visible={expanded} animationType="fade" onRequestClose={() => setExpanded(false)}>
-        <View style={[
-          s.modal, 
-          { backgroundColor: isDark ? '#0a0a0a' : '#f1f5f9' },
-          Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
-        ]}>
-          {/* Modal header */}
-          <View style={[s.modalHeader, { backgroundColor: isDark ? '#111' : '#fff', borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={() => setExpanded(false)} style={s.closeBtn}>
-              <Ionicons name="close" size={22} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={[s.modalTitle, { color: colors.text }]}>Health Map</Text>
-            <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#3B82F632' }]} onPress={requestGPS} disabled={locating}>
-              {locating ? <ActivityIndicator size="small" color="#3B82F6" /> : <Ionicons name="locate" size={16} color="#3B82F6" />}
-            </TouchableOpacity>
-          </View>
+      {expanded && (
+        <Modal
+          visible
+          animationType="fade"
+          presentationStyle="fullScreen"
+          statusBarTranslucent={Platform.OS === 'android'}
+          onRequestClose={() => setExpanded(false)}
+        >
+          <View style={[
+            s.modal,
+            { backgroundColor: isDark ? '#0a0a0a' : '#f1f5f9' },
+            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+          ]}>
+            {/* Modal header */}
+            <View style={[s.modalHeader, { backgroundColor: isDark ? '#111' : '#fff', borderBottomColor: colors.border }]}> 
+              <TouchableOpacity onPress={() => setExpanded(false)} style={s.closeBtn}>
+                <Ionicons name="close" size={22} color={colors.text} />
+              </TouchableOpacity>
+              <Text style={[s.modalTitle, { color: colors.text }]}>Health Map</Text>
+              <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#3B82F632' }]} onPress={requestGPS} disabled={locating}>
+                {locating ? <ActivityIndicator size="small" color="#3B82F6" /> : <Ionicons name="locate" size={16} color="#3B82F6" />}
+              </TouchableOpacity>
+            </View>
 
-          {/* Full map */}
-          <View style={{ flex: 1 }}>
-            <MapPanel
-              profile={profile}
-              alerts={alerts}
-              userLat={userLat}
-              userLon={userLon}
-              onRequestLocate={requestGPS}
-              locating={locating}
-              isExpanded
-              onOpenReport={onOpenReport}
-            />
+            {/* Full map */}
+            <View style={{ flex: 1 }}>
+              <MapPanel
+                profile={profile}
+                alerts={alerts}
+                userLat={userLat}
+                userLon={userLon}
+                onRequestLocate={requestGPS}
+                locating={locating}
+                isExpanded
+                onOpenReport={onOpenReport}
+              />
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
     </>
   );
 };
@@ -1274,6 +1289,18 @@ const s = StyleSheet.create({
   panelHeader:{ flexDirection:'row', alignItems:'center', gap:5, marginBottom:8 },
   panelTitle: { fontSize:13, fontWeight:'700', flex:1 },
   countBadge: { minWidth:20, height:20, borderRadius:10, alignItems:'center', justifyContent:'center', paddingHorizontal:4 },
+  inlineMapPaused: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  inlineMapPausedText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
   mapExpandFab: {
     position: 'absolute',
     right: 10,

@@ -60,6 +60,8 @@ const useGlassStyle = () => {
     : {};
 };
 
+  const WEB_NO_SELECT = Platform.OS === 'web' ? ({ userSelect: 'none' } as any) : null;
+
 // ─────────────────────────────────────────────────────
 //  DashboardHeader — animated gradient with role badge
 // ─────────────────────────────────────────────────────
@@ -182,7 +184,7 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
   return (
     <Animated.View style={[{ flex: 1 }, { transform: [{ scale: scaleAnim }] }]}>
       <Wrapper
-        style={[styles.statCard, glassStyle, {
+        style={[styles.statCard, glassStyle, WEB_NO_SELECT, {
           backgroundColor: colors.card,
           borderColor: isDark ? colors.border : color + '25',
           borderTopWidth: 3, borderTopColor: color,
@@ -231,7 +233,7 @@ export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color,
   return (
     <Animated.View style={[{ flex: 1 }, { transform: [{ scale: pressAnim }] }]}>
       <TouchableOpacity
-        style={[styles.qaBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+        style={[styles.qaBtn, WEB_NO_SELECT, { backgroundColor: colors.card, borderColor: colors.border }]}
         onPress={onPress}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
@@ -302,7 +304,7 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
   return (
     <>
       <TouchableOpacity
-        style={[styles.alertCard, glassStyle, {
+        style={[styles.alertCard, glassStyle, WEB_NO_SELECT, {
           backgroundColor: cardBg,
           borderColor: colors.border,
           borderLeftColor: uc,
@@ -465,7 +467,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subt
   const cardBg = isDark ? 'rgba(12,12,16,0.85)' : colors.card;
   return (
     <TouchableOpacity
-      style={[styles.toolCard, glassStyle, { backgroundColor: cardBg, borderColor: colors.border }]}
+      style={[styles.toolCard, glassStyle, WEB_NO_SELECT, { backgroundColor: cardBg, borderColor: colors.border }]}
       onPress={onPress}
       activeOpacity={0.75}
     >
@@ -576,11 +578,13 @@ const styles = StyleSheet.create({
   /* ── Quick action ── */
   qaBtn: {
     borderRadius: 14, borderWidth: 1,
-    paddingVertical: 14, paddingHorizontal: 8, alignItems: 'center', gap: 8,
+    paddingVertical: 12, paddingHorizontal: 8,
+    minHeight: 112, height: 112,
+    alignItems: 'center', justifyContent: 'center', gap: 8,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 1,
   },
   qaIcon: { width: 46, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
-  qaLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center', lineHeight: 15 },
+  qaLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center', lineHeight: 15, minHeight: 30 },
 
   /* ── Alert card ── */
   alertCard: {

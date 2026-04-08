@@ -6,6 +6,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Animated, Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
@@ -30,6 +31,21 @@ const SCOPE_LABEL: Record<InsightScope, (d?: string, s?: string) => string> = {
   district: (d) => d || 'Your District',
   state:    (_, s) => s || 'Your State',
   global:   () => 'General Health',
+};
+
+const INSIGHTS_CACHE_PREFIX = 'healthdrop:ai-insights';
+
+interface CachedInsightPayload {
+  insight: AIInsight;
+  scope: InsightScope;
+  savedAt: string;
+}
+
+const getInsightsCacheKey = (profile: Profile): string => {
+  const userId = profile.id || 'unknown';
+  const district = (profile.district || 'none').toLowerCase();
+  const state = (profile.state || 'none').toLowerCase();
+  return `${INSIGHTS_CACHE_PREFIX}:${userId}:${district}:${state}`;
 };
 
 export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => {
@@ -58,6 +74,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   const loadInsights = async () => {
     setLoading(true);
     setExpanded(false);
+    const cacheKey = getInsightsCacheKey(profile);
     try {
       const district = profile.district;
       const state    = profile.state;
@@ -100,8 +117,30 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
       setScope(detectedScope);
       const result = await getAIInsights(ctx);
       setInsight(result);
+
+      const cachePayload: CachedInsightPayload = {
+        insight: result,
+        scope: detectedScope,
+        savedAt: new Date().toISOString(),
+      };
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(cachePayload));
     } catch {
-      setInsight(null);
+      try {
+        const cachedRaw = await AsyncStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw) as CachedInsightPayload;
+          if (cached?.insight) {
+            setInsight(cached.insight);
+            setScope(cached.scope || 'global');
+          } else {
+            setInsight(null);
+          }
+        } else {
+          setInsight(null);
+        }
+      } catch {
+        setInsight(null);
+      }
     } finally {
       setLoading(false);
     }

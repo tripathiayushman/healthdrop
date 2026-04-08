@@ -587,16 +587,6 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         <View style={styles.bottomSpacer} />
       </ScrollView>
 
-      {/* FAB - Only for admin/clinic */}
-      {canCreateCampaigns && !showDetailModal && !showWithdrawModal && (
-        <TouchableOpacity
-          style={[styles.fab, { backgroundColor: colors.accent }]}
-          onPress={() => onNavigateToForm('new-campaign')}
-        >
-          <Ionicons name="add" size={28} color="#FFFFFF" />
-        </TouchableOpacity>
-      )}
-
       {/* Campaign Details Modal */}
       <Modal
         visible={showDetailModal}
@@ -993,21 +983,6 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: 14,
     fontWeight: '600',
-  },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
   },
   bottomSpacer: {
     height: 80,
