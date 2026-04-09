@@ -9,16 +9,18 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, QuickActionBtn,
-  AlertCard, EmptyState, InfoBanner, SectionDivider,
+  AlertCard, EmptyState, InfoBanner, SectionDivider, ToolCard,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
+  const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ myReports: 0, myPending: 0, myApproved: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -81,43 +83,61 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         </View>
       )}
 
-      {/* 1. Quick Actions */}
-      <Section title="Quick Actions" style={{ marginTop: stats.myPending > 0 ? 4 : 16 }}>
-        <View style={styles.qaRow}>
-          <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
-          <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
-          <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
-        </View>
-      </Section>
+      {isWidgetVisible('quick_actions') && (
+        <>
+          <Section title="Quick Actions" style={{ marginTop: stats.myPending > 0 ? 4 : 16 }}>
+            <View style={styles.qaRow}>
+              <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
+              <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
+              <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('alerts_map') && (
+        <>
+          <MapAndAlertsSection
+            profile={profile}
+            alerts={alerts}
+            onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+            onViewAllAlerts={() => onNavigate('all-alerts')}
+            alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
+            emptyTitle="District is Clear"
+            emptySubtitle="No active health alerts in your district."
+          />
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 2. Map + District Alerts side by side */}
-      <MapAndAlertsSection
-        profile={profile}
-        alerts={alerts}
-        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-        onViewAllAlerts={() => onNavigate('all-alerts')}
-        alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
-        emptyTitle="District is Clear"
-        emptySubtitle="No active health alerts in your district."
-      />
+      {isWidgetVisible('operations_tools') && (
+        <>
+          <Section title="Operations Intelligence">
+            <ToolCard icon="pulse" iconColor="#0EA5E9" title="District Health Score" subtitle="View district risk score and outbreak pressure" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="analytics" iconColor="#F59E0B" title="Campaign Intelligence" subtitle="Review campaign performance and strategic guidance" onPress={() => onNavigate('campaign-intelligence')} />
+            <ToolCard icon="options" iconColor="#8B5CF6" title="Customize Widgets" subtitle="Choose dashboard widgets you want to see" onPress={() => onNavigate('widget-customization')} />
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('ai_insights') && (
+        <>
+          <AIInsightsPanel profile={profile} />
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 3. AI Insights */}
-      <AIInsightsPanel profile={profile} />
-
-      <SectionDivider />
-
-      {/* 4. My Report Stats */}
-      <Section title="My Submission Stats">
-        <View style={styles.statsRow}>
-          <StatCard label="Total Submitted" value={stats.myReports} icon="document-text" color="#EA580C" />
-          <StatCard label="Approved" value={stats.myApproved} icon="checkmark-circle" color="#10B981" />
-          <StatCard label="Pending" value={stats.myPending} icon="time" color="#F59E0B" />
-        </View>
-      </Section>
+      {isWidgetVisible('my_stats') && (
+        <Section title="My Submission Stats">
+          <View style={styles.statsRow}>
+            <StatCard label="Total Submitted" value={stats.myReports} icon="document-text" color="#EA580C" />
+            <StatCard label="Approved" value={stats.myApproved} icon="checkmark-circle" color="#10B981" />
+            <StatCard label="Pending" value={stats.myPending} icon="time" color="#F59E0B" />
+          </View>
+        </Section>
+      )}
 
       <View style={{ height: 120 }} />
     </ScrollView>

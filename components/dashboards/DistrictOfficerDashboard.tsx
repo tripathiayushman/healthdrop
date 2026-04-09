@@ -15,11 +15,13 @@ import {
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
+  const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ districtReports: 0, districtWater: 0, campaigns: 0, alerts: 0, pendingReports: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -80,57 +82,76 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
         </View>
       )}
 
-      {/* 1. District Stats */}
-      <Section title={`${profile.district ?? 'District'} Overview`} style={{ marginTop: stats.pendingReports > 0 ? 4 : 16 }}>
-        <View style={styles.statsRow}>
-          <StatCard label="Disease Reports" value={stats.districtReports} icon="bar-chart" color="#EF4444" />
-          <StatCard label="Water Reports" value={stats.districtWater} icon="water" color="#3B82F6" />
-          <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
-        </View>
-        <View style={[styles.statsRow, { marginTop: 8 }]}>
-          <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
-          <StatCard label="Pending Approval" value={stats.pendingReports} icon="time" color="#8B5CF6" />
-        </View>
-      </Section>
+      {isWidgetVisible('overview_stats') && (
+        <>
+          <Section title={`${profile.district ?? 'District'} Overview`} style={{ marginTop: stats.pendingReports > 0 ? 4 : 16 }}>
+            <View style={styles.statsRow}>
+              <StatCard label="Disease Reports" value={stats.districtReports} icon="bar-chart" color="#EF4444" />
+              <StatCard label="Water Reports" value={stats.districtWater} icon="water" color="#3B82F6" />
+              <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
+            </View>
+            <View style={[styles.statsRow, { marginTop: 8 }]}>
+              <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
+              <StatCard label="Pending Approval" value={stats.pendingReports} icon="time" color="#8B5CF6" />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('alerts_map') && (
+        <>
+          <MapAndAlertsSection
+            profile={profile}
+            alerts={alerts}
+            onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+            onViewAllAlerts={() => onNavigate('all-alerts')}
+            alertSectionTitle={`${profile.district ?? 'District'} Alerts`}
+            emptyTitle={`${profile.district ?? 'District'} is Clear`}
+            emptySubtitle="No active health alerts in your district."
+          />
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 2. Map + District Alerts side by side */}
-      <MapAndAlertsSection
-        profile={profile}
-        alerts={alerts}
-        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-        onViewAllAlerts={() => onNavigate('all-alerts')}
-        alertSectionTitle={`${profile.district ?? 'District'} Alerts`}
-        emptyTitle={`${profile.district ?? 'District'} is Clear`}
-        emptySubtitle="No active health alerts in your district."
-      />
+      {isWidgetVisible('quick_actions') && (
+        <>
+          <Section title="Quick Actions">
+            <View style={styles.qaRow}>
+              <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
+              <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
+              <QuickActionBtn icon="megaphone" label="Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
+              <QuickActionBtn icon="warning" label="Alert" color="#F59E0B" onPress={() => onNavigate('new-alert')} />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('district_tools') && (
+        <>
+          <Section title="District Tools">
+            <ToolCard icon="document-text" iconColor="#4338CA" title="Disease Reports" subtitle="Review, verify & approve disease reports in your district" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
+            <ToolCard icon="water" iconColor="#0891B2" title="Water Quality Reports" subtitle="Review, verify & approve water quality reports in your district" onPress={() => onNavigate('approval-queue:water')} />
+            <ToolCard icon="megaphone" iconColor="#10B981" title="Campaign Management" subtitle="Approve, reject & manage health campaigns in your district" onPress={() => onNavigate('approval-queue:campaigns')} />
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 3. Quick Actions */}
-      <Section title="Quick Actions">
-        <View style={styles.qaRow}>
-          <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
-          <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
-          <QuickActionBtn icon="megaphone" label="Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
-          <QuickActionBtn icon="warning" label="Alert" color="#F59E0B" onPress={() => onNavigate('new-alert')} />
-        </View>
-      </Section>
+      {isWidgetVisible('operations_tools') && (
+        <>
+          <Section title="Operations Intelligence">
+            <ToolCard icon="pulse" iconColor="#0EA5E9" title="District Health Score" subtitle="See your district risk score and response trends" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="analytics" iconColor="#F59E0B" title="Campaign Intelligence" subtitle="Review campaign performance and AI recommendations" onPress={() => onNavigate('campaign-intelligence')} />
+            <ToolCard icon="git-network" iconColor="#EF4444" title="Escalation Monitoring" subtitle="Track district approvals nearing SLA breach" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="options" iconColor="#8B5CF6" title="Customize Widgets" subtitle="Control visibility of dashboard sections" onPress={() => onNavigate('widget-customization')} />
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
-
-      {/* 4. District Management Tools */}
-      <Section title="District Tools">
-        <ToolCard icon="document-text" iconColor="#4338CA" title="Disease Reports" subtitle="Review, verify & approve disease reports in your district" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
-        <ToolCard icon="water" iconColor="#0891B2" title="Water Quality Reports" subtitle="Review, verify & approve water quality reports in your district" onPress={() => onNavigate('approval-queue:water')} />
-        <ToolCard icon="megaphone" iconColor="#10B981" title="Campaign Management" subtitle="Approve, reject & manage health campaigns in your district" onPress={() => onNavigate('approval-queue:campaigns')} />
-      </Section>
-
-      <SectionDivider />
-
-      {/* 5. AI Insights */}
-      <AIInsightsPanel profile={profile} />
+      {isWidgetVisible('ai_insights') && <AIInsightsPanel profile={profile} />}
 
       <View style={{ height: 120 }} />
     </ScrollView>

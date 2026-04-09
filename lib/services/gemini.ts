@@ -2,6 +2,8 @@
 // OPENROUTER AI SERVICE - Direct API implementation
 // =====================================================
 
+import { saveAIInsight } from './mongoService';
+
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
 
@@ -184,7 +186,7 @@ export async function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
         throw new Error('OpenRouter insight JSON parse failed.');
     }
 
-    return {
+    const aiResponse: AIInsight = {
         headline: parsed.headline ?? 'Health Update',
         body: parsed.body ?? '',
         tips: Array.isArray(parsed.tips) ? parsed.tips.slice(0, 3) : [],
@@ -192,6 +194,18 @@ export async function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
         emoji,
         accentColor,
     };
+
+    // Non-blocking secondary persistence (MongoDB). Failures must never impact primary flow.
+    void saveAIInsight({
+        district: ctx.userDistrict ?? null,
+        state: ctx.userState ?? null,
+        scope: ctx.scope,
+        type: 'ai_recommendation',
+        data: aiResponse,
+        created_at: new Date(),
+    });
+
+    return aiResponse;
 }
 
 // -- getChatResponse ----------------------------------------------------------

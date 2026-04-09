@@ -24,10 +24,15 @@ import { Profile } from '../types';
 import ReportsScreen from './screens/ReportsScreen';
 import CampaignsScreen from './screens/CampaignsScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import MapTabScreen from './screens/MapTabScreen';
 import AdminManagementScreen from './screens/AdminManagementScreen';
 import UserManagementScreen from './screens/UserManagementScreen';
 import ApprovalQueueScreen from './screens/ApprovalQueueScreen';
 import AllAlertsScreen from './screens/AllAlertsScreen';
+import CampaignIntelligenceScreen from './screens/CampaignIntelligenceScreen';
+import HealthScoreScreen from './screens/HealthScoreScreen';
+import EscalationMonitoringScreen from './screens/EscalationMonitoringScreen';
+import WidgetCustomizationScreen from './screens/WidgetCustomizationScreen';
 
 // Forms
 import { DiseaseReportForm, WaterQualityReportForm, CampaignForm, AlertForm } from './forms';
@@ -40,17 +45,39 @@ import { DashboardRouter } from './dashboards/DashboardRouter';
 
 const IS_MOBILE = Platform.OS !== 'web';
 
-type TabType = 'home' | 'reports' | 'campaigns' | 'profile';
+type TabType = 'home' | 'map' | 'reports' | 'campaigns' | 'profile';
 type CreateScreenType = 'new-disease-report' | 'new-water-report' | 'new-campaign' | 'new-alert';
-type ScreenType = 'tabs' | CreateScreenType | 'admin-management' | 'user-management' | 'approval-queue' | 'all-alerts';
+type ScreenType =
+  | 'tabs'
+  | CreateScreenType
+  | 'admin-management'
+  | 'user-management'
+  | 'approval-queue'
+  | 'all-alerts'
+  | 'campaign-intelligence'
+  | 'health-score'
+  | 'escalation-monitoring'
+  | 'widget-customization';
+type RestrictedScreenType = Exclude<ScreenType, 'tabs' | CreateScreenType>;
 
-const TAB_ORDER: TabType[] = ['home', 'reports', 'campaigns', 'profile'];
+const TAB_ORDER: TabType[] = ['home', 'map', 'reports', 'campaigns', 'profile'];
 
 const CREATE_PERMISSIONS: Record<CreateScreenType, Profile['role'][]> = {
   'new-disease-report': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker'],
   'new-water-report': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker'],
   'new-campaign': ['super_admin', 'health_admin', 'district_officer', 'asha_worker'],
   'new-alert': ['super_admin', 'health_admin', 'district_officer'],
+};
+
+const SCREEN_PERMISSIONS: Record<RestrictedScreenType, Profile['role'][]> = {
+  'admin-management': ['super_admin', 'health_admin', 'clinic'],
+  'user-management': ['super_admin', 'health_admin'],
+  'approval-queue': ['super_admin', 'health_admin', 'district_officer', 'clinic'],
+  'all-alerts': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'],
+  'campaign-intelligence': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker'],
+  'health-score': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'],
+  'escalation-monitoring': ['super_admin', 'health_admin', 'district_officer', 'clinic'],
+  'widget-customization': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'],
 };
 
 const CREATE_ACTIONS: Array<{
@@ -68,8 +95,28 @@ const CREATE_ACTIONS: Array<{
 const isCreateScreen = (value: string): value is CreateScreenType =>
   value in CREATE_PERMISSIONS;
 
+const isScreenType = (value: string): value is ScreenType =>
+  [
+    'tabs',
+    'new-disease-report',
+    'new-water-report',
+    'new-campaign',
+    'new-alert',
+    'admin-management',
+    'user-management',
+    'approval-queue',
+    'all-alerts',
+    'campaign-intelligence',
+    'health-score',
+    'escalation-monitoring',
+    'widget-customization',
+  ].includes(value);
+
 const canCreateOnRole = (role: Profile['role'], screen: CreateScreenType): boolean =>
   CREATE_PERMISSIONS[screen].includes(role);
+
+const canAccessScreen = (role: Profile['role'], screen: RestrictedScreenType): boolean =>
+  SCREEN_PERMISSIONS[screen].includes(role);
 
 interface MainAppProps {
   profile: Profile;
@@ -159,6 +206,14 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     }
 
     if (formType.startsWith('approval-queue:')) {
+      if (!canAccessScreen(profile.role, 'approval-queue')) {
+        Alert.alert(
+          'Permission Denied',
+          'Your role does not have permission to access the approval queue.'
+        );
+        return;
+      }
+
       const tab = formType.split(':')[1];
       const isApprovalQueueTab = (value: string): value is 'disease' | 'water' | 'campaigns' | 'alerts' =>
         ['disease', 'water', 'campaigns', 'alerts'].includes(value);
@@ -171,6 +226,11 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       }
       setCurrentScreen('approval-queue');
     } else {
+      if (!isScreenType(formType)) {
+        console.error('Invalid navigation target received:', formType);
+        return;
+      }
+
       if (isCreateScreen(formType) && !canCreateOnRole(profile.role, formType)) {
         Alert.alert(
           'Permission Denied',
@@ -178,7 +238,16 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         );
         return;
       }
-      setCurrentScreen(formType as ScreenType);
+
+      if (formType !== 'tabs' && !isCreateScreen(formType) && !canAccessScreen(profile.role, formType)) {
+        Alert.alert(
+          'Permission Denied',
+          'Your role does not have permission to open this screen.'
+        );
+        return;
+      }
+
+      setCurrentScreen(formType);
     }
   };
 
@@ -244,10 +313,43 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       </SafeAreaView>
     );
   }
+  if (currentScreen === 'campaign-intelligence') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <CampaignIntelligenceScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'health-score') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <HealthScoreScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'escalation-monitoring') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <EscalationMonitoringScreen
+          profile={profile}
+          onBack={goBackToTabs}
+          onOpenQueue={(tab) => navigateToForm(`approval-queue:${tab}`)}
+        />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'widget-customization') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <WidgetCustomizationScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
 
   // ── Tab definitions ───────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: keyof typeof Ionicons.glyphMap; activeIcon: keyof typeof Ionicons.glyphMap }[] = [
     { id: 'home',      label: 'Home',      icon: 'home-outline',          activeIcon: 'home' },
+    { id: 'map',       label: 'Map',       icon: 'map-outline',           activeIcon: 'map' },
     { id: 'reports',   label: 'Reports',   icon: 'document-text-outline', activeIcon: 'document-text' },
     { id: 'campaigns', label: 'Campaigns', icon: 'megaphone-outline',     activeIcon: 'megaphone' },
     { id: 'profile',   label: 'Profile',   icon: 'person-outline',        activeIcon: 'person' },
@@ -256,6 +358,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const renderTabContent = () => {
     switch (activeTab) {
       case 'home':      return <DashboardRouter profile={profile} onNavigate={navigateToForm} />;
+      case 'map':       return <MapTabScreen profile={profile} onNavigateToForm={navigateToForm} />;
       case 'reports':   return (
         <ReportsScreen
           profile={profile}
@@ -265,7 +368,15 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         />
       );
       case 'campaigns': return <CampaignsScreen profile={profile} onNavigateToForm={navigateToForm} />;
-      case 'profile':   return <ProfileScreen profile={profile} onSignOut={onSignOut} onProfileUpdate={onProfileUpdate} />;
+      case 'profile':
+        return (
+          <ProfileScreen
+            profile={profile}
+            onSignOut={onSignOut}
+            onProfileUpdate={onProfileUpdate}
+            onNavigateToForm={navigateToForm}
+          />
+        );
       default:          return null;
     }
   };

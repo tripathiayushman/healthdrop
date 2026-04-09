@@ -378,6 +378,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
   const canCreateCampaigns = ['super_admin', 'health_admin', 'district_officer', 'asha_worker'].includes(profile.role);
   const canEnroll = profile.role === 'asha_worker' || profile.role === 'volunteer';
+  const canViewCampaignIntelligence = ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker'].includes(profile.role);
 
   const renderCampaigns = () => {
     if (filteredCampaigns.length === 0) {
@@ -537,8 +538,22 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.accent }]}>
-        <Text style={styles.headerTitle}>Campaigns</Text>
-        <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
+        <View style={styles.headerTopRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>Campaigns</Text>
+            <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
+          </View>
+          {canViewCampaignIntelligence && (
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              onPress={() => onNavigateToForm('campaign-intelligence')}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="analytics" size={15} color="#FFFFFF" />
+              <Text style={styles.headerActionText}>Intelligence</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Tab Buttons */}
@@ -836,6 +851,27 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.8)',
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  headerActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  headerActionText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
   },
   tabContainer: {
     flexDirection: 'row',

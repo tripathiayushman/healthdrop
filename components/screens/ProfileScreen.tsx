@@ -28,6 +28,7 @@ interface ProfileScreenProps {
   profile: Profile;
   onSignOut: () => void;
   onProfileUpdate?: (profile: Profile) => void;
+  onNavigateToForm?: (formType: string) => void;
 }
 
 const WEB_BACKDROP_STYLE: ViewStyle | undefined = Platform.OS === 'web'
@@ -37,7 +38,12 @@ const WEB_BACKDROP_STYLE: ViewStyle | undefined = Platform.OS === 'web'
     } as React.CSSProperties as unknown as ViewStyle)
   : undefined;
 
-const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onProfileUpdate }) => {
+const ProfileScreen: React.FC<ProfileScreenProps> = ({
+  profile,
+  onSignOut,
+  onProfileUpdate,
+  onNavigateToForm,
+}) => {
   const { colors, isDark, toggleTheme } = useTheme();
   const modalSurfaceColor = isDark ? '#1A1A1A' : '#FFFFFF';
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -326,6 +332,15 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
     );
   };
 
+  const handleOpenWidgetCustomization = () => {
+    if (!onNavigateToForm) {
+      Alert.alert('Unavailable', 'Widget customization is not available in this context.');
+      return;
+    }
+
+    onNavigateToForm('widget-customization');
+  };
+
   interface MenuItem {
     iconName: string;
     iconFamily: 'ionicons' | 'material';
@@ -352,6 +367,12 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSignOut, onPro
     {
       section: 'Preferences',
       items: [
+        {
+          iconName: 'grid',
+          iconFamily: 'ionicons',
+          label: 'Customize Widgets',
+          action: handleOpenWidgetCustomization,
+        },
         { 
           iconName: isDark ? 'moon' : 'sunny', 
           iconFamily: 'ionicons',

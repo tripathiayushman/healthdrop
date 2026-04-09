@@ -12,11 +12,13 @@ import { DashboardHeader, Section, StatCard, AlertCard, EmptyState, SectionDivid
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
+  const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ alerts: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -50,65 +52,96 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
     >
       <DashboardHeader profile={profile} subtitle="Community Health Volunteer" />
 
-      {/* 1. Map + Alerts side by side */}
-      <MapAndAlertsSection
-        profile={profile}
-        alerts={alerts}
-        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-        onViewAllAlerts={() => onNavigate('all-alerts')}
-        alertSectionTitle="Active Health Alerts"
-        emptyTitle="No Active Alerts"
-        emptySubtitle="Your community is safe! No health alerts at this time."
-      />
+      {isWidgetVisible('alerts_map') && (
+        <>
+          <MapAndAlertsSection
+            profile={profile}
+            alerts={alerts}
+            onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+            onViewAllAlerts={() => onNavigate('all-alerts')}
+            alertSectionTitle="Active Health Alerts"
+            emptyTitle="No Active Alerts"
+            emptySubtitle="Your community is safe! No health alerts at this time."
+          />
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
-
-      {/* 2. AI Insights */}
-      <AIInsightsPanel profile={profile} />
-
-      <SectionDivider />
-
-      {/* 3. Active Campaigns */}
-      <Section title="Active Campaigns" action={{ label: 'Browse All', onPress: () => {} }}>
-        {campaigns.length === 0
-          ? <EmptyState icon="megaphone-outline" color="#16A34A" title="No Active Campaigns" subtitle="Check back soon for health campaigns near you." />
-          : campaigns.map(c => (
-            <TouchableOpacity key={c.id} style={[styles.campaignCard, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.78}>
-              <View style={[styles.campaignIconWrap, { backgroundColor: '#16A34A18' }]}>
-                <Ionicons name="megaphone" size={20} color="#16A34A" />
-              </View>
-              <View style={styles.campaignInfo}>
-                <Text style={[styles.campaignTitle, { color: colors.text }]} numberOfLines={1}>
-                  {c.campaign_name || c.title || c.name || 'Untitled Campaign'}
-                </Text>
-                <Text style={[styles.campaignDesc, { color: colors.textSecondary }]} numberOfLines={2}>{c.description}</Text>
-                <View style={styles.campaignMeta}>
-                  {c.district && <>
-                    <Ionicons name="location-outline" size={11} color={colors.textSecondary} />
-                    <Text style={[styles.campaignMetaText, { color: colors.textSecondary }]}>{c.district}</Text>
-                  </>}
-                  {c.campaign_type && (
-                    <View style={[styles.typePill, { backgroundColor: colors.primaryLight }]}>
-                      <Text style={[styles.typeText, { color: colors.primary }]}>{c.campaign_type.replace('_', ' ')}</Text>
-                    </View>
-                  )}
-                </View>
+      {isWidgetVisible('operations_tools') && (
+        <>
+          <Section title="Operations Intelligence">
+            <TouchableOpacity style={[styles.actionTile, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => onNavigate('health-score')}>
+              <Ionicons name="pulse" size={18} color="#0EA5E9" />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionTitle, { color: colors.text }]}>District Health Score</Text>
+                <Text style={[styles.actionSubtitle, { color: colors.textSecondary }]}>Track your district risk and health score trend.</Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
             </TouchableOpacity>
-          ))
-        }
-      </Section>
+            <TouchableOpacity style={[styles.actionTile, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => onNavigate('widget-customization')}>
+              <Ionicons name="options" size={18} color="#8B5CF6" />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionTitle, { color: colors.text }]}>Customize Widgets</Text>
+                <Text style={[styles.actionSubtitle, { color: colors.textSecondary }]}>Choose which dashboard widgets remain visible.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('ai_insights') && (
+        <>
+          <AIInsightsPanel profile={profile} />
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 4. Community Stats */}
-      <Section title="Community Overview">
-        <View style={styles.statsRow}>
-          <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
-          <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#16A34A" />
-        </View>
-      </Section>
+      {isWidgetVisible('campaigns') && (
+        <>
+          <Section title="Active Campaigns">
+            {campaigns.length === 0
+              ? <EmptyState icon="megaphone-outline" color="#16A34A" title="No Active Campaigns" subtitle="Check back soon for health campaigns near you." />
+              : campaigns.map(c => (
+                <TouchableOpacity key={c.id} style={[styles.campaignCard, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.78}>
+                  <View style={[styles.campaignIconWrap, { backgroundColor: '#16A34A18' }]}>
+                    <Ionicons name="megaphone" size={20} color="#16A34A" />
+                  </View>
+                  <View style={styles.campaignInfo}>
+                    <Text style={[styles.campaignTitle, { color: colors.text }]} numberOfLines={1}>
+                      {c.campaign_name || c.title || c.name || 'Untitled Campaign'}
+                    </Text>
+                    <Text style={[styles.campaignDesc, { color: colors.textSecondary }]} numberOfLines={2}>{c.description}</Text>
+                    <View style={styles.campaignMeta}>
+                      {c.district && <>
+                        <Ionicons name="location-outline" size={11} color={colors.textSecondary} />
+                        <Text style={[styles.campaignMetaText, { color: colors.textSecondary }]}>{c.district}</Text>
+                      </>}
+                      {c.campaign_type && (
+                        <View style={[styles.typePill, { backgroundColor: colors.primaryLight }]}>
+                          <Text style={[styles.typeText, { color: colors.primary }]}>{c.campaign_type.replace('_', ' ')}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
+              ))
+            }
+          </Section>
+          <SectionDivider />
+        </>
+      )}
+
+      {isWidgetVisible('community_stats') && (
+        <Section title="Community Overview">
+          <View style={styles.statsRow}>
+            <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
+            <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#16A34A" />
+          </View>
+        </Section>
+      )}
 
       {/* Volunteer info banner */}
       <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
@@ -135,6 +168,24 @@ const styles = StyleSheet.create({
   campaignMetaText: { fontSize: 11 },
   typePill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
   typeText: { fontSize: 10, fontWeight: '700' },
+  actionTile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+  },
+  actionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  actionSubtitle: {
+    marginTop: 2,
+    fontSize: 11,
+  },
 });
 
 export default VolunteerDashboard;

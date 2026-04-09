@@ -3,6 +3,7 @@
 // =====================================================
 import { supabase } from '../supabase';
 import { Notification, NotificationType, NotificationPriority, ApiResponse } from '../../types';
+import { pushNotification, logAuditEvent } from './mongoService';
 
 interface SendAlertPushNotificationsOptions {
   alertId?: string;
@@ -184,6 +185,18 @@ export const notificationsService = {
 
       if (error) throw error;
 
+      // Optional non-blocking notification stream mirror to MongoDB.
+      void pushNotification({
+        user_id: notification.userId || null,
+        message: notification.message,
+        read: false,
+        created_at: new Date(),
+        type: notification.type,
+        title: notification.title,
+        target_role: notification.targetRole || null,
+        target_district: notification.targetDistrict || null,
+      });
+
       return { data: data as Notification, error: null };
     } catch (error: any) {
       console.error('Error creating notification:', error);
@@ -315,12 +328,32 @@ export const notificationsService = {
   // Delete notification
   async delete(id: string): Promise<ApiResponse<null>> {
     try {
+      const actor = await supabase.auth.getUser();
+      const actorId = actor.data.user?.id ?? null;
+
+      const { data: existing } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('id', id)
+        .single();
+
       const { error } = await supabase
         .from('notifications')
         .delete()
         .eq('id', id);
 
       if (error) throw error;
+
+      // Optional non-blocking audit mirror to MongoDB.
+      void logAuditEvent({
+        user_id: actorId,
+        action_type: 'delete',
+        table_name: 'notifications',
+        record_id: id,
+        old_value: existing ?? null,
+        new_value: null,
+        created_at: new Date(),
+      });
 
       return { data: null, error: null };
     } catch (error: any) {

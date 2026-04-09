@@ -14,11 +14,13 @@ import {
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
+  const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ myReports: 0, districtAlerts: 0, pendingReports: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -68,51 +70,70 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
     >
       <DashboardHeader profile={profile} />
 
-      {/* 1. Quick Actions — Report only (no campaign/alert creation for clinic) */}
-      <Section title="Quick Actions" style={{ marginTop: 16 }}>
-        <View style={styles.qaRow}>
-          <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
-          <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
-          <QuickActionBtn icon="checkmark-done" label="Review Queue" color="#10B981" onPress={() => onNavigate('approval-queue:disease')} />
-        </View>
-      </Section>
+      {isWidgetVisible('quick_actions') && (
+        <>
+          <Section title="Quick Actions" style={{ marginTop: 16 }}>
+            <View style={styles.qaRow}>
+              <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
+              <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
+              <QuickActionBtn icon="checkmark-done" label="Review Queue" color="#10B981" onPress={() => onNavigate('approval-queue:disease')} />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('approval_tools') && (
+        <>
+          <Section title="Clinic Approval Tools">
+            <ToolCard icon="medkit" iconColor="#EF4444" title="Disease Reports" subtitle="Verify and approve submitted disease reports" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
+            <ToolCard icon="water" iconColor="#3B82F6" title="Water Quality Reports" subtitle="Verify and approve water quality submissions" onPress={() => onNavigate('approval-queue:water')} />
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 2. Approval Tools — clinic verifies/approves disease & water reports */}
-      <Section title="Clinic Approval Tools">
-        <ToolCard icon="medkit" iconColor="#EF4444" title="Disease Reports" subtitle="Verify and approve submitted disease reports" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
-        <ToolCard icon="water" iconColor="#3B82F6" title="Water Quality Reports" subtitle="Verify and approve water quality submissions" onPress={() => onNavigate('approval-queue:water')} />
-      </Section>
+      {isWidgetVisible('overview_stats') && (
+        <>
+          <Section title="Your Activity">
+            <View style={styles.statsRow}>
+              <StatCard label="My Reports" value={stats.myReports} icon="document-text" color="#6D28D9" />
+              <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
+              <StatCard label="District Alerts" value={stats.districtAlerts} icon="warning" color="#F59E0B" />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('alerts_map') && (
+        <>
+          <MapAndAlertsSection
+            profile={profile}
+            alerts={alerts}
+            onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+            onViewAllAlerts={() => onNavigate('all-alerts')}
+            alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
+            emptyTitle="District is Clear"
+            emptySubtitle="No active health alerts in your district."
+          />
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 3. Activity Stats */}
-      <Section title="Your Activity">
-        <View style={styles.statsRow}>
-          <StatCard label="My Reports" value={stats.myReports} icon="document-text" color="#6D28D9" />
-          <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
-          <StatCard label="District Alerts" value={stats.districtAlerts} icon="warning" color="#F59E0B" />
-        </View>
-      </Section>
+      {isWidgetVisible('operations_tools') && (
+        <>
+          <Section title="Operations Intelligence">
+            <ToolCard icon="pulse" iconColor="#0EA5E9" title="District Health Score" subtitle="View district health score and response indicators" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="analytics" iconColor="#F59E0B" title="Campaign Intelligence" subtitle="Track campaign effectiveness for your district" onPress={() => onNavigate('campaign-intelligence')} />
+            <ToolCard icon="git-network" iconColor="#EF4444" title="Escalation Monitoring" subtitle="Monitor pending approvals crossing escalation windows" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="options" iconColor="#8B5CF6" title="Customize Widgets" subtitle="Tailor the dashboard modules visible to you" onPress={() => onNavigate('widget-customization')} />
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
-
-      {/* 4. Map + District Alerts side by side */}
-      <MapAndAlertsSection
-        profile={profile}
-        alerts={alerts}
-        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-        onViewAllAlerts={() => onNavigate('all-alerts')}
-        alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
-        emptyTitle="District is Clear"
-        emptySubtitle="No active health alerts in your district."
-      />
-
-      <SectionDivider />
-
-      {/* 5. AI Insights */}
-      <AIInsightsPanel profile={profile} />
+      {isWidgetVisible('ai_insights') && <AIInsightsPanel profile={profile} />}
 
       <View style={{ height: 120 }} />
     </ScrollView>

@@ -4,22 +4,30 @@
 // =====================================================
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Animated, Platform,
+  View, Text, StyleSheet, TouchableOpacity, Animated, Platform, ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { Profile } from '../../types';
+import { Profile, TrendData } from '../../types';
 import { getAIInsights, AIInsight, InsightContext, InsightScope } from '../../lib/services/gemini';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import TrendChart from '../charts/TrendChart';
 
 interface AIInsightsPanelProps { profile: Profile }
 
 interface RawAlert    { title: string; urgency_level: string; disease_or_issue?: string; description: string; district: string }
 interface RawDisease  { disease_name?: string; severity?: string; district: string; symptoms?: string }
 interface RawWater    { overall_quality?: string; ph_level?: number; source_name?: string; district: string }
+interface TrendSourceRow {
+  created_at: string;
+  cases_count?: number | null;
+  district?: string | null;
+}
+
+const DISTRICT_SCOPED_ROLES: Profile['role'][] = ['district_officer', 'clinic', 'asha_worker', 'volunteer'];
 
 // Scope icon mapping (Ionicons)
 const SCOPE_ICON: Record<InsightScope, keyof typeof Ionicons.glyphMap> = {
@@ -54,6 +62,8 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [scope, setScope] = useState<InsightScope>('global');
+  const [trendData, setTrendData] = useState<TrendData[]>([]);
+  const [trendLoading, setTrendLoading] = useState(true);
 
   const shimmerAnim = useRef(new Animated.Value(0)).current;
 
@@ -146,7 +156,79 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
     }
   };
 
-  useEffect(() => { loadInsights(); }, [profile.district, profile.state]);
+  const loadTrendData = async () => {
+    setTrendLoading(true);
+    try {
+      const useDistrictScope = DISTRICT_SCOPED_ROLES.includes(profile.role);
+      const district = (profile.district || '').trim();
+
+      let trendQuery = supabase
+        .from('disease_reports')
+        .select('created_at,cases_count,district')
+        .eq('approval_status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      if (useDistrictScope && district && district.toLowerCase() !== 'not specified') {
+        trendQuery = trendQuery.eq('district', district);
+      }
+
+      const { data, error } = await trendQuery;
+      if (error || !data) {
+        setTrendData([]);
+        return;
+      }
+
+      const rows = data as TrendSourceRow[];
+      const dailyTotals = new Map<string, number>();
+
+      rows.forEach((row) => {
+        const dayKey = String(row.created_at || '').slice(0, 10);
+        if (!dayKey) return;
+
+        const count = typeof row.cases_count === 'number' && Number.isFinite(row.cases_count)
+          ? Math.max(0, row.cases_count)
+          : 0;
+
+        dailyTotals.set(dayKey, (dailyTotals.get(dayKey) ?? 0) + count);
+      });
+
+      const sortedSeries = Array.from(dailyTotals.entries())
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .slice(-14);
+
+      const chartRows: TrendData[] = sortedSeries.map(([reportDate, totalCases], index) => {
+        const movingWindow = sortedSeries.slice(Math.max(0, index - 2), index + 1);
+        const movingAverage = movingWindow.reduce((sum, [, value]) => sum + value, 0) / movingWindow.length;
+        const previousCases = index > 0 ? sortedSeries[index - 1][1] : totalCases;
+
+        return {
+          district: useDistrictScope && district ? district : 'All Districts',
+          disease_name: 'All Diseases',
+          report_date: reportDate,
+          total_cases: totalCases,
+          moving_avg: Number.isFinite(movingAverage) ? Math.round(movingAverage) : totalCases,
+          prev_cases: previousCases,
+        };
+      });
+
+      setTrendData(chartRows);
+    } catch {
+      setTrendData([]);
+    } finally {
+      setTrendLoading(false);
+    }
+  };
+
+  const refreshPanel = () => {
+    loadInsights();
+    loadTrendData();
+  };
+
+  useEffect(() => {
+    loadInsights();
+    loadTrendData();
+  }, [profile.role, profile.district, profile.state]);
 
   const toggleExpand = () => setExpanded(v => !v);
 
@@ -161,6 +243,9 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   const cardBg = isDark ? 'rgba(18,18,22,0.88)' : '#FFFFFF';
   const cardBorder = isDark ? 'rgba(255,255,255,0.12)' : (colors.primary + '30');
   const cardTopBorder = colors.primary;
+  const trendScopeLabel = DISTRICT_SCOPED_ROLES.includes(profile.role) && profile.district
+    ? `${profile.district} district trend (last 14 days)`
+    : 'All districts trend (last 14 days)';
 
   return (
     <View style={styles.section}>
@@ -172,8 +257,8 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
           </View>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Health Insights</Text>
         </View>
-        <TouchableOpacity onPress={loadInsights} disabled={loading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="refresh" size={17} color={loading ? colors.textSecondary : colors.primary} />
+        <TouchableOpacity onPress={refreshPanel} disabled={loading || trendLoading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="refresh" size={17} color={loading || trendLoading ? colors.textSecondary : colors.primary} />
         </TouchableOpacity>
       </View>
 
@@ -255,6 +340,30 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
           </View>
         )}
       </View>
+
+      <View style={[styles.trendCard, {
+        backgroundColor: cardBg,
+        borderColor: cardBorder,
+      }]}>
+        <View style={styles.trendHeaderRow}>
+          <View style={[styles.trendIconWrap, { backgroundColor: '#F59E0B1A' }]}>
+            <Ionicons name="stats-chart" size={16} color="#F59E0B" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.trendTitle, { color: colors.text }]}>Disease Trend</Text>
+            <Text style={[styles.trendSubtitle, { color: colors.textSecondary }]}>{trendScopeLabel}</Text>
+          </View>
+        </View>
+
+        {trendLoading ? (
+          <View style={styles.trendLoadingWrap}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={[styles.trendLoadingText, { color: colors.textSecondary }]}>Loading trend data...</Text>
+          </View>
+        ) : (
+          <TrendChart data={trendData} maxPoints={10} />
+        )}
+      </View>
     </View>
   );
 };
@@ -299,6 +408,30 @@ const styles = StyleSheet.create({
 
   errorState: { alignItems: 'center', paddingVertical: 14, gap: 8 },
   errorText: { fontSize: 13, textAlign: 'center', lineHeight: 18 },
+
+  trendCard: {
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  trendHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  trendIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trendTitle: { fontSize: 14, fontWeight: '700' },
+  trendSubtitle: { fontSize: 11, marginTop: 1 },
+  trendLoadingWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 20, gap: 8 },
+  trendLoadingText: { fontSize: 12 },
 });
 
 export default AIInsightsPanel;

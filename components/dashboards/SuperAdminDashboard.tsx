@@ -14,11 +14,13 @@ import {
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
+import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
+  const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, users: 0, pendingFeedback: 0, pendingApprovals: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -68,59 +70,80 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
     >
       <DashboardHeader profile={profile} />
 
-      {/* 1. Admin Panel — TOP PRIORITY */}
-      <Section title="Admin Panel" style={{ marginTop: 16 }}>
-        <ToolCard icon="people" iconColor="#42A5F5" title="User Management" subtitle="Create, edit, deactivate users & manage roles" onPress={() => onNavigate('user-management')} />
-        <ToolCard icon="shield-checkmark" iconColor="#A78BFA" title="Approval Queue" subtitle="Review pending reports & campaigns" onPress={() => onNavigate('approval-queue')} badge={stats.pendingApprovals} />
-        {stats.pendingFeedback > 0 && (
-          <ToolCard icon="chatbox-ellipses" iconColor="#FB923C" title="User Feedback" subtitle="Pending feedback awaiting review" onPress={() => onNavigate('approval-queue')} badge={stats.pendingFeedback} />
-        )}
-      </Section>
+      {isWidgetVisible('admin_panel') && (
+        <>
+          <Section title="Admin Panel" style={{ marginTop: 16 }}>
+            <ToolCard icon="people" iconColor="#42A5F5" title="User Management" subtitle="Create, edit, deactivate users & manage roles" onPress={() => onNavigate('user-management')} />
+            <ToolCard icon="shield-checkmark" iconColor="#A78BFA" title="Approval Queue" subtitle="Review pending reports & campaigns" onPress={() => onNavigate('approval-queue')} badge={stats.pendingApprovals} />
+            {stats.pendingFeedback > 0 && (
+              <ToolCard icon="chatbox-ellipses" iconColor="#FB923C" title="User Feedback" subtitle="Pending feedback awaiting review" onPress={() => onNavigate('approval-queue')} badge={stats.pendingFeedback} />
+            )}
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('overview_stats') && (
+        <>
+          <Section title="System Overview">
+            <View style={styles.statsRow}>
+              <StatCard label="Active Users" value={stats.users} icon="people" color="#42A5F5" />
+              <StatCard label="Disease Reports" value={stats.disease} icon="bar-chart" color="#EF4444" />
+              <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
+            </View>
+            <View style={[styles.statsRow, { marginTop: 8 }]}>
+              <StatCard label="Water Reports" value={stats.water} icon="water" color="#3B82F6" />
+              <StatCard label="Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 2. System Stats */}
-      <Section title="System Overview">
-        <View style={styles.statsRow}>
-          <StatCard label="Active Users" value={stats.users} icon="people" color="#42A5F5" />
-          <StatCard label="Disease Reports" value={stats.disease} icon="bar-chart" color="#EF4444" />
-          <StatCard label="Active Alerts" value={stats.alerts} icon="warning" color="#F59E0B" />
-        </View>
-        <View style={[styles.statsRow, { marginTop: 8 }]}>
-          <StatCard label="Water Reports" value={stats.water} icon="water" color="#3B82F6" />
-          <StatCard label="Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
-        </View>
-      </Section>
+      {isWidgetVisible('quick_actions') && (
+        <>
+          <Section title="Quick Actions">
+            <View style={styles.qaRow}>
+              <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
+              <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
+              <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
+              <QuickActionBtn icon="warning" label="Send Alert" color="#F59E0B" onPress={() => onNavigate('new-alert')} />
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
+      {isWidgetVisible('operations_tools') && (
+        <>
+          <Section title="Operations Intelligence">
+            <ToolCard icon="pulse" iconColor="#0EA5E9" title="District Health Score" subtitle="Monitor district risk ranking and response health" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="analytics" iconColor="#F59E0B" title="Campaign Intelligence" subtitle="Track campaign impact, performance, and AI recommendations" onPress={() => onNavigate('campaign-intelligence')} />
+            <ToolCard icon="git-network" iconColor="#EF4444" title="Escalation Monitoring" subtitle="Watch pending approvals crossing escalation thresholds" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="options" iconColor="#8B5CF6" title="Customize Widgets" subtitle="Control which dashboard widgets are visible" onPress={() => onNavigate('widget-customization')} />
+          </Section>
+          <SectionDivider />
+        </>
+      )}
 
-      {/* 3. Quick Actions */}
-      <Section title="Quick Actions">
-        <View style={styles.qaRow}>
-          <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
-          <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
-          <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
-          <QuickActionBtn icon="warning" label="Send Alert" color="#F59E0B" onPress={() => onNavigate('new-alert')} />
-        </View>
-      </Section>
+      {isWidgetVisible('ai_insights') && (
+        <>
+          <AIInsightsPanel profile={profile} />
+          <SectionDivider />
+        </>
+      )}
 
-      <SectionDivider />
-
-      {/* 4. AI Insights */}
-      <AIInsightsPanel profile={profile} />
-
-      <SectionDivider />
-
-      {/* 5. Map + Alerts side by side */}
-      <MapAndAlertsSection
-        profile={profile}
-        alerts={alerts}
-        onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-        onViewAllAlerts={() => onNavigate('all-alerts')}
-        alertSectionTitle="Active Alerts"
-        emptyTitle="No Active Alerts"
-        emptySubtitle="All systems are clear. No health alerts at this time."
-      />
+      {isWidgetVisible('alerts_map') && (
+        <MapAndAlertsSection
+          profile={profile}
+          alerts={alerts}
+          onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+          onViewAllAlerts={() => onNavigate('all-alerts')}
+          alertSectionTitle="Active Alerts"
+          emptyTitle="No Active Alerts"
+          emptySubtitle="All systems are clear. No health alerts at this time."
+        />
+      )}
 
       <View style={{ height: 120 }} />
     </ScrollView>

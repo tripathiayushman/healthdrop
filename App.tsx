@@ -18,6 +18,32 @@ import MainApp from './components/MainApp';
 const OFFLINE_SYNC_ENABLED =
   String(process.env.EXPO_PUBLIC_OFFLINE_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
 
+const VALID_ROLES: Profile['role'][] = [
+  'super_admin',
+  'health_admin',
+  'district_officer',
+  'clinic',
+  'asha_worker',
+  'volunteer',
+];
+
+const LEGACY_ROLE_MAP: Record<string, Profile['role']> = {
+  admin: 'health_admin',
+};
+
+const normalizeProfileRole = (role: unknown): Profile['role'] => {
+  if (typeof role !== 'string') {
+    return 'volunteer';
+  }
+
+  const normalized = role.trim().toLowerCase();
+  const mappedRole = LEGACY_ROLE_MAP[normalized] ?? normalized;
+
+  return VALID_ROLES.includes(mappedRole as Profile['role'])
+    ? (mappedRole as Profile['role'])
+    : 'volunteer';
+};
+
 function AppContent() {
   const { colors } = useTheme();
   const [session, setSession] = useState<Session | null>(null);
@@ -81,7 +107,7 @@ function AppContent() {
     };
   }, []);
 
-  const fetchProfile = async (userId: string, retryCount = 0) => {
+  const fetchProfile = async (userId: string, retryCount = 0): Promise<void> => {
     try {
       // Wait a bit for the profile to be created
       await new Promise(resolve => setTimeout(resolve, retryCount === 0 ? 500 : 1000));
@@ -100,6 +126,34 @@ function AppContent() {
           return fetchProfile(userId, retryCount + 1);
         }
       } else if (data) {
+        const normalizedRole = normalizeProfileRole((data as any).role);
+        const normalizedProfile = {
+          ...data,
+          role: normalizedRole,
+        } as Profile;
+
+        if ((data as any).role !== normalizedRole) {
+          console.warn('[Auth] Normalized legacy profile role', {
+            userId,
+            from: (data as any).role,
+            to: normalizedRole,
+          });
+
+          // Best-effort persistence so legacy users are migrated once and permanently fixed.
+          supabase
+            .from('profiles')
+            .update({ role: normalizedRole, updated_at: new Date().toISOString() })
+            .eq('id', userId)
+            .then(({ error: roleUpdateError }) => {
+              if (roleUpdateError) {
+                console.warn('[Auth] Failed to persist normalized role', {
+                  userId,
+                  roleUpdateError,
+                });
+              }
+            });
+        }
+
         // Block deactivated / deleted users
         if (!data.is_active) {
           console.warn('[Auth] Deactivated user tried to login:', userId);
@@ -112,7 +166,8 @@ function AppContent() {
           );
           return;
         }
-        setProfile(data);
+
+        setProfile(normalizedProfile);
         // Register Expo push token silently after login (physical device only)
         registerPushToken();
       } else {

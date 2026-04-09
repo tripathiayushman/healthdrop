@@ -269,11 +269,11 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   // ==================== USER MANAGEMENT FUNCTIONS ====================
   const handleUpdateUserRole = async (userId: string, newRole: string) => {
-    // Prevent admin from changing their own role
-    if (userId === profile.id && newRole !== 'admin') {
+    // Prevent users from changing their own role to avoid lockout.
+    if (userId === profile.id && newRole !== profile.role) {
       setConfirmAction({
         title: 'Warning',
-        message: 'You cannot change your own role from admin. Ask another admin to do this.',
+        message: 'You cannot change your own role. Ask another administrator to do this.',
         onConfirm: async () => setShowConfirmModal(false),
         type: 'warning',
       });
@@ -596,7 +596,9 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   const getRoleColor = (role: string) => {
     const roleColors: Record<string, string> = {
-      admin: '#EF4444',
+      super_admin: '#EF4444',
+      health_admin: '#F97316',
+      district_officer: '#6366F1',
       clinic: '#3B82F6',
       asha_worker: '#10B981',
       volunteer: '#8B5CF6',
@@ -606,7 +608,9 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   const getRoleIcon = (role: string) => {
     const icons: Record<string, string> = {
-      admin: 'shield-checkmark',
+      super_admin: 'shield-checkmark',
+      health_admin: 'medkit',
+      district_officer: 'business',
       clinic: 'medical',
       asha_worker: 'heart',
       volunteer: 'hand-left',
@@ -1136,7 +1140,9 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
   };
 
   const roles = [
-    { value: 'admin', label: 'Administrator' },
+    { value: 'super_admin', label: 'Super Administrator' },
+    { value: 'health_admin', label: 'Health Administrator' },
+    { value: 'district_officer', label: 'District Officer' },
     { value: 'clinic', label: 'Clinic Staff' },
     { value: 'asha_worker', label: 'ASHA Worker' },
     { value: 'volunteer', label: 'Volunteer' },
@@ -1282,11 +1288,11 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                           backgroundColor: selectedUser.role === role.value ? getRoleColor(role.value) + '20' : colors.background,
                           borderColor: selectedUser.role === role.value ? getRoleColor(role.value) : colors.border,
                         },
-                        // Disable non-admin roles for self
-                        (selectedUser.id === profile.id && role.value !== 'admin') && { opacity: 0.5 },
+                        // Disable role changes for self
+                        (selectedUser.id === profile.id && role.value !== profile.role) && { opacity: 0.5 },
                       ]}
                       onPress={() => handleUpdateUserRole(selectedUser.id, role.value)}
-                      disabled={selectedUser.role === role.value || (selectedUser.id === profile.id && role.value !== 'admin')}
+                      disabled={selectedUser.role === role.value || (selectedUser.id === profile.id && role.value !== profile.role)}
                     >
                       <Ionicons name={getRoleIcon(role.value) as any} size={20} color={getRoleColor(role.value)} />
                       <Text style={[styles.roleOptionText, { color: getRoleColor(role.value) }]}>{role.label}</Text>
