@@ -12,6 +12,7 @@ type MongoGlobalCache = {
   __healthdropMongoClient?: MongoClient | null;
   __healthdropMongoDb?: Db | null;
   __healthdropMongoConnectPromise?: Promise<Db | null> | null;
+  __healthdropMongoUnsupportedLogged?: boolean;
 };
 
 const mongoGlobal = globalThis as typeof globalThis & MongoGlobalCache;
@@ -24,8 +25,51 @@ function getMongoUri(): string {
   return uri || DEFAULT_MONGO_URI;
 }
 
+function canUseNodeMongoDriver(): boolean {
+  const runtimeNavigator = (globalThis as any)?.navigator;
+  if (runtimeNavigator?.product === 'ReactNative') {
+    return false;
+  }
+
+  if (typeof (globalThis as any)?.window !== 'undefined') {
+    return false;
+  }
+
+  const proc = (globalThis as any)?.process;
+  return Boolean(proc?.versions?.node);
+}
+
+function getNodeRequire(): ((id: string) => any) | null {
+  const candidate = (globalThis as any)?.require;
+  if (typeof candidate === 'function') {
+    return candidate as (id: string) => any;
+  }
+
+  try {
+    // Intentionally avoid static require/import so Metro does not bundle Node-only modules.
+    return Function('return require')() as (id: string) => any;
+  } catch {
+    return null;
+  }
+}
+
 async function createMongoClient(): Promise<MongoClient> {
-  const mongodb = await import('mongodb');
+  const nodeRequire = getNodeRequire();
+  if (!nodeRequire) {
+    throw new Error('Node require() is unavailable in this runtime.');
+  }
+
+  const mongodb = nodeRequire('mongodb') as {
+    MongoClient: new (
+      uri: string,
+      options?: {
+        connectTimeoutMS?: number;
+        serverSelectionTimeoutMS?: number;
+        maxPoolSize?: number;
+      }
+    ) => MongoClient;
+  };
+
   const client = new mongodb.MongoClient(getMongoUri(), {
     connectTimeoutMS: 4000,
     serverSelectionTimeoutMS: 4000,
@@ -36,6 +80,14 @@ async function createMongoClient(): Promise<MongoClient> {
 }
 
 export async function connectMongo(): Promise<Db | null> {
+  if (!canUseNodeMongoDriver()) {
+    if (!mongoGlobal.__healthdropMongoUnsupportedLogged) {
+      console.info('[Mongo] Skipping direct MongoDB connection in non-Node runtime.');
+      mongoGlobal.__healthdropMongoUnsupportedLogged = true;
+    }
+    return null;
+  }
+
   if (mongoGlobal.__healthdropMongoDb) {
     return mongoGlobal.__healthdropMongoDb;
   }
