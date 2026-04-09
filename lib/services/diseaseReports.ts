@@ -6,6 +6,33 @@ import { DiseaseReport, DiseaseReportInput, ReportStatus, ApiResponse } from '..
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 
+const LEGACY_SCHEMA_FALLBACK_PATTERNS = [
+  'client_idempotency_key',
+  'on conflict',
+  'no unique or exclusion constraint',
+  'constraint matching the on conflict specification',
+] as const;
+
+const isLegacySchemaConflict = (message: string): boolean => {
+  const lower = message.toLowerCase();
+  return LEGACY_SCHEMA_FALLBACK_PATTERNS.some((token) => lower.includes(token));
+};
+
+const normalizeSubmitErrorMessage = (error: unknown): string => {
+  const message = String((error as any)?.message ?? error ?? '').trim();
+  const lower = message.toLowerCase();
+
+  if (lower.includes('row-level security') || lower.includes('permission denied')) {
+    return 'You do not have permission to submit reports yet. Please ask admin to run database_structure/FIX_REPORT_SUBMISSION_RLS.sql in Supabase SQL Editor.';
+  }
+
+  if (lower.includes('created_by')) {
+    return 'Database trigger mismatch detected (created_by vs reporter_id). Please run database_structure/FIX_REPORT_SUBMISSION_RLS.sql in Supabase SQL Editor.';
+  }
+
+  return message || 'Failed to submit report. Please try again.';
+};
+
 export const diseaseReportsService = {
   // Get all disease reports with pagination and filters
   async getAll(options?: {
@@ -88,7 +115,7 @@ export const diseaseReportsService = {
 
       // Check connectivity
       const net = await NetInfo.fetch();
-      const isOnline = net.isConnected && net.isInternetReachable;
+      const isOnline = net.isConnected === true && net.isInternetReachable !== false;
 
       if (!isOnline) {
         // Queue for later sync
@@ -96,23 +123,33 @@ export const diseaseReportsService = {
         return { data: null, error: null, queued: true, localId };
       }
 
-      // Online: upsert with idempotency key to prevent duplicates on retry
+      // Online: prefer idempotent upsert, then fallback to plain insert for legacy schemas.
       const idempotencyKey = `dr_${user.id}_${Date.now()}`;
-      const { data, error } = await supabase
+      const withIdempotency = { ...payload, client_idempotency_key: idempotencyKey };
+
+      let { data, error } = await supabase
         .from('disease_reports')
-        .upsert(
-          { ...payload, client_idempotency_key: idempotencyKey },
-          { onConflict: 'client_idempotency_key', ignoreDuplicates: true }
-        )
+        .upsert(withIdempotency, { onConflict: 'client_idempotency_key', ignoreDuplicates: true })
         .select()
         .single();
+
+      if (error && isLegacySchemaConflict(String(error.message ?? ''))) {
+        const fallback = await supabase
+          .from('disease_reports')
+          .insert(payload)
+          .select()
+          .single();
+
+        data = fallback.data;
+        error = fallback.error;
+      }
 
       if (error) throw error;
 
       return { data: data as DiseaseReport, error: null, queued: false };
     } catch (error: any) {
       console.error('Error creating disease report:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: normalizeSubmitErrorMessage(error) };
     }
   },
 

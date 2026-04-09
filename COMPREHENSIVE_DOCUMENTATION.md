@@ -1,6 +1,6 @@
 # HealthDrop Surveillance System — Comprehensive Documentation
 
-> **Last Updated:** 2026-04-09 (Session 46)
+> **Last Updated:** 2026-04-09 (Session 47)
 > This document is the authoritative reference for system architecture, roles, permissions, features, and technical implementation.
 
 ---
@@ -39,6 +39,7 @@
 30. [Session 44 Navigation, AI Insights Resilience, and Runtime Toggle (2026-04-09)](#30-session-44-navigation-ai-insights-resilience-and-runtime-toggle-2026-04-09)
 31. [NoSQL Integration Layer (MongoDB)](#31-nosql-integration-layer-mongodb)
 32. [MongoDB Usage Guidelines (STRICT)](#32-mongodb-usage-guidelines-strict)
+33. [Session 47 Report Submission Reliability Update (2026-04-09)](#33-session-47-report-submission-reliability-update-2026-04-09)
 
 ---
 
@@ -1817,4 +1818,36 @@ PostgreSQL (core) + MongoDB (supporting layer)
 NOT:
 
 MongoDB-only system
+
+---
+
+## 33. Session 47 Report Submission Reliability Update (2026-04-09)
+
+### What Changed
+
+- Hardened submission paths in:
+  - `lib/services/diseaseReports.ts`
+  - `lib/services/waterQuality.ts`
+- Kept idempotent `upsert` as primary behavior for online submits.
+- Added automatic fallback to plain `insert` when legacy deployments are missing `client_idempotency_key` uniqueness support.
+- Improved online detection tolerance to reduce false-offline classification during submit.
+- Normalized backend error messages into actionable user-facing guidance for:
+  - RLS permission denials
+  - stale trigger mismatch (`created_by` vs `reporter_id`)
+  - required SQL remediation via `database_structure/FIX_REPORT_SUBMISSION_RLS.sql`
+- Updated form-level handlers to preserve exact backend error text:
+  - `components/forms/DiseaseReportForm.tsx`
+  - `components/forms/WaterQualityReportForm.tsx`
+
+### Operational Impact
+
+- Report submission is now more robust across mixed schema states.
+- Users receive clear guidance instead of generic submit failure messages.
+- Existing modern schema behavior remains unchanged.
+
+### Verification
+
+- TypeScript compile validation:
+  - `npx tsc --noEmit`
+  - result: clean (`EXIT: 0`)
 

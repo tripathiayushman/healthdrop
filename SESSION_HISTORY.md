@@ -5,6 +5,33 @@
 
 ---
 
+## Session 47 Summary (2026-04-09)
+
+This session hardened report submission reliability for disease and water flows and synchronized documentation. Highlights:
+
+- Improved disease/water submission service resilience:
+  - `lib/services/diseaseReports.ts`
+  - `lib/services/waterQuality.ts`
+  - primary path still uses idempotent upsert (`client_idempotency_key`)
+  - automatic fallback to plain insert when legacy schema/index support is missing
+- Improved submit-time connectivity handling:
+  - treats `isConnected === true` with unknown reachability as online instead of false offline negatives
+- Normalized actionable backend error messages for users:
+  - explicit guidance for RLS permission failures
+  - explicit guidance for stale trigger mismatch (`created_by` vs `reporter_id`)
+  - points to `database_structure/FIX_REPORT_SUBMISSION_RLS.sql`
+- Updated form error propagation to preserve backend message text:
+  - `components/forms/DiseaseReportForm.tsx`
+  - `components/forms/WaterQualityReportForm.tsx`
+
+Verification:
+
+- TypeScript validation passed from workspace project folder:
+  - `npx tsc --noEmit`
+  - `EXIT: 0`
+
+---
+
 ## Session 46 Summary (2026-04-09)
 
 This session added a lightweight runtime MongoDB connectivity helper and synchronized project documentation with the latest implementation state. Highlights:

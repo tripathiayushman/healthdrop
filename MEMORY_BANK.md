@@ -1,7 +1,7 @@
 # 🏥 HealthDrop Surveillance System — Memory Bank
 
 > **Single source of truth for the current state of the codebase.**
-> Last updated: 2026-04-09 (Session 46: MongoDB runtime health-check + docs sync)
+> Last updated: 2026-04-09 (Session 47: report submission reliability hardening)
 
 ---
 
@@ -717,6 +717,7 @@ Dashboard personalization (Session 41):
 | 44 | 2026-04-09 | **MongoDB NoSQL architecture documentation update**: introduced hybrid PostgreSQL+MongoDB documentation model, defined MongoDB collection scope (`ai_insights`, `audit_logs`, `notifications_stream`), and documented strict SQL/NoSQL separation guidelines for future implementation. |
 | 45 | 2026-04-09 | **MongoDB service-layer implementation**: added `lib/mongo.ts` singleton connector + `lib/services/mongoService.ts`; integrated non-blocking AI insight persistence in `gemini.ts`, optional notification stream mirror in `notifications.ts`, optional audit hooks in `users.ts`/`notifications.ts`, and exported Mongo service APIs through `lib/services/index.ts`. |
 | 46 | 2026-04-09 | **MongoDB runtime health-check + docs synchronization**: added read-only `healthCheckMongoCollections(...)` in `lib/services/mongoService.ts`, exported it via `lib/services/index.ts`, and updated documentation to reflect implemented Mongo integration and runtime connectivity verification support. |
+| 47 | 2026-04-09 | **Report submission reliability hardening**: improved disease/water create services with legacy-schema fallback (`upsert` to `insert` when idempotency column/index is unavailable), improved online detection tolerance, and normalized RLS/trigger errors to actionable messages referencing `database_structure/FIX_REPORT_SUBMISSION_RLS.sql`; form handlers now preserve exact backend error text. |
 
 ### Session XX - MongoDB Integration (NoSQL Layer)
 
@@ -736,6 +737,7 @@ Dashboard personalization (Session 41):
 
 - 🔴 **Action required**: Run `FIX_CLINIC_RLS_POLICIES.sql` in Supabase to enable clinic verify/approve
 - 🔴 **Action required**: Run `FIX_VERIFICATION_AND_VISIBILITY.sql` in Supabase
+- 🟡 If report submission still fails with permission/trigger errors, run `FIX_REPORT_SUBMISSION_RLS.sql` in Supabase SQL Editor
 - 🟡 Push notifications require Expo account + EAS build (edge function already in place)
 - 🟢 Offline sync now covers disease, water, campaign, and alert submissions via queue + reconnect sync
 - 🟢 AllAlertsScreen TS2307 — resolved by named export; restart TS server in VS Code if still shown

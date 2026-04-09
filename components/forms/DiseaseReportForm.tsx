@@ -165,7 +165,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         notes: mergedNotes || undefined,
       });
 
-      if (error) throw error;
+      if (error) throw new Error(String(error));
 
       if (queued) {
         setModalType('success');
@@ -177,8 +177,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
       setModalVisible(true);
     } catch (error: any) {
       console.error('Submit error:', error);
+      const message = String(error?.message ?? error ?? '').trim();
       setModalType('error');
-      setModalMessage(error.message || 'Failed to submit report. Please try again.');
+      setModalMessage(message || 'Failed to submit report. Please try again.');
       setModalVisible(true);
     } finally {
       setLoading(false);
