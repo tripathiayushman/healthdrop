@@ -108,7 +108,21 @@ export const diseaseReportsService = {
   // Create new disease report (offline-first)
   async create(reportData: DiseaseReportInput): Promise<ApiResponse<DiseaseReport> & { queued?: boolean; localId?: string }> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Resolve the user from the locally cached session first — getSession()
+      // reads local storage (no network), so the offline sync-queue path below
+      // stays reachable. Fall back to the network getUser() only when online
+      // and no cached session exists.
+      const { data: { session } } = await supabase.auth.getSession();
+      let user = session?.user ?? null;
+
+      // Check connectivity
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected === true && net.isInternetReachable !== false;
+
+      if (!user && isOnline) {
+        const { data: userData } = await supabase.auth.getUser();
+        user = userData.user;
+      }
       if (!user) throw new Error('User not authenticated');
 
       const payload = {
@@ -116,10 +130,6 @@ export const diseaseReportsService = {
         reporter_id: user.id,
         status: 'reported',
       };
-
-      // Check connectivity
-      const net = await NetInfo.fetch();
-      const isOnline = net.isConnected === true && net.isInternetReachable !== false;
 
       if (!isOnline) {
         // Queue for later sync

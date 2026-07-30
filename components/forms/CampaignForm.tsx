@@ -182,7 +182,21 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Resolve the user from the locally cached session first — getSession()
+      // reads local storage (no network), so the offline sync-queue path below
+      // stays reachable. Fall back to the network getUser() only when online
+      // and no cached session exists.
+      const { data: { session } } = await supabase.auth.getSession();
+      let user = session?.user ?? null;
+
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected !== false && net.isInternetReachable !== false;
+
+      if (!user && isOnline) {
+        const { data: userData } = await supabase.auth.getUser();
+        user = userData.user;
+      }
+
       if (!user) {
         setModalType('error');
         setModalMessage('You must be logged in to create a campaign.');
@@ -216,9 +230,6 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         notes: formData.notes || null,
         status: 'planned',
       };
-
-      const net = await NetInfo.fetch();
-      const isOnline = net.isConnected && net.isInternetReachable;
 
       if (!isOnline) {
         await syncQueue.enqueue('campaign', payload);

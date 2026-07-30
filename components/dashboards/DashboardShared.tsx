@@ -13,7 +13,7 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { useTheme, Theme, themes, radii, spacing } from '../../lib/ThemeContext';
-import { usePendingSync } from '../../src/services/offlineSync';
+import { useSyncCounts } from '../../src/services/offlineSync';
 import { Profile } from '../../types';
 
 // ─────────────────────────────────────────────────────
@@ -137,10 +137,12 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
         ]}
       >
         <Animated.View style={{ opacity: fadeAnim }}>
-          {/* Role pill — Eyebrow type */}
+          {/* Role pill — Eyebrow type. Accent stays on the border/icon ring;
+              the label renders in the guaranteed-contrast header ink (F17) —
+              several ROLE_ACCENT hues fall below 4.5:1 on the navy band. */}
           <View style={[styles.rolePill, { borderColor: accent }]}>
             <Ionicons name={ROLE_ICON[role]} size={12} color={accent} />
-            <Text style={[styles.rolePillText, { color: accent }]} maxFontSizeMultiplier={1.3}>
+            <Text style={[styles.rolePillText, { color: headerText }]} maxFontSizeMultiplier={1.3}>
               {ROLE_LABEL[role]}
             </Text>
           </View>
@@ -696,13 +698,16 @@ export const ErrorCard: React.FC<ErrorCardProps> = ({ message, onRetry }) => {
 
 // ─────────────────────────────────────────────────────
 //  SyncPebble — honest system state in the header.
-//  Synced / Saving… / Offline · n queued, with a 1.5s
-//  "All synced" flash when the queue drains.
+//  Synced / Saving… / n need retry / Offline · n queued,
+//  with a 1.5s "All synced" flash when the queue truly
+//  drains. Failure-aware (F5): permanently-failed items
+//  show a danger-toned "need retry" state and suppress
+//  the green Synced / All-synced states.
 // ─────────────────────────────────────────────────────
 export const SyncPebble: React.FC = () => {
   const { colors } = useTheme();
   const netInfo = useNetInfo();
-  const pending = usePendingSync();
+  const { pending, failed } = useSyncCounts();
   const [flash, setFlash] = useState(false);
   const prevPending = useRef(pending);
 
@@ -711,12 +716,19 @@ export const SyncPebble: React.FC = () => {
   useEffect(() => {
     const prev = prevPending.current;
     prevPending.current = pending;
+    // Never celebrate while failures remain (F5).
+    if (failed > 0) {
+      setFlash(false);
+      return;
+    }
     if (prev > 0 && pending === 0 && !offline) {
       setFlash(true);
       const timer = setTimeout(() => setFlash(false), 1500);
       return () => clearTimeout(timer);
     }
-  }, [pending, offline]);
+  }, [pending, failed, offline]);
+
+  const queued = pending + failed;
 
   let bg: string;
   let fg: string;
@@ -728,9 +740,9 @@ export const SyncPebble: React.FC = () => {
     bg = colors.offlineBg;
     fg = colors.offline;
     icon = 'cloud-offline-outline';
-    label = pending > 0 ? `Offline · ${pending} queued` : 'Offline';
-    a11yLabel = pending > 0
-      ? `Offline. ${pending} ${pending === 1 ? 'report' : 'reports'} saved on phone, will sync`
+    label = queued > 0 ? `Offline · ${queued} queued` : 'Offline';
+    a11yLabel = queued > 0
+      ? `Offline. ${queued} ${queued === 1 ? 'report' : 'reports'} saved on phone, will sync`
       : 'Offline. Reports will be saved on phone';
   } else if (pending > 0) {
     bg = colors.warningBg;
@@ -738,6 +750,12 @@ export const SyncPebble: React.FC = () => {
     icon = 'sync-outline';
     label = 'Saving…';
     a11yLabel = `Saving. ${pending} ${pending === 1 ? 'report' : 'reports'} waiting to sync`;
+  } else if (failed > 0) {
+    bg = colors.dangerBg;
+    fg = colors.danger;
+    icon = 'alert-circle-outline';
+    label = failed === 1 ? '1 needs retry' : `${failed} need retry`;
+    a11yLabel = `${failed} ${failed === 1 ? 'report' : 'reports'} could not upload and ${failed === 1 ? 'needs' : 'need'} a retry from the Sync Outbox`;
   } else if (flash) {
     bg = colors.successBg;
     fg = colors.success;

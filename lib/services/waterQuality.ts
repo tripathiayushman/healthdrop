@@ -108,7 +108,20 @@ export const waterQualityService = {
   // Create new water quality report (offline-first)
   async create(reportData: WaterQualityReportInput): Promise<ApiResponse<WaterQualityReport> & { queued?: boolean; localId?: string }> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Resolve the user from the locally cached session first — getSession()
+      // reads local storage (no network), so the offline sync-queue path below
+      // stays reachable. Fall back to the network getUser() only when online
+      // and no cached session exists.
+      const { data: { session } } = await supabase.auth.getSession();
+      let user = session?.user ?? null;
+
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected === true && net.isInternetReachable !== false;
+
+      if (!user && isOnline) {
+        const { data: userData } = await supabase.auth.getUser();
+        user = userData.user;
+      }
       if (!user) throw new Error('User not authenticated');
 
       const payload = {
@@ -116,9 +129,6 @@ export const waterQualityService = {
         reporter_id: user.id,
         status: 'reported',
       };
-
-      const net = await NetInfo.fetch();
-      const isOnline = net.isConnected === true && net.isInternetReachable !== false;
 
       if (!isOnline) {
         const localId = await syncQueue.enqueue('water_quality_report', payload);

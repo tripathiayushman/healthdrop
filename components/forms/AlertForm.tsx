@@ -21,7 +21,6 @@ import { supabase } from '../../lib/supabase';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { Profile } from '../../types';
-import { ALERT_RADIUS_KM, shouldReceiveAlert } from '../../lib/services/alertRadius';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 
 interface AlertFormProps {
@@ -198,63 +197,6 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     return errs;
   };
 
-  // ── Push notification sender ─────────────────────────────────────────────
-  const sendPushNotifications = async (
-    alertTitle: string,
-    alertBody: string,
-    scope: 'officials' | 'all',
-    alertLocation: { district: string; state?: string; location_name?: string }
-  ) => {
-    try {
-      // Fetch push tokens from profiles
-      let query = supabase
-        .from('profiles')
-        .select('expo_push_token,role,district,state')
-        .not('expo_push_token', 'is', null);
-      if (scope === 'officials') {
-        query = query.in('role', ['district_officer', 'clinic', 'asha_worker', 'health_admin']);
-      }
-
-      const { data: profilesWithTokens } = await query;
-
-      const tokens = Array.from(new Set((profilesWithTokens ?? [])
-        .filter((p: any) => {
-          const role = String(p.role ?? '').toLowerCase();
-          if (role === 'health_admin' || role === 'super_admin') return true;
-          return shouldReceiveAlert(alertLocation, {
-            role,
-            district: p.district,
-            state: p.state,
-          });
-        })
-        .map((p: any) => p.expo_push_token)
-        .filter(Boolean)));
-
-      if (tokens.length === 0) return;
-
-      // Send via Expo Push API (best-effort, chunked)
-      const CHUNK = 100;
-      for (let i = 0; i < tokens.length; i += CHUNK) {
-        const chunk = tokens.slice(i, i + CHUNK);
-        await fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify(chunk.map((token: string) => ({
-            to: token,
-            title: `[ALERT] ${alertTitle}`,
-            body: alertBody,
-            sound: 'default',
-            priority: 'high',
-            data: { type: 'health_alert' },
-          }))),
-        });
-      }
-      console.log(`[Push] Sent health alert to ${tokens.length} device(s) within ${ALERT_RADIUS_KM} km targeting scope`);
-    } catch (e) {
-      console.warn('[Push] Push notification send failed (non-critical):', e);
-    }
-  };
-
   const handleSubmit = async () => {
     const errs = validateForm();
     setErrors(errs);
@@ -265,7 +207,21 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Resolve the user from the locally cached session first — getSession()
+      // reads local storage (no network), so the offline sync-queue path below
+      // stays reachable. Fall back to the network getUser() only when online
+      // and no cached session exists.
+      const { data: { session } } = await supabase.auth.getSession();
+      let user = session?.user ?? null;
+
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected !== false && net.isInternetReachable !== false;
+
+      if (!user && isOnline) {
+        const { data: userData } = await supabase.auth.getUser();
+        user = userData.user;
+      }
+
       if (!user) {
         setModalType('error');
         setModalMessage('You must be logged in to send an alert.');
@@ -304,9 +260,6 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         },
       };
 
-      const net = await NetInfo.fetch();
-      const isOnline = net.isConnected && net.isInternetReachable;
-
       if (!isOnline) {
         await syncQueue.enqueue('health_alert', payload);
         setModalType('success');
@@ -327,28 +280,24 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
       if (error) throw error;
 
-      // Send push notifications (non-blocking)
-      const pushBody = `${formData.urgency_level.toUpperCase()} • ${formData.location_name}, ${formData.district}${formData.disease_or_issue ? ' • ' + formData.disease_or_issue : ''}`;
-      sendPushNotifications(formData.title, pushBody, formData.notify_scope, {
-        district: formData.district,
-        state: formData.state,
-        location_name: formData.location_name,
-      });
+      // Push delivery is handled server-side: the trg_push_on_alert_created
+      // trigger fans out to the push-notifications edge function on insert.
+      // No client-side fan-out — it would double-notify and cannot enumerate
+      // tokens under profiles RLS for most roles.
 
       // Role-aware, honest success message
-      const pushSentMsg = formData.notify_scope === 'all'
-        ? `Push notifications have been sent to app users within the ${ALERT_RADIUS_KM} km zone.`
-        : `Push notifications have been sent to district officials, clinics and ASHA workers within ${ALERT_RADIUS_KM} km.`;
       setModalType('success');
       if (isAshaWorker) {
-        // Honest per actual insert behavior: the row is inserted immediately and the
-        // push fan-out above has already fired; only in-app visibility for other
-        // users waits on Admin/Clinic approval (DB auto_approve trigger).
+        // Honest per actual insert behavior: the row is inserted immediately and
+        // the server-side push fan-out fires on insert; only in-app visibility
+        // for other users waits on Admin/Clinic approval (DB auto_approve trigger).
         setModalMessage(
-          `Your alert has been submitted. ${pushSentMsg} It will appear inside the app for other users after an Admin or Clinic staff member approves it.`
+          'Your alert has been submitted and health officials will be notified. It will appear inside the app for other users after an Admin or Clinic staff member approves it.'
         );
       } else {
-        setModalMessage(`Your health alert has been published successfully.\n\n${pushSentMsg}`);
+        setModalMessage(
+          'Your health alert has been published successfully. Health officials will be notified.'
+        );
       }
       setModalVisible(true);
     } catch (error: any) {

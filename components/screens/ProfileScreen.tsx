@@ -25,6 +25,7 @@ import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { ROLE_ACCENT } from '../dashboards/DashboardShared';
+import { clearExpoPushToken } from '../../lib/services/users';
 
 interface ProfileScreenProps {
   profile: Profile;
@@ -65,7 +66,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onProfileUpdate,
   onNavigateToForm,
 }) => {
-  const { colors, isDark, toggleTheme } = useTheme();
+  const { colors, isDark, toggleTheme, reduceMotion } = useTheme();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
   // Modal states
@@ -140,6 +141,22 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const confirmSignOut = async () => {
     setSigningOut(true);
     try {
+      // Remove this device's push token BEFORE the session ends —
+      // the profiles update needs an authenticated session to pass RLS.
+      try {
+        await clearExpoPushToken();
+      } catch (tokenError) {
+        console.warn('Failed to clear push token on sign-out:', tokenError);
+      }
+      // Clear this user's queued offline items if the API is available.
+      try {
+        const offlineSync: any = require('../../src/services/offlineSync');
+        if (typeof offlineSync?.clearQueueForUser === 'function') {
+          await offlineSync.clearQueueForUser(profile.id);
+        }
+      } catch (queueError) {
+        console.warn('Failed to clear offline queue on sign-out:', queueError);
+      }
       const { error } = await supabase.auth.signOut();
       if (error) {
         console.error('Sign out error:', error);
@@ -590,7 +607,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* ==================== MODALS ==================== */}
 
       {/* Edit Profile Modal */}
-      <Modal visible={showEditProfile} animationType="slide" transparent onRequestClose={() => setShowEditProfile(false)}>
+      <Modal visible={showEditProfile} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setShowEditProfile(false)}>
         <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
@@ -635,7 +652,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </Modal>
 
       {/* Change Password Modal */}
-      <Modal visible={showChangePassword} animationType="slide" transparent onRequestClose={() => setShowChangePassword(false)}>
+      <Modal visible={showChangePassword} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setShowChangePassword(false)}>
         <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
@@ -684,7 +701,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </Modal>
 
       {/* Update Location Modal */}
-      <Modal visible={showUpdateLocation} animationType="slide" transparent onRequestClose={() => setShowUpdateLocation(false)}>
+      <Modal visible={showUpdateLocation} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setShowUpdateLocation(false)}>
         <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
@@ -783,7 +800,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </Modal>
 
       {/* Help & FAQ Modal */}
-      <Modal visible={showHelpFAQ} animationType="slide" transparent onRequestClose={() => setShowHelpFAQ(false)}>
+      <Modal visible={showHelpFAQ} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setShowHelpFAQ(false)}>
         <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
@@ -822,7 +839,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </Modal>
 
       {/* Terms / Privacy Info Modal */}
-      <Modal visible={!!infoDoc} animationType="slide" transparent onRequestClose={() => setInfoDoc(null)}>
+      <Modal visible={!!infoDoc} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setInfoDoc(null)}>
         <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
@@ -848,7 +865,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </Modal>
 
       {/* Send Feedback Modal */}
-      <Modal visible={showFeedback} animationType="slide" transparent onRequestClose={() => setShowFeedback(false)}>
+      <Modal visible={showFeedback} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setShowFeedback(false)}>
         <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
@@ -918,7 +935,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* Sign Out Confirmation Modal */}
       <Modal
         visible={showSignOutModal}
-        animationType="fade"
+        animationType={reduceMotion ? 'none' : 'fade'}
         transparent={true}
         presentationStyle="overFullScreen"
         statusBarTranslucent={true}

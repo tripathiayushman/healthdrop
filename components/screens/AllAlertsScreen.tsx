@@ -15,6 +15,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
 import { filterAlertsForProfile, isRadiusScopedRole } from '../../lib/services/alertRadius';
+import { sanitizeSearchTerm } from '../../lib/services/searchSanitize';
 import { SkeletonBlock, ErrorCard, EmptyState, getSeverityColor } from '../dashboards/DashboardShared';
 
 interface Props { profile: Profile; onBack: () => void; }
@@ -55,7 +56,8 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
         .limit(200);
 
       if (urgencyFilter) q = q.eq('urgency_level', urgencyFilter);
-      if (search.trim()) q = q.ilike('title', `%${search.trim()}%`);
+      const term = sanitizeSearchTerm(search);
+      if (term) q = q.ilike('title', `%${term}%`);
 
       const { data, error } = await q;
       if (error) {

@@ -289,4 +289,24 @@ export const usersService = {
   },
 };
 
+// Clear the Expo push token on the caller's own profile row — call BEFORE
+// supabase.auth.signOut() so the signed-out device stops receiving pushes for
+// the previous account. Uses getSession() (local read, works offline) because
+// during sign-out we must not depend on a network auth round-trip.
+export async function clearExpoPushToken(): Promise<void> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+
+    await supabase
+      .from('profiles')
+      .update({ expo_push_token: null })
+      .eq('id', userId);
+  } catch (err) {
+    // Non-critical — never block the sign-out flow
+    console.warn('[Push] Failed to clear token:', err);
+  }
+}
+
 export default usersService;

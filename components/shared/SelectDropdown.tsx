@@ -34,7 +34,7 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
   disabled = false,
   required = false,
 }) => {
-  const { colors } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
 
   const selectedOption = options.find(opt => opt.value === value);
@@ -94,7 +94,7 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
       <Modal
         visible={isOpen}
         transparent
-        animationType="fade"
+        animationType={reduceMotion ? 'none' : 'fade'}
         onRequestClose={() => setIsOpen(false)}
       >
         <Pressable

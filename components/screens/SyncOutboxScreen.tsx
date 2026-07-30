@@ -127,7 +127,14 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
     try {
       const all = await syncQueue.getAll();
       const visible = all
-        .filter((i) => i.status !== 'synced')
+        // Hide uploaded rows and deleted-item tombstones (F9), and scope the
+        // outbox to the signed-in user's own items (F13) — legacy items with
+        // no owner stamp stay visible so pre-upgrade drafts remain reachable.
+        .filter((i) =>
+          i.status !== 'synced' &&
+          i.status !== 'cancelled' &&
+          (i.ownerId == null || i.ownerId === profile.id)
+        )
         .sort((a, b) => {
           const ta = new Date(a.createdAt).getTime() || 0;
           const tb = new Date(b.createdAt).getTime() || 0;
@@ -141,7 +148,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [profile.id]);
 
   useEffect(() => {
     load();
@@ -159,20 +166,27 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
     setSyncing(true);
     setLastResult(null);
     try {
-      const now = Date.now();
+      // A pass is already running (e.g. the reconnect-debounced auto-sync) —
+      // say so honestly instead of "Already up to date" (F12). The queue's
+      // onChange subscription reloads this list when that pass finishes.
+      if (offlineSyncService.busy) {
+        setLastResult({ kind: 'warn', text: 'Sync already in progress…' });
+        return;
+      }
       const all = await syncQueue.getAll();
       for (const item of all) {
+        // Only revive the signed-in user's own items (F13).
+        if (item.ownerId != null && item.ownerId !== profile.id) continue;
         if (item.status === 'failed' && item.attempts >= MAX_ATTEMPTS) {
           await syncQueue.updateItem(item.localId, { status: 'pending', attempts: 0, error: null });
-        } else if (item.status === 'syncing') {
-          const last = item.lastAttempt ? new Date(item.lastAttempt).getTime() : 0;
-          if (!last || now - last > STALE_SYNCING_MS) {
-            await syncQueue.updateItem(item.localId, { status: 'pending' });
-          }
         }
       }
+      // Items stranded in 'syncing' by an app kill go back to 'pending' (F6).
+      await syncQueue.resetStuckSyncing(STALE_SYNCING_MS);
       const res = await offlineSyncService.triggerSync();
-      if (res.failed > 0) {
+      if (res.busy) {
+        setLastResult({ kind: 'warn', text: 'Sync already in progress…' });
+      } else if (res.failed > 0) {
         setLastResult({
           kind: 'warn',
           text: `${res.synced} uploaded · ${res.failed} still waiting — will keep retrying`,
@@ -194,14 +208,19 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
     }
   };
 
-  // ── Delete one item (mark synced, then purge synced) ──
+  // ── Delete one item — tombstone first so an in-flight sync pass that
+  //    already holds the item in memory re-checks and skips it (F9) ──
   const confirmDelete = async () => {
     if (!deleteTarget || deleteBusy) return;
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      await syncQueue.updateItem(deleteTarget.localId, { status: 'synced' });
-      await syncQueue.removeSynced(); // drops it from storage + notifies listeners
+      await syncQueue.cancelItem(deleteTarget.localId);
+      // If no pass is running, purge the tombstone from storage right away;
+      // otherwise the pass's own end-of-run cleanup removes it.
+      if (!offlineSyncService.busy) {
+        await syncQueue.removeSynced();
+      }
       setDeleteTarget(null);
       await load();
     } catch (err) {

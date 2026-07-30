@@ -650,6 +650,8 @@ const MapPanel: React.FC<MapPanelProps> = ({
   const [campaignData, setCampaignData] = useState<CampaignRow[]>([]);
   const [alertLayerData, setAlertLayerData] = useState<AlertLayerRow[]>([]);
   const [loadingData,  setLoadingData]  = useState(false);
+  // Per-layer fetch errors — error ≠ empty; a failed load never renders as "No data".
+  const [layerErrors, setLayerErrors] = useState<Partial<Record<Layer, string>>>({});
 
   useEffect(() => {
     if (alerts.length && !alertLayerData.length) {
@@ -659,6 +661,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
 
   const fetchLayerData = useCallback(async () => {
     setLoadingData(true);
+    setLayerErrors(prev => ({ ...prev, disease: undefined, water: undefined, campaigns: undefined }));
     try {
       const [d, w, c] = await Promise.all([
         supabase.from('disease_reports')
@@ -675,26 +678,40 @@ const MapPanel: React.FC<MapPanelProps> = ({
           .limit(300),
       ]);
 
+      const nextErrors: Partial<Record<Layer, string>> = {};
+
       if (d.error) {
         console.error('Failed to load disease layer data:', d.error);
+        nextErrors.disease = "Couldn't load disease reports — check connection";
       } else if (d.data) {
         setDiseaseData(d.data);
       }
 
       if (w.error) {
         console.error('Failed to load water layer data:', w.error);
+        nextErrors.water = "Couldn't load water reports — check connection";
       } else if (w.data) {
         setWaterData(w.data);
       }
 
       if (c.error) {
         console.error('Failed to load campaign layer data:', c.error);
+        nextErrors.campaigns = "Couldn't load campaign data — check connection";
       } else if (c.data) {
         setCampaignData(c.data);
       }
 
+      if (Object.keys(nextErrors).length > 0) {
+        setLayerErrors(prev => ({ ...prev, ...nextErrors }));
+      }
     } catch (error) {
       console.error('Unexpected layer fetch error:', error);
+      setLayerErrors(prev => ({
+        ...prev,
+        disease: "Couldn't load disease reports — check connection",
+        water: "Couldn't load water reports — check connection",
+        campaigns: "Couldn't load campaign data — check connection",
+      }));
     } finally {
       setLoadingData(false);
     }
@@ -702,6 +719,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
 
   const fetchAlertLayerData = useCallback(async () => {
     setLoadingData(true);
+    setLayerErrors(prev => ({ ...prev, alerts: undefined }));
     try {
       const runAlertQuery = async (selectClause: string) => {
         let q = supabase
@@ -720,11 +738,13 @@ const MapPanel: React.FC<MapPanelProps> = ({
 
       if (error) {
         console.error('Failed to load alert layer data:', error);
+        setLayerErrors(prev => ({ ...prev, alerts: "Couldn't load alert data — check connection" }));
       } else if (data) {
         setAlertLayerData(filterAlertsForProfile(data as unknown as AlertLayerRow[], profile));
       }
     } catch (error) {
       console.error('Unexpected alert layer fetch error:', error);
+      setLayerErrors(prev => ({ ...prev, alerts: "Couldn't load alert data — check connection" }));
     } finally {
       setLoadingData(false);
     }
@@ -781,8 +801,19 @@ const MapPanel: React.FC<MapPanelProps> = ({
     return [];
   }, [activeLayer, diseaseData, waterData]);
 
-  const showReportOverlay = !offline && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
-  const showAlertOverlay = !offline && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
+  // Fetch failure for the layer currently on screen — rendered as an inline
+  // error panel with Retry, never conflated with a genuinely empty map.
+  const activeLayerError = layerErrors[activeLayer];
+  const retryActiveLayer = useCallback(() => {
+    if (activeLayer === 'alerts') {
+      fetchAlertLayerData();
+    } else {
+      fetchLayerData();
+    }
+  }, [activeLayer, fetchAlertLayerData, fetchLayerData]);
+
+  const showReportOverlay = !offline && !activeLayerError && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
+  const showAlertOverlay = !offline && !activeLayerError && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
   const alertItems = React.useMemo(() => alertSource.slice(0, 8), [alertSource]);
   const mapHeight = isExpanded ? '100%' : (IS_MOBILE ? 250 : 195);
 
@@ -804,6 +835,31 @@ const MapPanel: React.FC<MapPanelProps> = ({
             <Text style={[mp.offlineBody, { color: colors.textSecondary }]}>
               The live map needs a connection. It will come back when you're online; alerts saved on this phone still show here.
             </Text>
+          </View>
+        ) : activeLayerError ? (
+          /* Layer fetch failed — inline error with Retry (error ≠ empty). */
+          <View
+            style={[
+              mp.errorPanel,
+              { backgroundColor: colors.dangerBg, borderColor: colors.danger },
+              typeof mapHeight === 'number' ? { height: mapHeight } : { flex: 1 },
+            ]}
+            accessibilityLiveRegion="polite"
+          >
+            <Ionicons name="alert-circle-outline" size={24} color={colors.danger} />
+            <Text style={[mp.errorTitle, { color: colors.text }]}>{activeLayerError}</Text>
+            <TouchableOpacity
+              style={[mp.retryBtn, { backgroundColor: colors.card, borderColor: colors.danger }]}
+              onPress={retryActiveLayer}
+              disabled={loadingData}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading map data"
+            >
+              {loadingData
+                ? <ActivityIndicator size="small" color={colors.danger} />
+                : <><Ionicons name="refresh-outline" size={16} color={colors.danger} /><Text style={[mp.retryText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>Retry</Text></>
+              }
+            </TouchableOpacity>
           </View>
         ) : (
           /* Map — WebView on native, iframe on web */
@@ -962,6 +1018,28 @@ const mp = StyleSheet.create({
   },
   offlineTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', textAlign: 'center' },
   offlineBody: { fontSize: 13, lineHeight: 18, fontWeight: '500', textAlign: 'center' },
+  errorPanel: {
+    borderWidth: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  errorTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', textAlign: 'center' },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 48,
+    minWidth: 120,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    marginTop: 4,
+  },
+  retryText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   filterBar: { marginTop: 8, marginBottom: 2 },
   filterBarInline: { minHeight: 48 },
   filterBarExpanded: { minHeight: 56 },
@@ -1047,7 +1125,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
   emptyTitle = 'No Active Alerts',
   emptySubtitle = 'All systems are clear.',
 }) => {
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, reduceMotion } = useTheme();
   const [expanded,    setExpanded   ] = useState(false);
   const [userLat,     setUserLat    ] = useState<number | undefined>(getCachedLocation()?.lat);
   const [userLon,     setUserLon    ] = useState<number | undefined>(getCachedLocation()?.lon);
@@ -1148,7 +1226,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       <Modal
         visible={Platform.OS === 'web' && !!webLocationAlert}
         transparent
-        animationType="fade"
+        animationType={reduceMotion ? 'none' : 'fade'}
         onRequestClose={() => setWebLocationAlert(null)}
       >
         <View style={[s.popupOverlay, { backgroundColor: colors.overlay }]}>
@@ -1175,7 +1253,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       </Modal>
 
       {/* ── Location permission — MODAL POPUP on first load ── */}
-      <Modal visible={showLocPrompt} transparent animationType="fade" onRequestClose={() => setShowLocPrompt(false)}>
+      <Modal visible={showLocPrompt} transparent animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={() => setShowLocPrompt(false)}>
         <View style={[s.popupOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[s.popup, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[s.popupIconWrap, { backgroundColor: colors.primary + '14' }]}>
@@ -1308,7 +1386,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       {expanded && (
         <Modal
           visible
-          animationType="fade"
+          animationType={reduceMotion ? 'none' : 'fade'}
           presentationStyle="fullScreen"
           statusBarTranslucent={Platform.OS === 'android'}
           onRequestClose={() => setExpanded(false)}

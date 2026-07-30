@@ -11,6 +11,7 @@ import {
   ActivityIndicator, FlatList, SafeAreaView, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
 import { supabase } from '../lib/supabase';
 import { Profile } from '../types';
@@ -175,7 +176,7 @@ const DistrictField: React.FC<{
 
 // ── States searchable dropdown ─────────────────────────
 const StatesDropdown: React.FC<{ value: string; onSelect: (st: string) => void; error?: string }> = ({ value, onSelect, error }) => {
-  const { colors } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const filtered = INDIAN_STATES.filter(st => st.toLowerCase().includes(search.toLowerCase()));
@@ -203,7 +204,7 @@ const StatesDropdown: React.FC<{ value: string; onSelect: (st: string) => void; 
       </TouchableOpacity>
       <FieldError message={error} />
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal visible={open} transparent animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={() => setOpen(false)}>
         <Pressable
           style={[s.modalOverlay, { backgroundColor: colors.overlay }]}
           onPress={() => setOpen(false)}
@@ -441,6 +442,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   // ── Render ────────────────────────────────────────────
   return (
     <SafeAreaView style={[s.root, { backgroundColor: colors.background }]}>
+      {/* iOS insets the top with colors.background (paper-light in light mode), so the
+          global light status bar is unreadable there — override per theme while this
+          screen is mounted. Android keeps the global light bar: its translucent status
+          bar sits over the navy header band, where light icons are correct. */}
+      {Platform.OS === 'ios' && <ExpoStatusBar style={isDark ? 'light' : 'dark'} />}
       <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
         {/* ── Flat header band ── */}
@@ -685,7 +691,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         </ScrollView>
 
         {/* ── Message Modal — server/system responses only ── */}
-        <Modal visible={msgVisible} transparent animationType="fade" onRequestClose={closeMsg}>
+        <Modal visible={msgVisible} transparent animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={closeMsg}>
           <View style={[s.modalOverlay, { backgroundColor: colors.overlay }]}>
             <View style={[s.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Ionicons

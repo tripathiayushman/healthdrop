@@ -38,10 +38,12 @@
 import NetInfo from '@react-native-community/netinfo';
 import { supabase } from '../../../lib/supabase';
 import { syncQueue } from './SyncQueue';
+import type { SyncCounts } from './SyncQueue';
 import { generateUUID } from './uuid';
 export { offlineSyncService } from './OfflineSyncService';
+export type { SyncResult } from './OfflineSyncService';
 export { syncQueue } from './SyncQueue';
-export type { QueueItem, QueueItemStatus } from './SyncQueue';
+export type { QueueItem, QueueItemStatus, SyncCounts } from './SyncQueue';
 
 // Generic type for report data (extend as needed)
 type ReportData = Record<string, unknown>;
@@ -146,6 +148,42 @@ export function usePendingSync(): number {
     }, []);
 
     return count;
+}
+
+/**
+ * Failure-aware sync tallies for the Sync Pebble (F5):
+ * `pending` = items still to be attempted, `failed` = items permanently out
+ * of retries that need a manual "Sync now". Updates in real-time.
+ */
+export function useSyncCounts(): SyncCounts {
+    const [counts, setCounts] = useState<SyncCounts>({ pending: 0, failed: 0 });
+
+    useEffect(() => {
+        let mounted = true;
+        offlineSyncService.getCounts().then((c) => {
+            if (mounted) setCounts(c);
+        });
+        const unsubscribe = offlineSyncService.onCountsChange((c) => {
+            if (mounted) setCounts(c);
+        });
+        return () => {
+            mounted = false;
+            unsubscribe();
+        };
+    }, []);
+
+    return counts;
+}
+
+/**
+ * Sign-out cleanup (F13): removes the signing-out user's queued items — and
+ * legacy items that carry no owner stamp — so the next account on this device
+ * cannot read or delete them from the Sync Outbox.
+ * WARNING: any not-yet-synced reports belonging to that user are discarded;
+ * call this only once the user has confirmed sign-out.
+ */
+export async function clearQueueForUser(userId: string): Promise<void> {
+    return syncQueue.clearForUser(userId);
 }
 
 // ─── 5. UI PATTERN — show "saved offline" feedback ───────────────────────────
