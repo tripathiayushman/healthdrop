@@ -37,6 +37,9 @@ yarn-error.*
 .env
 .env.example
 
+# Claude Code local skill symlinks (absolute paths, machine-specific)
+.claude/
+
 # typescript
 *.tsbuildinfo
 

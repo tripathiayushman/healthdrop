@@ -4,8 +4,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 // Supabase configuration - uses environment variables with fallback
+// EXPO_PUBLIC_SUPABASE_KEY is the modern publishable key (sb_publishable_...);
+// EXPO_PUBLIC_SUPABASE_ANON_KEY is the legacy JWT anon key kept as fallback.
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://ekfdimdlxifatsaubvbh.supabase.co';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVrZmRpbWRseGlmYXRzYXVidmJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExNzEzMjQsImV4cCI6MjA4Njc0NzMyNH0.-9yaA0TnwOHsT9Y2xe_65gJO6MoTFD2xhb2xRe6PdRo';
+const supabaseAnonKey =
+  process.env.EXPO_PUBLIC_SUPABASE_KEY ||
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+  'sb_publishable_pne9mF-cDQ_IPKJKn8a3AQ_Vm4Aa5x0';
 
 // Use AsyncStorage for native, localStorage wrapper for web
 const storage = Platform.OS === 'web' ? {
