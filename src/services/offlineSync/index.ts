@@ -38,6 +38,7 @@
 import NetInfo from '@react-native-community/netinfo';
 import { supabase } from '../../../lib/supabase';
 import { syncQueue } from './SyncQueue';
+import { generateUUID } from './uuid';
 export { offlineSyncService } from './OfflineSyncService';
 export { syncQueue } from './SyncQueue';
 export type { QueueItem, QueueItemStatus } from './SyncQueue';
@@ -58,7 +59,7 @@ export async function submitDiseaseReport(
 
     if (isOnline) {
         // Direct submit — still attach localId in case of retry
-        const localId = crypto.randomUUID();
+        const localId = generateUUID();
         const { error } = await supabase
             .from('disease_reports')
             .upsert(
@@ -82,7 +83,7 @@ export async function submitWaterQualityReport(
     const isOnline = net.isConnected && net.isInternetReachable;
 
     if (isOnline) {
-        const localId = crypto.randomUUID();
+        const localId = generateUUID();
         const { error } = await supabase
             .from('water_quality_reports')
             .upsert(

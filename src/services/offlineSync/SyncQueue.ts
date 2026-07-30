@@ -5,6 +5,7 @@
 // This localId is the deduplication key — Supabase checks it before INSERT.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { generateUUID } from './uuid';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ export class SyncQueue {
      * Returns the localId — callers should show this as a "draft ID" to the user.
      */
     async enqueue<T>(type: QueueItemType, payload: T): Promise<string> {
-        const localId = crypto.randomUUID();
+        const localId = generateUUID();
         const item: QueueItem<T> = {
             localId,
             type,
