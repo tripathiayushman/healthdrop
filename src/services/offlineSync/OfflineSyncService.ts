@@ -81,6 +81,15 @@ class OfflineSyncService {
     private syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private listeners: Array<(pendingCount: number) => void> = [];
 
+    constructor() {
+        // Any queue mutation (enqueue from a form, removal after sync)
+        // immediately re-notifies pending-count subscribers so UI badges
+        // update without waiting for the next sync pass.
+        syncQueue.onChange(() => {
+            void this.notifyListeners();
+        });
+    }
+
     /** Start monitoring network. Call once in App.tsx. */
     start(): void {
         if (this.unsubscribeNetInfo) return; // already started
@@ -144,28 +153,35 @@ class OfflineSyncService {
             return { synced: 0, failed: 0 };
         }
 
-        const pending = await syncQueue.getPendingItems(MAX_ATTEMPTS);
-        if (pending.length === 0) return { synced: 0, failed: 0 };
-
+        // Claim the lock BEFORE the first await so two overlapping calls
+        // (e.g. NetInfo reconnect + manual pull-to-refresh) can't both pass
+        // the guard while the queue read is in flight.
         this.isSyncing = true;
-        console.log(`[OfflineSync] Starting sync of ${pending.length} items`);
 
-        let synced = 0;
-        let failed = 0;
+        try {
+            const pending = await syncQueue.getPendingItems(MAX_ATTEMPTS);
+            if (pending.length === 0) return { synced: 0, failed: 0 };
 
-        for (const item of pending) {
-            const success = await this.syncItem(item);
-            if (success) synced++;
-            else failed++;
+            console.log(`[OfflineSync] Starting sync of ${pending.length} items`);
+
+            let synced = 0;
+            let failed = 0;
+
+            for (const item of pending) {
+                const success = await this.syncItem(item);
+                if (success) synced++;
+                else failed++;
+            }
+
+            // Remove synced items from storage
+            await syncQueue.removeSynced();
+            await this.notifyListeners();
+
+            console.log(`[OfflineSync] Sync complete. synced=${synced} failed=${failed}`);
+            return { synced, failed };
+        } finally {
+            this.isSyncing = false;
         }
-
-        // Remove synced items from storage
-        await syncQueue.removeSynced();
-        await this.notifyListeners();
-
-        this.isSyncing = false;
-        console.log(`[OfflineSync] Sync complete. synced=${synced} failed=${failed}`);
-        return { synced, failed };
     }
 
     // ── Single item sync with exponential back-off ─────────────────────────────

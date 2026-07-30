@@ -1,5 +1,7 @@
 // =====================================================
-// DASHBOARD SCREEN - Main Home Screen (Vector Icons)
+// DASHBOARD SCREEN - Main Home Screen ("Prakash" design)
+// Flat headerBg band + Role Ribbon, Big Number stats,
+// eyebrow sections, 4-state data regions.
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import {
@@ -9,21 +11,28 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Dimensions,
   Modal,
-  ActivityIndicator,
-  Platform,
   Alert,
+  Pressable,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format, isValid } from 'date-fns';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
-
-const { width } = Dimensions.get('window');
+import {
+  DashboardHeader,
+  Section,
+  StatCard,
+  QuickActionBtn,
+  ToolCard,
+  SkeletonBlock,
+  ErrorCard,
+  EmptyState,
+  getSeverityColor,
+} from '../dashboards/DashboardShared';
 
 interface Feedback {
   id: string;
@@ -63,8 +72,16 @@ interface HealthAlert {
   approval_status?: string;
 }
 
+const formatShortDateTime = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const date = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${date} ${time}`;
+};
+
 const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors } = useTheme();
+  const { colors, isDark, reduceMotion } = useTheme();
   const isMountedRef = React.useRef(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({
@@ -74,9 +91,13 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
     criticalAlerts: 0,
     pendingFeedback: 0,
   });
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   // Alerts state
   const [alerts, setAlerts] = useState<HealthAlert[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
   const [selectedAlert, setSelectedAlert] = useState<HealthAlert | null>(null);
   const [showAlertModal, setShowAlertModal] = useState(false);
 
@@ -96,6 +117,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
   }, []);
 
   const loadAlerts = async () => {
+    setAlertsError(null);
     try {
       const { data, error } = await supabase
         .from('health_alerts')
@@ -106,8 +128,11 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         .limit(80);
 
       if (!isMountedRef.current) return;
-      
-      if (data && !error) {
+
+      if (error) {
+        console.error('[DashboardScreen.loadAlerts] Alerts query failed', { error, role: profile.role });
+        setAlertsError("Couldn't load alerts — check connection");
+      } else if (data) {
         setAlerts(filterAlertsForProfile(data, profile).slice(0, 5));
       }
     } catch (error) {
@@ -115,10 +140,14 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         error,
         role: profile.role,
       });
+      if (isMountedRef.current) setAlertsError("Couldn't load alerts — check connection");
+    } finally {
+      if (isMountedRef.current) setAlertsLoading(false);
     }
   };
 
   const loadStats = async () => {
+    setStatsError(null);
     try {
       const [diseaseRes, waterRes, campaignsRes, alertsRes] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
@@ -127,14 +156,18 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active'),
       ]);
 
+      let hasQueryError = false;
+
       const getSafeCount = (label: string, result: PromiseSettledResult<any>): number => {
         if (result.status === 'rejected') {
           console.error(`[DashboardScreen.loadStats] ${label} query rejected`, { error: result.reason });
+          hasQueryError = true;
           return 0;
         }
 
         if (result.value?.error) {
           console.error(`[DashboardScreen.loadStats] ${label} query failed`, { error: result.value.error });
+          hasQueryError = true;
           return 0;
         }
 
@@ -169,8 +202,15 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
         criticalAlerts: getSafeCount('health_alerts', alertsRes),
         pendingFeedback: pendingFeedbackCount,
       });
+
+      if (hasQueryError) {
+        setStatsError("Couldn't load overview — check connection");
+      }
     } catch (error) {
       console.log('Stats loading - tables may not exist yet');
+      if (isMountedRef.current) setStatsError("Couldn't load overview — check connection");
+    } finally {
+      if (isMountedRef.current) setStatsLoading(false);
     }
   };
 
@@ -218,36 +258,30 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
     setRefreshing(false);
   };
 
-  const getUrgencyColor = (urgency: string) => {
-    switch (urgency?.toLowerCase()) {
-      case 'critical': return '#DC2626';
-      case 'high': return '#EA580C';
-      case 'medium': return '#F59E0B';
-      case 'low': return '#10B981';
-      default: return '#6B7280';
+  // Soft background for a severity pill — solid fill is CRITICAL's privilege alone.
+  const severitySoftBg = (level: string): string => {
+    switch (level?.toLowerCase()) {
+      case 'critical': return colors.dangerBg;
+      case 'high': return colors.offlineBg;
+      case 'medium': return colors.warningBg;
+      case 'low': return colors.successBg;
+      default: return colors.surfaceVariant;
     }
   };
 
-  const getAlertTypeIcon = (type: string) => {
-    switch (type?.toLowerCase()) {
-      case 'disease_outbreak': return 'virus';
-      case 'water_contamination': return 'water';
-      case 'emergency': return 'warning';
-      case 'natural_disaster': return 'thunderstorm';
-      default: return 'alert-circle';
-    }
-  };
-
-  const getRoleLabel = (role: string) => {
-    const labels: Record<string, string> = {
-      super_admin: 'Super Administrator',
-      health_admin: 'Health Administrator',
-      clinic: 'Clinic Staff',
-      asha_worker: 'ASHA Worker',
-      volunteer: 'Volunteer',
-      district_officer: 'District Officer',
-    };
-    return labels[role] || role;
+  const SeverityPill: React.FC<{ level: string }> = ({ level }) => {
+    const key = level?.toLowerCase() ?? '';
+    const isCritical = key === 'critical';
+    const fg = isCritical ? colors.textInverse : getSeverityColor(key, colors);
+    const bg = isCritical ? colors.danger : severitySoftBg(key);
+    return (
+      <View style={[styles.severityPill, { backgroundColor: bg }]} accessibilityLabel={`Urgency: ${key || 'unknown'}`}>
+        {!isCritical && <View style={[styles.severityDot, { backgroundColor: fg }]} />}
+        <Text style={[styles.severityPillText, { color: fg }]} maxFontSizeMultiplier={1.3}>
+          {(level ?? '').toUpperCase()}
+        </Text>
+      </View>
+    );
   };
 
   // Role-based quick actions
@@ -257,12 +291,12 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
   // Volunteer: NO quick actions (can only view and enroll in campaigns)
   const getAllQuickActions = () => {
     const allActions = [
-      { id: 'disease', icon: 'virus' as const, iconFamily: 'material' as const, label: 'Report Disease', color: '#EF4444', screen: 'new-disease-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'] },
-      { id: 'water', icon: 'water' as const, iconFamily: 'ionicons' as const, label: 'Water Quality', color: '#3B82F6', screen: 'new-water-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'] },
-      { id: 'campaign', icon: 'megaphone' as const, iconFamily: 'ionicons' as const, label: 'New Campaign', color: '#10B981', screen: 'new-campaign', roles: ['super_admin', 'health_admin', 'district_officer', 'asha_worker'] },
-      { id: 'alert', icon: 'alert-circle' as const, iconFamily: 'ionicons' as const, label: 'Send Alert', color: '#F59E0B', screen: 'new-alert', roles: ['super_admin', 'health_admin', 'district_officer'] },
+      { id: 'disease', icon: 'medkit-outline', label: 'Report Disease', color: colors.danger, screen: 'new-disease-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'] },
+      { id: 'water', icon: 'water-outline', label: 'Water Quality', color: colors.info, screen: 'new-water-report', roles: ['super_admin', 'health_admin', 'clinic', 'district_officer', 'asha_worker'] },
+      { id: 'campaign', icon: 'megaphone-outline', label: 'New Campaign', color: colors.success, screen: 'new-campaign', roles: ['super_admin', 'health_admin', 'district_officer', 'asha_worker'] },
+      { id: 'alert', icon: 'alert-circle-outline', label: 'Send Alert', color: colors.warning, screen: 'new-alert', roles: ['super_admin', 'health_admin', 'district_officer'] },
     ];
-    
+
     // Volunteers don't get any quick actions - they can only view and enroll
     return allActions.filter(action => action.roles.includes(profile.role));
   };
@@ -272,10 +306,10 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
-      case 'bug': return { name: 'bug', color: colors.error };
+      case 'bug': return { name: 'bug-outline', color: colors.error };
       case 'feature': return { name: 'bulb-outline', color: colors.warning };
-      case 'improvement': return { name: 'trending-up', color: colors.secondary };
-      default: return { name: 'chatbox', color: colors.primary };
+      case 'improvement': return { name: 'trending-up-outline', color: colors.secondary };
+      default: return { name: 'chatbox-outline', color: colors.primary };
     }
   };
 
@@ -288,12 +322,31 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
     }
   };
 
+  const getFeedbackStatusBg = (status: string) => {
+    switch (status) {
+      case 'pending': return colors.warningBg;
+      case 'reviewed': return colors.infoBg;
+      case 'resolved': return colors.successBg;
+      default: return colors.surfaceVariant;
+    }
+  };
+
   const statCards = [
-    { label: 'Disease Reports', value: stats.diseaseReports, icon: 'bar-chart' as const, iconFamily: 'ionicons' as const, color: '#EF4444' },
-    { label: 'Water Reports', value: stats.waterReports, icon: 'water' as const, iconFamily: 'ionicons' as const, color: '#3B82F6' },
-    { label: 'Active Campaigns', value: stats.campaigns, icon: 'megaphone' as const, iconFamily: 'ionicons' as const, color: '#10B981' },
-    { label: 'Critical Alerts', value: stats.criticalAlerts, icon: 'warning' as const, iconFamily: 'ionicons' as const, color: '#F59E0B' },
+    { label: 'Disease Reports', value: stats.diseaseReports, icon: 'bar-chart-outline', color: colors.danger },
+    { label: 'Water Reports', value: stats.waterReports, icon: 'water-outline', color: colors.info },
+    { label: 'Active Campaigns', value: stats.campaigns, icon: 'megaphone-outline', color: colors.success },
+    { label: 'Critical Alerts', value: stats.criticalAlerts, icon: 'warning-outline', color: colors.warning },
   ];
+
+  // Two stat cards per row — never three on phones.
+  const statRows: (typeof statCards)[] = [];
+  for (let i = 0; i < statCards.length; i += 2) {
+    statRows.push(statCards.slice(i, i + 2));
+  }
+  const quickActionRows: (typeof quickActions)[] = [];
+  for (let i = 0; i < quickActions.length; i += 2) {
+    quickActionRows.push(quickActions.slice(i, i + 2));
+  }
 
   return (
     <ScrollView
@@ -303,50 +356,39 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
       }
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.primary }]}>
-        <View style={styles.headerContent}>
-          <Text style={styles.greeting}>Welcome back,</Text>
-          <Text style={styles.userName}>{profile.full_name || 'User'}</Text>
-          <View style={styles.roleBadge}>
-            <Text style={styles.roleText}>{getRoleLabel(profile.role)}</Text>
-          </View>
-        </View>
-        <View style={styles.headerPattern} />
-      </View>
+      {/* Header — flat headerBg band + Role Ribbon */}
+      <DashboardHeader profile={profile} />
+
+      <View style={{ height: spacing.lg }} />
 
       {/* Quick Actions - Only show if user has actions available */}
       {quickActions.length > 0 && (
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
-          <View style={styles.quickActionsGrid}>
-            {quickActions.map((action) => (
-              <TouchableOpacity
-                key={action.id}
-                style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => onNavigateToForm(action.screen)}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.quickActionIcon, { backgroundColor: action.color + '20' }]}>
-                  {action.iconFamily === 'material' ? (
-                    <MaterialCommunityIcons name={action.icon} size={28} color={action.color} />
-                  ) : (
-                    <Ionicons name={action.icon} size={28} color={action.color} />
-                  )}
-                </View>
-                <Text style={[styles.quickActionLabel, { color: colors.text }]}>{action.label}</Text>
-              </TouchableOpacity>
+        <Section title="Quick Actions">
+          <View style={styles.gridColumn}>
+            {quickActionRows.map((row, rowIndex) => (
+              <View key={rowIndex} style={styles.gridRow}>
+                {row.map((action) => (
+                  <QuickActionBtn
+                    key={action.id}
+                    icon={action.icon}
+                    label={action.label}
+                    color={action.color}
+                    onPress={() => onNavigateToForm(action.screen)}
+                  />
+                ))}
+                {row.length === 1 && <View style={{ flex: 1 }} />}
+              </View>
             ))}
           </View>
-        </View>
+        </Section>
       )}
 
       {/* Volunteer Info Card - Show helpful info for volunteers */}
       {isVolunteer && (
-        <View style={styles.section}>
-          <View style={[styles.volunteerInfoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={[styles.volunteerIconContainer, { backgroundColor: '#10B981' + '20' }]}>
-              <Ionicons name="heart" size={32} color="#10B981" />
+        <Section>
+          <View style={[styles.volunteerInfoCard, { backgroundColor: colors.card, borderColor: colors.border }, !isDark && styles.cardShadow]}>
+            <View style={[styles.volunteerIconContainer, { backgroundColor: colors.success + '14' }]}>
+              <Ionicons name="heart-outline" size={24} color={colors.success} />
             </View>
             <View style={styles.volunteerInfoContent}>
               <Text style={[styles.volunteerInfoTitle, { color: colors.text }]}>Welcome, Volunteer!</Text>
@@ -355,81 +397,69 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               </Text>
             </View>
           </View>
-        </View>
+        </Section>
       )}
 
       {/* ==================== ADMIN TOOLS SECTION ==================== */}
       {(profile.role === 'super_admin' || profile.role === 'health_admin') && (
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Admin Tools</Text>
-          <TouchableOpacity
-            style={[styles.adminToolCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+        <Section title="Admin Tools">
+          <ToolCard
+            icon="shield-checkmark-outline"
+            iconColor={colors.primary}
+            title={profile.role === 'super_admin' ? 'Super Admin Panel' : 'Health Admin Panel'}
+            subtitle={profile.role === 'super_admin'
+              ? 'Manage users, reports, campaigns & analytics'
+              : 'Approve reports, campaigns, alerts & analytics'}
             onPress={() => onNavigateToForm('admin-management')}
-            activeOpacity={0.7}
-          >
-            <View style={styles.adminToolContent}>
-              <View style={[styles.adminToolIcon, { backgroundColor: '#EF4444' + '20' }]}>
-                <Ionicons name="shield-checkmark" size={32} color="#EF4444" />
-              </View>
-              <View style={styles.adminToolInfo}>
-                <Text style={[styles.adminToolTitle, { color: colors.text }]}>
-                  {profile.role === 'super_admin' ? 'Super Admin Panel' : 'Health Admin Panel'}
-                </Text>
-                <Text style={[styles.adminToolSubtitle, { color: colors.textSecondary }]}>
-                  {profile.role === 'super_admin'
-                    ? 'Manage users, reports, campaigns & analytics'
-                    : 'Approve reports, campaigns, alerts & analytics'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color={colors.textSecondary} />
-            </View>
-          </TouchableOpacity>
-        </View>
+          />
+        </Section>
       )}
 
       {/* ==================== CLINIC APPROVAL SECTION ==================== */}
       {profile.role === 'clinic' && (
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Clinic Tools</Text>
-          <TouchableOpacity
-            style={[styles.adminToolCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+        <Section title="Clinic Tools">
+          <ToolCard
+            icon="checkmark-circle-outline"
+            iconColor={colors.secondary}
+            title="Report Approval"
+            subtitle="Review & approve pending ASHA worker reports"
             onPress={() => onNavigateToForm('admin-management')}
-            activeOpacity={0.7}
-          >
-            <View style={styles.adminToolContent}>
-              <View style={[styles.adminToolIcon, { backgroundColor: '#8B5CF6' + '20' }]}>
-                <Ionicons name="checkmark-circle" size={32} color="#8B5CF6" />
-              </View>
-              <View style={styles.adminToolInfo}>
-                <Text style={[styles.adminToolTitle, { color: colors.text }]}>Report Approval</Text>
-                <Text style={[styles.adminToolSubtitle, { color: colors.textSecondary }]}>
-                  Review & approve pending ASHA worker reports
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color={colors.textSecondary} />
-            </View>
-          </TouchableOpacity>
-        </View>
+          />
+        </Section>
       )}
 
-      {/* Stats Overview */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Overview</Text>
-        <View style={styles.statsGrid}>
-          {statCards.map((stat, index) => (
-            <View
-              key={index}
-              style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-            >
-              <View style={[styles.statIconContainer, { backgroundColor: stat.color + '20' }]}>
-                <Ionicons name={stat.icon} size={24} color={stat.color} />
+      {/* Stats Overview — Big Number Protocol, 4-state region */}
+      <Section title="Overview">
+        {statsLoading ? (
+          <View style={styles.gridColumn} accessibilityElementsHidden>
+            {[0, 1].map((row) => (
+              <View key={row} style={styles.gridRow}>
+                <SkeletonBlock height={122} radius={radii.md} style={{ flex: 1 }} />
+                <SkeletonBlock height={122} radius={radii.md} style={{ flex: 1 }} />
               </View>
-              <Text style={[styles.statValue, { color: stat.color }]}>{stat.value}</Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{stat.label}</Text>
-            </View>
-          ))}
-        </View>
-      </View>
+            ))}
+          </View>
+        ) : statsError ? (
+          <ErrorCard message={statsError} onRetry={loadStats} />
+        ) : (
+          <View style={styles.gridColumn}>
+            {statRows.map((row, rowIndex) => (
+              <View key={rowIndex} style={styles.gridRow}>
+                {row.map((stat, index) => (
+                  <StatCard
+                    key={index}
+                    label={stat.label}
+                    value={stat.value}
+                    icon={stat.icon}
+                    color={stat.color}
+                  />
+                ))}
+                {row.length === 1 && <View style={{ flex: 1 }} />}
+              </View>
+            ))}
+          </View>
+        )}
+      </Section>
 
       {/* ==================== AI HEALTH INSIGHTS ==================== */}
       <AIInsightsPanel profile={profile} />
@@ -437,75 +467,86 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
       {/* ==================== HEALTH ALERTS SECTION ==================== */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>🚨 Active Alerts</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-            <TouchableOpacity onPress={() => onNavigateToForm('all-alerts')}>
-              <Text style={[styles.seeAllText, { color: colors.primary }]}>View All</Text>
+          <Text style={[styles.sectionEyebrow, { color: colors.textSecondary }]} numberOfLines={1}>
+            ACTIVE ALERTS
+            <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${alerts.length}`}</Text>
+          </Text>
+          <View style={styles.sectionActions}>
+            <TouchableOpacity
+              onPress={() => onNavigateToForm('all-alerts')}
+              hitSlop={{ top: 16, bottom: 16, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel="View all alerts"
+            >
+              <Text style={[styles.sectionActionText, { color: isDark ? colors.primary : colors.primaryDark }]}>View All</Text>
             </TouchableOpacity>
             {(profile.role === 'super_admin' || profile.role === 'health_admin' || profile.role === 'district_officer') && (
-              <TouchableOpacity onPress={() => onNavigateToForm('new-alert')}>
-                <Text style={[styles.seeAllText, { color: colors.primary }]}>+ New Alert</Text>
+              <TouchableOpacity
+                onPress={() => onNavigateToForm('new-alert')}
+                hitSlop={{ top: 16, bottom: 16, left: 12, right: 12 }}
+                accessibilityRole="button"
+                accessibilityLabel="Create new alert"
+              >
+                <Text style={[styles.sectionActionText, { color: isDark ? colors.primary : colors.primaryDark }]}>+ New Alert</Text>
               </TouchableOpacity>
             )}
           </View>
         </View>
-        
-        {alerts.length === 0 ? (
-          <View style={[styles.emptyAlertCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="checkmark-circle" size={40} color="#10B981" />
-            <Text style={[styles.emptyAlertTitle, { color: colors.text }]}>No Active Alerts</Text>
-            <Text style={[styles.emptyAlertSubtitle, { color: colors.textSecondary }]}>
-              All clear! No health alerts at this time.
-            </Text>
+
+        {alertsLoading ? (
+          <View style={{ gap: spacing.md }} accessibilityElementsHidden>
+            <SkeletonBlock height={96} radius={radii.md} />
+            <SkeletonBlock height={96} radius={radii.md} />
           </View>
+        ) : alertsError ? (
+          <ErrorCard message={alertsError} onRetry={loadAlerts} />
+        ) : alerts.length === 0 ? (
+          <EmptyState
+            icon="checkmark-circle-outline"
+            color={colors.success}
+            title="All clear — no active alerts right now."
+          />
         ) : (
           <View style={styles.alertsList}>
             {alerts.map((alert) => (
-              <TouchableOpacity
+              <Pressable
                 key={alert.id}
-                style={[styles.alertCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                style={({ pressed }) => [
+                  styles.alertCard,
+                  {
+                    backgroundColor: pressed ? colors.cardHover : colors.card,
+                    borderColor: colors.border,
+                    borderLeftColor: getSeverityColor(alert.urgency_level, colors),
+                  },
+                  !isDark && styles.cardShadow,
+                ]}
                 onPress={() => {
                   setSelectedAlert(alert);
                   setShowAlertModal(true);
                 }}
-                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Alert, urgency ${alert.urgency_level}: ${alert.title}`}
               >
                 <View style={styles.alertHeader}>
-                  <View style={[styles.alertIconContainer, { backgroundColor: getUrgencyColor(alert.urgency_level) + '20' }]}>
-                    {alert.alert_type === 'water_contamination' ? (
-                      <Ionicons name="water" size={20} color={getUrgencyColor(alert.urgency_level)} />
-                    ) : alert.alert_type === 'disease_outbreak' ? (
-                      <MaterialCommunityIcons name="virus" size={20} color={getUrgencyColor(alert.urgency_level)} />
-                    ) : (
-                      <Ionicons name="warning" size={20} color={getUrgencyColor(alert.urgency_level)} />
-                    )}
-                  </View>
-                  <View style={styles.alertTitleSection}>
-                    <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={1}>
-                      {alert.title}
-                    </Text>
-                    <View style={[styles.urgencyBadge, { backgroundColor: getUrgencyColor(alert.urgency_level) + '20' }]}>
-                      <Text style={[styles.urgencyText, { color: getUrgencyColor(alert.urgency_level) }]}>
-                        {alert.urgency_level?.toUpperCase()}
-                      </Text>
-                    </View>
-                  </View>
+                  <SeverityPill level={alert.urgency_level} />
+                  <Text style={[styles.alertTime, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                    {formatShortDateTime(alert.created_at)}
+                  </Text>
                 </View>
+                <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={2}>
+                  {alert.title}
+                </Text>
                 <Text style={[styles.alertDescription, { color: colors.textSecondary }]} numberOfLines={2}>
                   {alert.description}
                 </Text>
                 <View style={styles.alertFooter}>
-                  <View style={styles.alertLocation}>
-                    <Ionicons name="location-outline" size={14} color={colors.textSecondary} />
-                    <Text style={[styles.alertLocationText, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {alert.location_name}, {alert.district}
-                    </Text>
-                  </View>
-                  <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
-                    {new Date(alert.created_at).toLocaleDateString()}
+                  <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+                  <Text style={[styles.alertLocationText, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {alert.location_name}, {alert.district}
                   </Text>
+                  <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
                 </View>
-              </TouchableOpacity>
+              </Pressable>
             ))}
           </View>
         )}
@@ -513,15 +554,14 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
 
       {/* ==================== ADMIN ONLY: User Feedbacks Section ==================== */}
       {(profile.role === 'super_admin' || profile.role === 'health_admin') && (
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>User Feedbacks</Text>
-          <View style={[styles.feedbackSectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Section title="User Feedback" count={stats.pendingFeedback}>
+          <View style={[styles.feedbackSectionCard, { backgroundColor: colors.card, borderColor: colors.border }, !isDark && styles.cardShadow]}>
             <View style={styles.feedbackSectionHeader}>
-              <View style={[styles.feedbackIconContainer, { backgroundColor: '#8B5CF6' + '20' }]}>
-                <Ionicons name="chatbox-ellipses" size={28} color="#8B5CF6" />
+              <View style={[styles.feedbackIconContainer, { backgroundColor: colors.primary + '14' }]}>
+                <Ionicons name="chatbox-ellipses-outline" size={24} color={colors.primary} />
               </View>
               <View style={styles.feedbackSectionInfo}>
-                <Text style={[styles.feedbackSectionTitle, { color: colors.text }]}>
+                <Text style={[styles.feedbackSectionTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                   {stats.pendingFeedback} Pending
                 </Text>
                 <Text style={[styles.feedbackSectionSubtitle, { color: colors.textSecondary }]}>
@@ -529,62 +569,54 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                 </Text>
               </View>
             </View>
-            <TouchableOpacity
-              style={[styles.viewFeedbackButton, { backgroundColor: '#8B5CF6' }]}
+            <Pressable
+              style={({ pressed }) => [
+                styles.viewFeedbackButton,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+              ]}
               onPress={handleViewFeedback}
-              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="View all feedback"
             >
-              <Ionicons name="eye" size={18} color="#FFFFFF" />
-              <Text style={styles.viewFeedbackButtonText}>View All Feedbacks</Text>
-            </TouchableOpacity>
+              <Text style={[styles.viewFeedbackButtonText, { color: colors.onPrimary }]}>View All Feedback</Text>
+            </Pressable>
           </View>
-        </View>
+        </Section>
       )}
 
       <View style={styles.bottomSpacer} />
 
       {/* ==================== FEEDBACK MODAL (Admin Only) ==================== */}
-      <Modal visible={showFeedbackModal} animationType="slide" transparent>
-        <View
-          style={[
-            styles.modalOverlay,
-            Platform.OS === 'web'
-              ? ({
-                  backdropFilter: 'blur(16px)',
-                  backgroundColor: 'rgba(0,0,0,0.35)',
-                } as any)
-              : {},
-          ]}
-        >
-          <View style={[
-            styles.modalContent, 
-            { backgroundColor: colors.card },
-          ]}>
-            <View style={styles.modalHeader}>
+      <Modal visible={showFeedbackModal} animationType={reduceMotion ? 'none' : 'slide'} transparent>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+            <View style={[styles.modalHeader, { borderBottomColor: colors.borderLight }]}>
               <View style={styles.modalTitleRow}>
-                <Ionicons name="chatbox-ellipses" size={24} color="#8B5CF6" />
-                <Text style={[styles.modalTitle, { color: colors.text }]}>User Feedbacks</Text>
+                <Ionicons name="chatbox-ellipses-outline" size={24} color={colors.primary} />
+                <Text style={[styles.modalTitle, { color: colors.text }]}>User Feedback</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setShowFeedbackModal(false)}
+                style={[styles.modalCloseBtn, { backgroundColor: colors.surfaceVariant }]}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="Close feedback modal"
                 accessibilityHint="Closes the user feedback details modal"
               >
-                <Ionicons name="close" size={24} color={colors.text} />
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
             {feedbackLoading ? (
-              <View style={styles.feedbackLoadingContainer}>
-                <ActivityIndicator size="large" color="#8B5CF6" />
-                <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading feedback...</Text>
+              <View style={styles.feedbackLoadingContainer} accessibilityElementsHidden>
+                <SkeletonBlock height={96} radius={radii.md} />
+                <SkeletonBlock height={96} radius={radii.md} />
+                <SkeletonBlock height={96} radius={radii.md} width="70%" />
               </View>
             ) : feedbackList.length === 0 ? (
               <View style={styles.emptyFeedback}>
-                <Ionicons name="chatbox-outline" size={48} color={colors.textSecondary} />
-                <Text style={[styles.emptyTitle, { color: colors.text }]}>No Feedback Yet</Text>
+                <Ionicons name="checkmark-circle-outline" size={24} color={colors.success} />
+                <Text style={[styles.emptyTitle, { color: colors.text }]}>Inbox clear — no feedback yet.</Text>
                 <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
                   User feedback will appear here
                 </Text>
@@ -600,11 +632,11 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                   return (
                     <View
                       key={feedback.id}
-                      style={[styles.feedbackCard, { backgroundColor: colors.background, borderColor: colors.border }]}
+                      style={[styles.feedbackCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
                     >
                       <View style={styles.feedbackHeader}>
                         <View style={styles.feedbackUser}>
-                          <Ionicons name="person-circle" size={32} color="#8B5CF6" />
+                          <Ionicons name="person-circle-outline" size={32} color={colors.textSecondary} />
                           <View>
                             <Text style={[styles.feedbackUserName, { color: colors.text }]}>
                               {feedback.user_name || 'Anonymous'}
@@ -614,7 +646,8 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                             </Text>
                           </View>
                         </View>
-                        <View style={[styles.feedbackStatus, { backgroundColor: getStatusColor(feedback.status) + '20' }]}>
+                        <View style={[styles.feedbackStatus, { backgroundColor: getFeedbackStatusBg(feedback.status) }]}>
+                          <View style={[styles.severityDot, { backgroundColor: getStatusColor(feedback.status) }]} />
                           <Text style={[styles.feedbackStatusText, { color: getStatusColor(feedback.status) }]}>
                             {feedback.status.toUpperCase()}
                           </Text>
@@ -634,8 +667,8 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
 
                       <View style={styles.feedbackFooter}>
                         <View style={styles.feedbackDate}>
-                          <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
-                          <Text style={[styles.feedbackDateText, { color: colors.textSecondary }]}>
+                          <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
+                          <Text style={[styles.feedbackDateText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
                             {feedbackCreatedAtLabel}
                           </Text>
                         </View>
@@ -643,17 +676,23 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                         {feedback.status === 'pending' && (
                           <View style={styles.feedbackActions}>
                             <TouchableOpacity
-                              style={[styles.actionBtn, { backgroundColor: colors.info + '20' }]}
+                              style={[styles.actionBtn, { backgroundColor: colors.infoBg }]}
                               onPress={() => updateFeedbackStatus(feedback.id, 'reviewed')}
+                              accessibilityRole="button"
+                              accessibilityLabel="Mark feedback as reviewed"
+                              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
                             >
-                              <Ionicons name="eye" size={16} color={colors.info} />
+                              <Ionicons name="eye-outline" size={16} color={colors.info} />
                               <Text style={[styles.actionBtnText, { color: colors.info }]}>Review</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={[styles.actionBtn, { backgroundColor: colors.success + '20' }]}
+                              style={[styles.actionBtn, { backgroundColor: colors.successBg }]}
                               onPress={() => updateFeedbackStatus(feedback.id, 'resolved')}
+                              accessibilityRole="button"
+                              accessibilityLabel="Mark feedback as resolved"
+                              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
                             >
-                              <Ionicons name="checkmark" size={16} color={colors.success} />
+                              <Ionicons name="checkmark-outline" size={16} color={colors.success} />
                               <Text style={[styles.actionBtnText, { color: colors.success }]}>Resolve</Text>
                             </TouchableOpacity>
                           </View>
@@ -671,45 +710,37 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
       {/* Alert Detail Modal */}
       <Modal
         visible={showAlertModal}
-        animationType="slide"
+        animationType={reduceMotion ? 'none' : 'slide'}
         transparent={true}
         onRequestClose={() => setShowAlertModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface, maxHeight: '90%' }]}>
-            <View style={styles.modalHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                <Ionicons 
-                  name={selectedAlert?.alert_type === 'disease_outbreak' ? 'bug' : 
-                        selectedAlert?.alert_type === 'water_contamination' ? 'water' : 'warning'} 
-                  size={24} 
-                  color={getUrgencyColor(selectedAlert?.urgency_level || 'medium')} 
-                />
-                <Text style={[styles.modalTitle, { color: colors.text, flex: 1 }]} numberOfLines={2}>
-                  {selectedAlert?.title}
-                </Text>
-              </View>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, maxHeight: '90%' }]}>
+            {/* 3px severity top rule — never flood-fill a modal header */}
+            <View style={[styles.modalTopRule, { backgroundColor: getSeverityColor(selectedAlert?.urgency_level || '', colors) }]} />
+            <View style={[styles.modalHeader, { borderBottomColor: colors.borderLight }]}>
+              <Text style={[styles.modalTitle, { color: colors.text, flex: 1 }]} numberOfLines={2}>
+                {selectedAlert?.title}
+              </Text>
               <TouchableOpacity
                 onPress={() => setShowAlertModal(false)}
+                style={[styles.modalCloseBtn, { backgroundColor: colors.surfaceVariant }]}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="Close alert details modal"
                 accessibilityHint="Closes the health alert details modal"
               >
-                <Ionicons name="close" size={24} color={colors.text} />
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-              {/* Urgency Badge */}
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-                <View style={[styles.urgencyBadge, { backgroundColor: getUrgencyColor(selectedAlert?.urgency_level || 'medium') + '20' }]}>
-                  <Text style={[styles.urgencyText, { color: getUrgencyColor(selectedAlert?.urgency_level || 'medium') }]}>
-                    {selectedAlert?.urgency_level?.toUpperCase()}
-                  </Text>
-                </View>
-                <View style={[styles.urgencyBadge, { backgroundColor: colors.info + '20' }]}>
-                  <Text style={[styles.urgencyText, { color: colors.info }]}>
+            <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} showsVerticalScrollIndicator={false}>
+              {/* Urgency + status pills */}
+              <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg, flexWrap: 'wrap' }}>
+                <SeverityPill level={selectedAlert?.urgency_level || ''} />
+                <View style={[styles.statusPill, { backgroundColor: colors.infoBg }]}>
+                  <View style={[styles.severityDot, { backgroundColor: colors.info }]} />
+                  <Text style={[styles.severityPillText, { color: colors.info }]} maxFontSizeMultiplier={1.3}>
                     {selectedAlert?.status?.toUpperCase()}
                   </Text>
                 </View>
@@ -727,7 +758,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               <View style={styles.alertDetailSection}>
                 <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>Location</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Ionicons name="location" size={16} color={colors.primary} />
+                  <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
                   <Text style={[styles.alertDetailText, { color: colors.text }]}>
                     {selectedAlert?.location_name}
                     {selectedAlert?.district && `, ${selectedAlert.district}`}
@@ -746,13 +777,13 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                 </View>
               )}
 
-              {/* Statistics Row */}
+              {/* Statistics Row — values in ink, tabular */}
               {(selectedAlert?.affected_population || selectedAlert?.cases_reported) && (
-                <View style={[styles.alertDetailSection, { flexDirection: 'row', gap: 20 }]}>
+                <View style={[styles.alertDetailSection, { flexDirection: 'row', gap: spacing.xl }]}>
                   {selectedAlert?.affected_population && (
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>Affected Population</Text>
-                      <Text style={[styles.alertStatNumber, { color: colors.warning }]}>
+                      <Text style={[styles.alertStatNumber, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                         {selectedAlert.affected_population.toLocaleString()}
                       </Text>
                     </View>
@@ -760,7 +791,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                   {selectedAlert?.cases_reported && (
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>Cases Reported</Text>
-                      <Text style={[styles.alertStatNumber, { color: colors.error }]}>
+                      <Text style={[styles.alertStatNumber, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                         {selectedAlert.cases_reported.toLocaleString()}
                       </Text>
                     </View>
@@ -772,7 +803,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               {selectedAlert?.symptoms_to_watch && (
                 <View style={styles.alertDetailSection}>
                   <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>
-                    <Ionicons name="medkit" size={14} color={colors.warning} /> Symptoms to Watch
+                    <Ionicons name="medkit-outline" size={14} color={colors.warning} /> Symptoms to Watch
                   </Text>
                   <Text style={[styles.alertDetailText, { color: colors.text }]}>
                     {selectedAlert.symptoms_to_watch}
@@ -784,7 +815,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               {selectedAlert?.immediate_actions && (
                 <View style={styles.alertDetailSection}>
                   <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>
-                    <Ionicons name="flash" size={14} color={colors.error} /> Immediate Actions
+                    <Ionicons name="flash-outline" size={14} color={colors.danger} /> Immediate Actions
                   </Text>
                   <Text style={[styles.alertDetailText, { color: colors.text }]}>
                     {selectedAlert.immediate_actions}
@@ -796,7 +827,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               {selectedAlert?.precautionary_measures && (
                 <View style={styles.alertDetailSection}>
                   <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>
-                    <Ionicons name="shield-checkmark" size={14} color={colors.success} /> Precautionary Measures
+                    <Ionicons name="shield-checkmark-outline" size={14} color={colors.success} /> Precautionary Measures
                   </Text>
                   <Text style={[styles.alertDetailText, { color: colors.text }]}>
                     {selectedAlert.precautionary_measures}
@@ -810,7 +841,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                   <Text style={[styles.alertDetailLabel, { color: colors.textSecondary }]}>Contact Information</Text>
                   {selectedAlert?.contact_person && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                      <Ionicons name="person" size={16} color={colors.primary} />
+                      <Ionicons name="person-outline" size={16} color={colors.textSecondary} />
                       <Text style={[styles.alertDetailText, { color: colors.text }]}>
                         {selectedAlert.contact_person}
                       </Text>
@@ -818,8 +849,8 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
                   )}
                   {selectedAlert?.contact_phone && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Ionicons name="call" size={16} color={colors.success} />
-                      <Text style={[styles.alertDetailText, { color: colors.text }]}>
+                      <Ionicons name="call-outline" size={16} color={colors.textSecondary} />
+                      <Text style={[styles.alertDetailText, { color: colors.text, fontVariant: ['tabular-nums'] }]}>
                         {selectedAlert.contact_phone}
                       </Text>
                     </View>
@@ -830,21 +861,26 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ profile, onNavigateTo
               {/* Created Date */}
               <View style={[styles.alertDetailSection, { marginTop: 10, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.border }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Ionicons name="calendar" size={16} color={colors.textSecondary} />
-                  <Text style={[styles.alertDetailText, { color: colors.textSecondary }]}>
-                    Created: {selectedAlert?.created_at ? format(new Date(selectedAlert.created_at), 'MMMM d, yyyy h:mm a') : 'Unknown'}
+                  <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
+                  <Text style={[styles.alertDetailMeta, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                    Created: {selectedAlert?.created_at ? formatShortDateTime(selectedAlert.created_at) : 'Unknown'}
                   </Text>
                 </View>
               </View>
             </ScrollView>
 
-            {/* Close Button */}
-            <TouchableOpacity
-              style={[styles.alertCloseButton, { backgroundColor: colors.primary }]}
+            {/* Close Button — One-Hand Action Bar */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.alertCloseButton,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+              ]}
               onPress={() => setShowAlertModal(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close alert details"
             >
-              <Text style={styles.alertCloseButtonText}>Close</Text>
-            </TouchableOpacity>
+              <Text style={[styles.alertCloseButtonText, { color: colors.onPrimary }]}>Close</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -856,335 +892,261 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {
-    paddingTop: 20,
-    paddingBottom: 40,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-    overflow: 'hidden',
-  },
-  headerContent: {
-    zIndex: 1,
-  },
-  headerPattern: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    transform: [{ translateX: 50 }, { translateY: -50 }],
-  },
-  greeting: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 4,
-  },
-  userName: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    marginBottom: 12,
-  },
-  roleBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  roleText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 13,
+  /* Light-mode-only shadow — the single recipe */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
   section: {
-    padding: 20,
-    paddingBottom: 0,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  quickActionsGrid: {
+  sectionHeader: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  quickActionCard: {
-    width: '47%',
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: spacing.md,
+    marginTop: spacing.sm,
+    minHeight: 20,
   },
-  quickActionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
+  sectionEyebrow: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    flexShrink: 1,
+  },
+  sectionActions: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    gap: spacing.lg,
   },
-  quickActionLabel: {
-    fontSize: 14,
-    fontWeight: '600',
+  sectionActionText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  gridColumn: {
+    gap: spacing.md,
+  },
+  gridRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
   },
   // Volunteer Info Card Styles
   volunteerInfoCard: {
     flexDirection: 'row',
-    padding: 20,
-    borderRadius: 16,
+    padding: spacing.lg,
+    borderRadius: radii.md,
     borderWidth: 1,
     alignItems: 'center',
   },
   volunteerIconContainer: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginRight: spacing.lg,
   },
   volunteerInfoContent: {
     flex: 1,
   },
   volunteerInfoTitle: {
-    fontSize: 18,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '700',
     marginBottom: 4,
   },
   volunteerInfoText: {
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  statCard: {
-    width: '47%',
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  statIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  statValue: {
-    fontSize: 32,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    textAlign: 'center',
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
   },
   // Feedback Section Styles (Admin)
   feedbackSectionCard: {
-    padding: 20,
-    borderRadius: 16,
+    padding: spacing.lg,
+    borderRadius: radii.md,
     borderWidth: 1,
   },
   feedbackSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   feedbackIconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginRight: spacing.lg,
   },
   feedbackSectionInfo: {
     flex: 1,
   },
   feedbackSectionTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 4,
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+    marginBottom: 2,
   },
   feedbackSectionSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   viewFeedbackButton: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 8,
+    minHeight: 56,
+    borderRadius: radii.md,
   },
   viewFeedbackButtonText: {
-    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '600',
-  },
-  // Activity Card
-  activityCard: {
-    padding: 24,
-    borderRadius: 16,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  activityTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  activityDescription: {
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  activityButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 25,
-  },
-  activityButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  noticeCard: {
-    padding: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-  },
-  noticeTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  noticeText: {
-    fontSize: 13,
-    lineHeight: 20,
+    fontWeight: '700',
   },
   bottomSpacer: {
-    height: 20,
+    height: spacing.xl,
   },
   // Modal Styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
     maxHeight: '85%',
-    padding: 20,
+    padding: spacing.lg,
+    overflow: 'hidden',
+  },
+  modalTopRule: {
+    height: 3,
+    marginHorizontal: -spacing.lg,
+    marginTop: -spacing.lg,
+    marginBottom: spacing.lg,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
-    paddingBottom: 16,
+    gap: spacing.md,
+    marginBottom: spacing.xl,
+    paddingBottom: spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.1)',
   },
   modalTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: spacing.md,
+    flex: 1,
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+  },
+  modalCloseBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   feedbackLoadingContainer: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
+    paddingVertical: spacing.lg,
+    gap: spacing.md,
   },
   emptyFeedback: {
-    padding: 40,
+    padding: spacing.xxl,
     alignItems: 'center',
+    gap: spacing.sm,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 8,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   emptySubtitle: {
-    fontSize: 14,
+    fontSize: 13,
+    lineHeight: 18,
     textAlign: 'center',
   },
   feedbackScroll: {
     maxHeight: 500,
   },
   feedbackCard: {
-    padding: 16,
-    borderRadius: 12,
+    padding: spacing.lg,
+    borderRadius: radii.md,
     borderWidth: 1,
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   feedbackHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   feedbackUser: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: spacing.md,
+    flexShrink: 1,
   },
   feedbackUserName: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
   },
   feedbackEmail: {
     fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   feedbackStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
   },
   feedbackStatusText: {
-    fontSize: 10,
-    fontWeight: '700',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
   feedbackCategory: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   feedbackCategoryText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   feedbackText: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 12,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+    marginBottom: spacing.md,
   },
   feedbackFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
   feedbackDate: {
     flexDirection: 'row',
@@ -1193,172 +1155,139 @@ const styles = StyleSheet.create({
   },
   feedbackDateText: {
     fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   feedbackActions: {
     flexDirection: 'row',
-    gap: 8,
+    gap: spacing.sm,
   },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    minHeight: 44,
+    borderRadius: radii.sm,
     gap: 4,
   },
   actionBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  // Admin Tools Styles
-  adminToolCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 16,
-  },
-  adminToolContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  adminToolIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  adminToolInfo: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  adminToolTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  adminToolSubtitle: {
     fontSize: 13,
     lineHeight: 18,
+    fontWeight: '700',
   },
   // Alert Section Styles
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  seeAllText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
   alertsList: {
-    gap: 12,
+    gap: spacing.md,
   },
   alertCard: {
-    borderRadius: 16,
+    borderRadius: radii.md,
     borderWidth: 1,
-    padding: 16,
+    borderLeftWidth: 3,
+    padding: spacing.lg,
+    minHeight: 64,
   },
   alertHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
   },
-  alertIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  alertTitleSection: {
-    flex: 1,
+  severityPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  severityDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  severityPillText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
   alertTitle: {
     fontSize: 15,
-    fontWeight: '600',
-    flex: 1,
-  },
-  urgencyBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  urgencyText: {
-    fontSize: 10,
+    lineHeight: 22,
     fontWeight: '700',
+    marginBottom: spacing.xs,
+  },
+  alertTime: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   alertDescription: {
     fontSize: 13,
     lineHeight: 18,
-    marginBottom: 10,
+    fontWeight: '500',
+    marginBottom: spacing.sm,
   },
   alertFooter: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  alertLocation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flex: 1,
+    gap: spacing.xs,
   },
   alertLocationText: {
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
     flex: 1,
   },
-  alertTime: {
-    fontSize: 11,
-  },
-  emptyAlertCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 24,
-    alignItems: 'center',
-    gap: 8,
-  },
-  emptyAlertTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  emptyAlertSubtitle: {
-    fontSize: 13,
-    textAlign: 'center',
-  },
   alertDetailSection: {
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   alertDetailLabel: {
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 16,
+    fontWeight: '700',
     marginBottom: 6,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   alertDetailText: {
     fontSize: 15,
     lineHeight: 22,
+    fontWeight: '500',
+  },
+  alertDetailMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   alertStatNumber: {
     fontSize: 24,
-    fontWeight: '700',
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
   },
   alertCloseButton: {
-    marginTop: 16,
-    paddingVertical: 14,
-    borderRadius: 12,
+    marginTop: spacing.lg,
+    minHeight: 56,
+    borderRadius: radii.md,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   alertCloseButtonText: {
-    color: '#fff',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });
 

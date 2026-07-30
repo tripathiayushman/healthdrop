@@ -1,9 +1,11 @@
 // =====================================================
-// STAT CARD COMPONENT
+// STAT CARD COMPONENT — Big Number Protocol (admin grid)
+// 24/800 tabular-nums ink value, 13/700 label, 3px
+// semantic top rule. Only the delta takes status color.
 // =====================================================
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { useTheme } from '../../lib/ThemeContext';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
+import { useTheme, radii } from '../../lib/ThemeContext';
 
 interface StatCardProps {
   title: string;
@@ -27,60 +29,102 @@ export const StatCard: React.FC<StatCardProps> = ({
   trend,
   onPress,
 }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const ruleColor = color || colors.primary;
 
-  const content = (
-    <View style={[styles.container, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.header}>
-        <View style={[styles.iconContainer, { backgroundColor: color ? `${color}20` : colors.primaryLight }]}>
-          {icon}
+  const a11yLabel = trend
+    ? `${title}: ${value}, ${trend.isPositive ? 'up' : 'down'} ${Math.abs(trend.value)} percent`
+    : `${title}: ${value}`;
+
+  const inner = (pressed: boolean) => (
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor: pressed ? colors.cardHover : colors.card,
+          borderColor: colors.border,
+          borderTopColor: ruleColor,
+        },
+        !isDark && styles.cardShadow,
+      ]}
+    >
+      {(icon || trend) && (
+        <View style={styles.header}>
+          {icon ? (
+            <View style={[styles.iconContainer, { backgroundColor: ruleColor + '14' }]}>
+              {icon}
+            </View>
+          ) : (
+            <View />
+          )}
+          {trend && (
+            <View
+              style={[
+                styles.trendBadge,
+                { backgroundColor: trend.isPositive ? colors.successBg : colors.dangerBg },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.trendText,
+                  { color: trend.isPositive ? colors.success : colors.danger },
+                ]}
+                maxFontSizeMultiplier={1.3}
+              >
+                {trend.isPositive ? '▲' : '▼'} {Math.abs(trend.value)}%
+              </Text>
+            </View>
+          )}
         </View>
-        {trend && (
-          <View style={[
-            styles.trendBadge,
-            { backgroundColor: trend.isPositive ? colors.successBg : colors.dangerBg }
-          ]}>
-            <Text style={[
-              styles.trendText,
-              { color: trend.isPositive ? colors.success : colors.danger }
-            ]}>
-              {trend.isPositive ? '↑' : '↓'} {Math.abs(trend.value)}%
-            </Text>
-          </View>
-        )}
-      </View>
-      
-      <Text style={[styles.value, { color: color || colors.text }]}>{value}</Text>
-      <Text style={[styles.title, { color: colors.textSecondary }]}>{title}</Text>
-      
+      )}
+
+      <Text
+        style={[styles.value, { color: colors.text }]}
+        maxFontSizeMultiplier={1.3}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+      <Text style={[styles.title, { color: colors.textSecondary }]} numberOfLines={2}>
+        {title}
+      </Text>
+
       {subtitle && (
-        <Text style={[styles.subtitle, { color: colors.textTertiary }]}>{subtitle}</Text>
+        <Text style={[styles.subtitle, { color: colors.textTertiary }]} numberOfLines={1}>
+          {subtitle}
+        </Text>
       )}
     </View>
   );
 
   if (onPress) {
     return (
-      <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
-        {content}
-      </TouchableOpacity>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={a11yLabel}
+      >
+        {({ pressed }) => inner(pressed)}
+      </Pressable>
     );
   }
 
-  return content;
+  return <View accessible accessibilityLabel={a11yLabel}>{inner(false)}</View>;
 };
 
 const styles = StyleSheet.create({
   container: {
-    padding: 20,
-    borderRadius: 16,
+    padding: 16,
+    borderRadius: radii.md,
     borderWidth: 1,
+    borderTopWidth: 3,
     minWidth: 160,
     marginRight: 12,
     marginBottom: 12,
-    shadowColor: '#000',
+  },
+  cardShadow: {
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 2,
   },
@@ -88,35 +132,44 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
     justifyContent: 'center',
     alignItems: 'center',
   },
   trendBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
   },
   trendText: {
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 16,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   value: {
-    fontSize: 32,
-    fontWeight: '700',
-    marginBottom: 4,
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+    marginBottom: 2,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
   },
   title: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   subtitle: {
     fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
     marginTop: 4,
   },
 });

@@ -1,9 +1,11 @@
 // =====================================================
-// BUTTON COMPONENT
+// BUTTON COMPONENT — "Prakash" design system
+// 56dp primary actions, pressed = background change
+// (never opacity fade or scale), 40% opacity disabled.
 // =====================================================
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, View } from 'react-native';
-import { useTheme } from '../../lib/ThemeContext';
+import { Pressable, Text, StyleSheet, ActivityIndicator, View } from 'react-native';
+import { useTheme, radii } from '../../lib/ThemeContext';
 
 interface ButtonProps {
   title: string;
@@ -30,69 +32,73 @@ export const Button: React.FC<ButtonProps> = ({
 }) => {
   const { colors } = useTheme();
 
-  const getBackgroundColor = () => {
-    if (disabled) return colors.disabled;
+  const getBackgroundColor = (pressed: boolean) => {
     switch (variant) {
       case 'primary':
-        return colors.primary;
-      case 'secondary':
-        return colors.secondary;
+        return pressed ? colors.primaryDark : colors.primary;
       case 'danger':
-        return colors.danger;
+        // waterCritical is the deep-red step of the same scale — visible pressed shift
+        return pressed ? colors.waterCritical : colors.danger;
+      case 'secondary':
       case 'outline':
       case 'ghost':
-        return 'transparent';
+        return pressed ? colors.surfaceVariant : 'transparent';
       default:
-        return colors.primary;
+        return pressed ? colors.primaryDark : colors.primary;
     }
   };
 
   const getTextColor = () => {
-    if (disabled) return colors.textTertiary;
     switch (variant) {
       case 'primary':
-      case 'secondary':
       case 'danger':
-        return '#FFFFFF';
+        return colors.onPrimary;
+      case 'secondary':
       case 'outline':
-        return colors.primary;
-      case 'ghost':
         return colors.text;
+      case 'ghost':
+        return colors.primary;
       default:
-        return '#FFFFFF';
+        return colors.onPrimary;
     }
   };
 
   const getBorderColor = () => {
-    if (disabled) return colors.border;
     switch (variant) {
+      case 'secondary':
       case 'outline':
-        return colors.primary;
+        return colors.inputBorder;
       default:
         return 'transparent';
     }
   };
 
+  const hasBorder = variant === 'secondary' || variant === 'outline';
+
   const sizeStyles = {
-    small: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 12 },
-    medium: { paddingHorizontal: 20, paddingVertical: 12, fontSize: 14 },
-    large: { paddingHorizontal: 28, paddingVertical: 16, fontSize: 16 },
+    small:  { minHeight: 44, paddingHorizontal: 16, fontSize: 14 },
+    medium: { minHeight: 52, paddingHorizontal: 20, fontSize: 15 },
+    large:  { minHeight: 56, paddingHorizontal: 24, fontSize: 16 },
   };
 
   return (
-    <TouchableOpacity
+    <Pressable
       onPress={onPress}
       disabled={disabled || loading}
-      activeOpacity={0.7}
-      style={[
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: disabled || loading, busy: loading }}
+      hitSlop={size === 'small' ? { top: 2, bottom: 2, left: 0, right: 0 } : undefined}
+      style={({ pressed }) => [
         styles.button,
         {
-          backgroundColor: getBackgroundColor(),
+          backgroundColor: getBackgroundColor(pressed && !disabled && !loading),
           borderColor: getBorderColor(),
-          borderWidth: variant === 'outline' ? 1.5 : 0,
+          borderWidth: hasBorder ? 1.5 : 0,
+          minHeight: sizeStyles[size].minHeight,
           paddingHorizontal: sizeStyles[size].paddingHorizontal,
-          paddingVertical: sizeStyles[size].paddingVertical,
         },
+        (disabled || loading) && styles.disabled,
         fullWidth && styles.fullWidth,
       ]}
     >
@@ -108,6 +114,7 @@ export const Button: React.FC<ButtonProps> = ({
               styles.text,
               { color: getTextColor(), fontSize: sizeStyles[size].fontSize },
             ]}
+            maxFontSizeMultiplier={1.3}
           >
             {title}
           </Text>
@@ -116,15 +123,18 @@ export const Button: React.FC<ButtonProps> = ({
           )}
         </View>
       )}
-    </TouchableOpacity>
+    </Pressable>
   );
 };
 
 const styles = StyleSheet.create({
   button: {
-    borderRadius: 10,
+    borderRadius: radii.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  disabled: {
+    opacity: 0.4,
   },
   fullWidth: {
     width: '100%',
@@ -134,7 +144,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   text: {
-    fontWeight: '600',
+    fontWeight: '700',
   },
   iconLeft: {
     marginRight: 8,

@@ -1,15 +1,16 @@
 // =====================================================
-// ASHA WORKER DASHBOARD — Polished
+// ASHA WORKER DASHBOARD — "Prakash"
 // Priority: Quick Actions → District Alerts → AI Insights → My Report Stats
+// Four-state data regions: skeleton / content / quiet-zero / error-with-retry.
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import { ScrollView, View, StyleSheet, RefreshControl } from 'react-native';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, QuickActionBtn,
-  AlertCard, EmptyState, InfoBanner, SectionDivider, ToolCard,
+  InfoBanner, SectionDivider, ToolCard, SkeletonBlock, ErrorCard,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
@@ -18,14 +19,19 @@ import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferenc
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
+const LOAD_ERROR = "Couldn't load dashboard data — check connection";
+
 export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
   const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ myReports: 0, myPending: 0, myApproved: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
 
   const load = async () => {
+    setError(null);
     try {
       const [diseaseAll, waterAll, diseasePending, waterPending, diseaseApproved, waterApproved, campaigns] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id),
@@ -43,30 +49,33 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         .eq('approval_status', 'approved')
         .order('created_at', { ascending: false })
         .limit(60);
-      const totalSubmitted =
-        (diseaseAll.status === 'fulfilled' ? diseaseAll.value.count ?? 0 : 0) +
-        (waterAll.status === 'fulfilled' ? waterAll.value.count ?? 0 : 0);
-      const totalPending =
-        (diseasePending.status === 'fulfilled' ? diseasePending.value.count ?? 0 : 0) +
-        (waterPending.status === 'fulfilled' ? waterPending.value.count ?? 0 : 0);
-      const totalApproved =
-        (diseaseApproved.status === 'fulfilled' ? diseaseApproved.value.count ?? 0 : 0) +
-        (waterApproved.status === 'fulfilled' ? waterApproved.value.count ?? 0 : 0);
+
+      // Silent zeros are design bugs: a failed query marks the region errored.
+      let failed = false;
+      const countOf = (r: PromiseSettledResult<any>): number => {
+        if (r.status !== 'fulfilled' || r.value?.error) { failed = true; return 0; }
+        return r.value.count ?? 0;
+      };
 
       setStats({
-        myReports: totalSubmitted,
-        myPending: totalPending,
-        myApproved: totalApproved,
-        campaigns: campaigns.status === 'fulfilled' ? campaigns.value.count ?? 0 : 0,
+        myReports: countOf(diseaseAll) + countOf(waterAll),
+        myPending: countOf(diseasePending) + countOf(waterPending),
+        myApproved: countOf(diseaseApproved) + countOf(waterApproved),
+        campaigns: countOf(campaigns),
       });
-      if (alertData.data) {
-        setAlerts(filterAlertsForProfile(alertData.data, profile).slice(0, 4));
-      }
-    } catch {}
+      if (alertData.error) failed = true;
+      setAlerts(filterAlertsForProfile(alertData.data ?? [], profile).slice(0, 4));
+      if (failed) setError(LOAD_ERROR);
+    } catch {
+      setError(LOAD_ERROR);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  const retry = () => { setLoading(true); load(); };
 
   return (
     <ScrollView
@@ -76,20 +85,30 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
     >
       <DashboardHeader profile={profile} />
 
+      {/* Error-with-retry: one inline card covering the failed data regions */}
+      {!loading && error && (
+        <View style={styles.errorWrap}>
+          <ErrorCard message={error} onRetry={retry} />
+        </View>
+      )}
+
       {/* Pending approval banner */}
-      {stats.myPending > 0 && (
-        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
-          <InfoBanner icon="time-outline" color="#F59E0B" text={`${stats.myPending} of your report${stats.myPending > 1 ? 's are' : ' is'} awaiting clinic approval`} />
+      {!loading && !error && stats.myPending > 0 && (
+        <View style={styles.bannerWrap}>
+          <InfoBanner icon="time-outline" color={colors.warning} text={`${stats.myPending} of your report${stats.myPending > 1 ? 's are' : ' is'} awaiting clinic approval`} />
         </View>
       )}
 
       {isWidgetVisible('quick_actions') && (
         <>
-          <Section title="Quick Actions" style={{ marginTop: stats.myPending > 0 ? 4 : 16 }}>
+          <Section title="Quick Actions" style={{ marginTop: stats.myPending > 0 ? spacing.xs : spacing.lg }}>
             <View style={styles.qaRow}>
-              <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
-              <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
-              <QuickActionBtn icon="megaphone" label="New Campaign" color="#10B981" onPress={() => onNavigate('new-campaign')} />
+              <QuickActionBtn icon="thermometer-outline" label="Report Disease" color={colors.danger} onPress={() => onNavigate('new-disease-report')} />
+              <QuickActionBtn icon="water-outline" label="Water Quality" color={colors.info} onPress={() => onNavigate('new-water-report')} />
+            </View>
+            <View style={[styles.qaRow, styles.rowGap]}>
+              <QuickActionBtn icon="megaphone-outline" label="New Campaign" color={colors.success} onPress={() => onNavigate('new-campaign')} />
+              <View style={styles.spacer} />
             </View>
           </Section>
           <SectionDivider />
@@ -98,15 +117,23 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
       {isWidgetVisible('alerts_map') && (
         <>
-          <MapAndAlertsSection
-            profile={profile}
-            alerts={alerts}
-            onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-            onViewAllAlerts={() => onNavigate('all-alerts')}
-            alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
-            emptyTitle="District is Clear"
-            emptySubtitle="No active health alerts in your district."
-          />
+          {loading ? (
+            <Section title={profile.district ? `${profile.district} Alerts` : 'Active Alerts'}>
+              <SkeletonBlock height={160} radius={radii.md} style={styles.skelGap} />
+              <SkeletonBlock height={72} radius={radii.md} style={styles.skelGap} />
+              <SkeletonBlock height={72} radius={radii.md} />
+            </Section>
+          ) : !error ? (
+            <MapAndAlertsSection
+              profile={profile}
+              alerts={alerts}
+              onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+              onViewAllAlerts={() => onNavigate('all-alerts')}
+              alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
+              emptyTitle="District is Clear"
+              emptySubtitle="No active health alerts in your district."
+            />
+          ) : null}
           <SectionDivider />
         </>
       )}
@@ -114,9 +141,9 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       {isWidgetVisible('operations_tools') && (
         <>
           <Section title="Operations Intelligence">
-            <ToolCard icon="pulse" iconColor="#0EA5E9" title="District Health Score" subtitle="View district risk score and outbreak pressure" onPress={() => onNavigate('health-score')} />
-            <ToolCard icon="analytics" iconColor="#F59E0B" title="Campaign Intelligence" subtitle="Review campaign performance and strategic guidance" onPress={() => onNavigate('campaign-intelligence')} />
-            <ToolCard icon="options" iconColor="#8B5CF6" title="Customize Widgets" subtitle="Choose dashboard widgets you want to see" onPress={() => onNavigate('widget-customization')} />
+            <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="View district risk score and outbreak pressure" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Review campaign performance and strategic guidance" onPress={() => onNavigate('campaign-intelligence')} />
+            <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Choose dashboard widgets you want to see" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />
         </>
@@ -131,11 +158,29 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 
       {isWidgetVisible('my_stats') && (
         <Section title="My Submission Stats">
-          <View style={styles.statsRow}>
-            <StatCard label="Total Submitted" value={stats.myReports} icon="document-text" color="#EA580C" />
-            <StatCard label="Approved" value={stats.myApproved} icon="checkmark-circle" color="#10B981" />
-            <StatCard label="Pending" value={stats.myPending} icon="time" color="#F59E0B" />
-          </View>
+          {loading ? (
+            <>
+              <View style={styles.statsRow}>
+                <SkeletonBlock height={122} radius={radii.md} style={styles.skelStat} />
+                <SkeletonBlock height={122} radius={radii.md} style={styles.skelStat} />
+              </View>
+              <View style={[styles.statsRow, styles.rowGap]}>
+                <SkeletonBlock height={122} radius={radii.md} style={styles.skelStat} />
+                <View style={styles.spacer} />
+              </View>
+            </>
+          ) : !error ? (
+            <>
+              <View style={styles.statsRow}>
+                <StatCard label="Total Submitted" value={stats.myReports} icon="document-text-outline" color={colors.primary} />
+                <StatCard label="Approved" value={stats.myApproved} icon="checkmark-circle-outline" color={colors.success} />
+              </View>
+              <View style={[styles.statsRow, styles.rowGap]}>
+                <StatCard label="Pending" value={stats.myPending} icon="time-outline" color={colors.accent} />
+                <View style={styles.spacer} />
+              </View>
+            </>
+          ) : null}
         </Section>
       )}
 
@@ -145,8 +190,14 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 };
 
 const styles = StyleSheet.create({
-  qaRow: { flexDirection: 'row', gap: 8 },
-  statsRow: { flexDirection: 'row', gap: 8 },
+  qaRow: { flexDirection: 'row', gap: spacing.sm },
+  statsRow: { flexDirection: 'row', gap: spacing.sm },
+  rowGap: { marginTop: spacing.sm },
+  spacer: { flex: 1 },
+  skelStat: { flex: 1, width: 'auto' },
+  skelGap: { marginBottom: spacing.md },
+  errorWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.lg },
+  bannerWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.md },
 });
 
 export default AshaWorkerDashboard;

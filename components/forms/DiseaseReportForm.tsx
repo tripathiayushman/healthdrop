@@ -1,20 +1,23 @@
 // =====================================================
-// DISEASE REPORT FORM - Modern UI with Vector Icons
+// DISEASE REPORT FORM — Prakash restyle
+// Flat header, labels-above 52dp inputs, 44dp selection
+// chips, inline errors + scroll-to-first-error,
+// One-Hand Action Bar. Zero hex literals.
 // =====================================================
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
-  Alert,
+  Pressable,
   TextInput,
+  LayoutChangeEvent,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, getSeverityColor, Theme } from '../../lib/ThemeContext';
 import { diseaseReportsService } from '../../lib/services/diseaseReports';
-import { StateDropdown, SubmissionModal } from '../shared';
+import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { DiseaseType, Severity, TreatmentStatus } from '../../types';
 
@@ -23,16 +26,67 @@ interface DiseaseReportFormProps {
   onCancel: () => void;
 }
 
+// ── Local building blocks ────────────────────────────────────────────────────
+
+const SelectChip: React.FC<{
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  colors: Theme;
+  fill?: string;
+  selectedLabelColor?: string;
+}> = ({ label, selected, onPress, colors, fill, selectedLabelColor }) => {
+  const bg = fill ?? colors.primary;
+  const labelColor = selectedLabelColor ?? colors.onPrimary;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [
+        styles.chip,
+        {
+          backgroundColor: selected ? bg : pressed ? colors.cardHover : colors.card,
+          borderColor: selected ? bg : colors.border,
+        },
+      ]}
+    >
+      {selected && <Ionicons name="checkmark" size={16} color={labelColor} />}
+      <Text style={[styles.chipLabel, { color: selected ? labelColor : colors.text }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+};
+
+const FieldError: React.FC<{ message?: string; colors: Theme }> = ({ message, colors }) => {
+  if (!message) return null;
+  return (
+    <View style={styles.errorRow} accessibilityLiveRegion="polite">
+      <Ionicons name="alert-circle" size={16} color={colors.danger} />
+      <Text style={[styles.errorText, { color: colors.danger }]}>{message}</Text>
+    </View>
+  );
+};
+
+const FIELD_ORDER = ['disease_name', 'location'];
+
 export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   onSuccess,
   onCancel,
 }) => {
-  const { colors } = useTheme();
+  const { colors, isDark, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [modalVisible, setModalVisible] = useState(false);
   const [modalType, setModalType] = useState<'success' | 'error'>('success');
   const [modalMessage, setModalMessage] = useState('');
+
+  const scrollRef = useRef<ScrollView>(null);
+  const sectionYRef = useRef<Record<string, number>>({});
+  const fieldYRef = useRef<Record<string, number>>({});
+  const fieldSectionRef = useRef<Record<string, string>>({});
 
   const [formData, setFormData] = useState({
     disease_name: '',
@@ -55,24 +109,24 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   });
 
   const diseaseTypes = [
-    { label: 'Waterborne', value: 'waterborne', icon: 'water' },
-    { label: 'Airborne', value: 'airborne', icon: 'weather-windy' },
-    { label: 'Vector-borne', value: 'vector', icon: 'bug' },
-    { label: 'Foodborne', value: 'foodborne', icon: 'food' },
-    { label: 'Other', value: 'other', icon: 'clipboard-list' },
+    { label: 'Waterborne', value: 'waterborne' },
+    { label: 'Airborne', value: 'airborne' },
+    { label: 'Vector-borne', value: 'vector' },
+    { label: 'Foodborne', value: 'foodborne' },
+    { label: 'Other', value: 'other' },
   ];
 
   const severityLevels = [
-    { label: 'Low', value: 'low', color: '#10B981' },
-    { label: 'Medium', value: 'medium', color: '#F59E0B' },
-    { label: 'High', value: 'high', color: '#EF4444' },
-    { label: 'Critical', value: 'critical', color: '#DC2626' },
+    { label: 'Low', value: 'low' },
+    { label: 'Medium', value: 'medium' },
+    { label: 'High', value: 'high' },
+    { label: 'Critical', value: 'critical' },
   ];
 
   const treatmentStatusOptions = [
-    { label: 'Pending', value: 'pending', icon: 'time-outline' },
-    { label: 'In Treatment', value: 'in_treatment', icon: 'medical-outline' },
-    { label: 'Recovered', value: 'recovered', icon: 'checkmark-circle-outline' },
+    { label: 'Pending', value: 'pending' },
+    { label: 'In Treatment', value: 'in_treatment' },
+    { label: 'Recovered', value: 'recovered' },
   ];
 
   const ageGroups = [
@@ -86,9 +140,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   ];
 
   const genderOptions = [
-    { label: 'Male', value: 'male', icon: 'male' },
-    { label: 'Female', value: 'female', icon: 'female' },
-    { label: 'Mixed', value: 'mixed', icon: 'people' },
+    { label: 'Male', value: 'male' },
+    { label: 'Female', value: 'female' },
+    { label: 'Mixed', value: 'mixed' },
   ];
 
   const commonDiseases = [
@@ -97,37 +151,56 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     'Tuberculosis', 'COVID-19', 'Influenza', 'Jaundice', 'Other',
   ];
 
-  const validateForm = (): boolean => {
-    const diseaseName = formData.disease_name === 'Other' 
-      ? formData.custom_disease_name 
+  // ── Layout tracking for scroll-to-first-error ─────────────────────────────
+  const onSectionLayout = (section: string) => (e: LayoutChangeEvent) => {
+    sectionYRef.current[section] = e.nativeEvent.layout.y;
+  };
+  const onFieldLayout = (section: string, field: string) => (e: LayoutChangeEvent) => {
+    fieldYRef.current[field] = e.nativeEvent.layout.y;
+    fieldSectionRef.current[field] = section;
+  };
+  const scrollToFirstError = (errs: Record<string, string>) => {
+    const first = FIELD_ORDER.find((f) => errs[f]);
+    if (!first) return;
+    const section = fieldSectionRef.current[first];
+    const y =
+      (section ? sectionYRef.current[section] ?? 0 : 0) + (fieldYRef.current[first] ?? 0);
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: !reduceMotion });
+  };
+
+  const clearError = (field: string) => {
+    setErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const validateForm = (): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    const diseaseName = formData.disease_name === 'Other'
+      ? formData.custom_disease_name
       : formData.disease_name;
-    
-    if (!diseaseName.trim()) {
-      Alert.alert('Required', 'Please select or enter a disease name');
-      return false;
+    if (!diseaseName.trim()) errs.disease_name = 'Select or enter a disease name';
+    if (!formData.location_name.trim() || !formData.district.trim() || !formData.state) {
+      errs.location = 'Enter location, district and state';
     }
-    if (!formData.location_name.trim()) {
-      Alert.alert('Required', 'Please enter location name');
-      return false;
-    }
-    if (!formData.district.trim()) {
-      Alert.alert('Required', 'Please enter district');
-      return false;
-    }
-    if (!formData.state) {
-      Alert.alert('Required', 'Please select a state');
-      return false;
-    }
-    return true;
+    return errs;
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    const errs = validateForm();
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      scrollToFirstError(errs);
+      return;
+    }
 
     setLoading(true);
     try {
-      const diseaseName = formData.disease_name === 'Other' 
-        ? formData.custom_disease_name 
+      const diseaseName = formData.disease_name === 'Other'
+        ? formData.custom_disease_name
         : formData.disease_name;
 
       const diseaseType = formData.disease_type === 'other'
@@ -169,7 +242,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
       if (queued) {
         setModalType('success');
-        setModalMessage('No internet connection — your report has been saved and will sync automatically when you go back online.');
+        setModalMessage('Saved on phone — will sync. Your report will upload automatically when you are back online.');
       } else {
         setModalType('success');
         setModalMessage('Your disease report has been submitted successfully and will be reviewed by health authorities.');
@@ -196,151 +269,136 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   const getInputStyle = (fieldName: string) => [
     styles.input,
     {
-      backgroundColor: colors.card,
-      borderColor: focusedField === fieldName ? colors.primary : colors.border,
+      backgroundColor: colors.inputBackground,
       color: colors.text,
+      borderColor: errors[fieldName]
+        ? colors.inputErrorBorder
+        : focusedField === fieldName
+          ? colors.inputFocusBorder
+          : colors.inputBorder,
+      borderWidth: errors[fieldName] || focusedField === fieldName ? 2 : 1.5,
     },
   ];
 
+  const headerText = isDark ? colors.text : colors.textInverse;
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.primary }]}>
-        <TouchableOpacity onPress={onCancel} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
-          <Text style={styles.backText}>Back</Text>
-        </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <MaterialCommunityIcons name="virus" size={28} color="#FFF" />
-          <Text style={styles.headerTitle}>Disease Report</Text>
-        </View>
-        <Text style={styles.headerSubtitle}>Report disease outbreaks in your area</Text>
+      {/* Header — flat band */}
+      <View
+        style={[
+          styles.header,
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: isDark ? 1 : 0,
+            borderBottomColor: colors.border,
+          },
+        ]}
+      >
+        <Pressable
+          onPress={onCancel}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={headerText} />
+          <Text style={[styles.backText, { color: headerText }]}>Back</Text>
+        </Pressable>
+        <Text style={[styles.headerTitle, { color: headerText }]}>Disease Report</Text>
+        <Text style={[styles.headerSubtitle, { color: headerText }]}>
+          Report disease outbreaks in your area
+        </Text>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Disease Information */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <MaterialCommunityIcons name="clipboard-text" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Disease Information</Text>
-          </View>
+        <View style={styles.section} onLayout={onSectionLayout('disease')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Disease Information</Text>
 
-          {/* Disease Name */}
-          <Text style={[styles.label, { color: colors.text }]}>Disease Name *</Text>
-          <View style={styles.chipGrid}>
-            {commonDiseases.map((disease) => (
-              <TouchableOpacity
-                key={disease}
-                style={[
-                  styles.chip,
-                  {
-                    backgroundColor: formData.disease_name === disease ? colors.primary : colors.card,
-                    borderColor: formData.disease_name === disease ? colors.primary : colors.border,
-                  }
-                ]}
-                onPress={() => setFormData({ ...formData, disease_name: disease })}
-              >
-                <Text style={[
-                  styles.chipText,
-                  { color: formData.disease_name === disease ? '#FFF' : colors.text }
-                ]}>
-                  {disease}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* Custom Disease Input */}
-          {formData.disease_name === 'Other' && (
-            <View style={styles.customInputContainer}>
-              <TextInput
-                style={getInputStyle('custom_disease_name')}
-                placeholder="Enter disease name..."
-                placeholderTextColor={colors.textSecondary}
-                value={formData.custom_disease_name}
-                onChangeText={(text) => setFormData({ ...formData, custom_disease_name: text })}
-                onFocus={() => setFocusedField('custom_disease_name')}
-                onBlur={() => setFocusedField(null)}
-              />
-            </View>
-          )}
-
-          {/* Disease Type */}
-          <Text style={[styles.label, { color: colors.text }]}>Disease Type *</Text>
-          <View style={styles.optionRow}>
-            {diseaseTypes.map((type) => (
-              <TouchableOpacity
-                key={type.value}
-                style={[
-                  styles.optionBtn,
-                  {
-                    backgroundColor: formData.disease_type === type.value ? colors.primary + '15' : colors.card,
-                    borderColor: formData.disease_type === type.value ? colors.primary : colors.border,
-                  }
-                ]}
-                onPress={() => setFormData({ ...formData, disease_type: type.value })}
-              >
-                <MaterialCommunityIcons 
-                  name={type.icon as any} 
-                  size={18} 
-                  color={formData.disease_type === type.value ? colors.primary : colors.textSecondary} 
+          <View onLayout={onFieldLayout('disease', 'disease_name')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Disease Name *</Text>
+            <View style={styles.chipWrap}>
+              {commonDiseases.map((disease) => (
+                <SelectChip
+                  key={disease}
+                  label={disease}
+                  selected={formData.disease_name === disease}
+                  onPress={() => { setFormData({ ...formData, disease_name: disease }); clearError('disease_name'); }}
+                  colors={colors}
                 />
-                <Text style={[
-                  styles.optionText,
-                  { color: formData.disease_type === type.value ? colors.primary : colors.text }
-                ]}>
-                  {type.label}
-                </Text>
-              </TouchableOpacity>
+              ))}
+            </View>
+
+            {formData.disease_name === 'Other' && (
+              <>
+                <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Disease Name</Text>
+                <TextInput
+                  style={getInputStyle('custom_disease_name')}
+                  placeholder="Enter disease name..."
+                  placeholderTextColor={colors.inputPlaceholderColor}
+                  value={formData.custom_disease_name}
+                  onChangeText={(text) => { setFormData({ ...formData, custom_disease_name: text }); clearError('disease_name'); }}
+                  onFocus={() => setFocusedField('custom_disease_name')}
+                  onBlur={() => setFocusedField(null)}
+                />
+              </>
+            )}
+            <FieldError message={errors.disease_name} colors={colors} />
+          </View>
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Disease Type *</Text>
+          <View style={styles.chipWrap}>
+            {diseaseTypes.map((type) => (
+              <SelectChip
+                key={type.value}
+                label={type.label}
+                selected={formData.disease_type === type.value}
+                onPress={() => setFormData({ ...formData, disease_type: type.value })}
+                colors={colors}
+              />
             ))}
           </View>
 
-          {/* Custom Disease Type Input */}
           {formData.disease_type === 'other' && (
-            <View style={styles.customInputContainer}>
+            <>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Disease Type</Text>
               <TextInput
                 style={getInputStyle('custom_disease_type')}
                 placeholder="Specify disease type..."
-                placeholderTextColor={colors.textSecondary}
+                placeholderTextColor={colors.inputPlaceholderColor}
                 value={formData.custom_disease_type}
                 onChangeText={(text) => setFormData({ ...formData, custom_disease_type: text })}
                 onFocus={() => setFocusedField('custom_disease_type')}
                 onBlur={() => setFocusedField(null)}
               />
-            </View>
+            </>
           )}
 
-          {/* Severity */}
-          <Text style={[styles.label, { color: colors.text }]}>Severity Level *</Text>
-          <View style={styles.severityRow}>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Severity Level *</Text>
+          <View style={styles.chipWrap}>
             {severityLevels.map((level) => (
-              <TouchableOpacity
+              <SelectChip
                 key={level.value}
-                style={[
-                  styles.severityBtn,
-                  {
-                    backgroundColor: formData.severity === level.value ? level.color : colors.card,
-                    borderColor: level.color,
-                  }
-                ]}
+                label={level.label}
+                selected={formData.severity === level.value}
                 onPress={() => setFormData({ ...formData, severity: level.value })}
-              >
-                <Text style={[
-                  styles.severityText,
-                  { color: formData.severity === level.value ? '#FFF' : level.color }
-                ]}>
-                  {level.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+                fill={getSeverityColor(level.value, colors)}
+                selectedLabelColor={colors.textInverse}
+              />
             ))}
           </View>
 
-          {/* Symptoms */}
-          <Text style={[styles.label, { color: colors.text }]}>Symptoms</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Symptoms</Text>
           <TextInput
-            style={[getInputStyle('symptoms'), styles.textArea]}
+            style={[...getInputStyle('symptoms'), styles.textArea]}
             placeholder="Describe symptoms observed..."
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.symptoms}
             onChangeText={(text) => setFormData({ ...formData, symptoms: text })}
             onFocus={() => setFocusedField('symptoms')}
@@ -352,162 +410,109 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
         {/* Case Details */}
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="stats-chart" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Case Details</Text>
-          </View>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Case Details</Text>
 
-          <View style={styles.row}>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Cases Count *</Text>
-              <TextInput
-                style={getInputStyle('cases_count')}
-                placeholder="1"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.cases_count}
-                onChangeText={(text) => setFormData({ ...formData, cases_count: text.replace(/[^0-9]/g, '') })}
-                onFocus={() => setFocusedField('cases_count')}
-                onBlur={() => setFocusedField(null)}
-                keyboardType="numeric"
-              />
-            </View>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Deaths Count</Text>
-              <TextInput
-                style={getInputStyle('deaths_count')}
-                placeholder="0"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.deaths_count}
-                onChangeText={(text) => setFormData({ ...formData, deaths_count: text.replace(/[^0-9]/g, '') })}
-                onFocus={() => setFocusedField('deaths_count')}
-                onBlur={() => setFocusedField(null)}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Cases Count *</Text>
+          <TextInput
+            style={getInputStyle('cases_count')}
+            placeholder="1"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.cases_count}
+            onChangeText={(text) => setFormData({ ...formData, cases_count: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('cases_count')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="numeric"
+          />
 
-          {/* Age Group */}
-          <Text style={[styles.label, { color: colors.text }]}>Age Group</Text>
-          <View style={styles.chipGrid}>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Deaths Count</Text>
+          <TextInput
+            style={getInputStyle('deaths_count')}
+            placeholder="0"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.deaths_count}
+            onChangeText={(text) => setFormData({ ...formData, deaths_count: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('deaths_count')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="numeric"
+          />
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Age Group</Text>
+          <View style={styles.chipWrap}>
             {ageGroups.map((age) => (
-              <TouchableOpacity
+              <SelectChip
                 key={age.value}
-                style={[
-                  styles.chip,
-                  {
-                    backgroundColor: formData.age_group === age.value ? colors.secondary : colors.card,
-                    borderColor: formData.age_group === age.value ? colors.secondary : colors.border,
-                  }
-                ]}
+                label={age.label}
+                selected={formData.age_group === age.value}
                 onPress={() => setFormData({ ...formData, age_group: age.value })}
-              >
-                <Text style={[
-                  styles.chipText,
-                  { color: formData.age_group === age.value ? '#FFF' : colors.text }
-                ]}>
-                  {age.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+              />
             ))}
           </View>
 
-          {/* Gender */}
-          <Text style={[styles.label, { color: colors.text }]}>Gender</Text>
-          <View style={styles.optionRow}>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Gender</Text>
+          <View style={styles.chipWrap}>
             {genderOptions.map((gender) => (
-              <TouchableOpacity
+              <SelectChip
                 key={gender.value}
-                style={[
-                  styles.genderBtn,
-                  {
-                    backgroundColor: formData.gender === gender.value ? colors.secondary + '15' : colors.card,
-                    borderColor: formData.gender === gender.value ? colors.secondary : colors.border,
-                  }
-                ]}
+                label={gender.label}
+                selected={formData.gender === gender.value}
                 onPress={() => setFormData({ ...formData, gender: gender.value })}
-              >
-                <Ionicons 
-                  name={gender.icon as any} 
-                  size={18} 
-                  color={formData.gender === gender.value ? colors.secondary : colors.textSecondary} 
-                />
-                <Text style={[
-                  styles.optionText,
-                  { color: formData.gender === gender.value ? colors.secondary : colors.text }
-                ]}>
-                  {gender.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+              />
             ))}
           </View>
 
-          {/* Treatment Status */}
-          <Text style={[styles.label, { color: colors.text }]}>Treatment Status</Text>
-          <View style={styles.optionRow}>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Treatment Status</Text>
+          <View style={styles.chipWrap}>
             {treatmentStatusOptions.map((status) => (
-              <TouchableOpacity
+              <SelectChip
                 key={status.value}
-                style={[
-                  styles.statusBtn,
-                  {
-                    backgroundColor: formData.treatment_status === status.value ? colors.accent + '15' : colors.card,
-                    borderColor: formData.treatment_status === status.value ? colors.accent : colors.border,
-                  }
-                ]}
+                label={status.label}
+                selected={formData.treatment_status === status.value}
                 onPress={() => setFormData({ ...formData, treatment_status: status.value })}
-              >
-                <Ionicons 
-                  name={status.icon as any} 
-                  size={18} 
-                  color={formData.treatment_status === status.value ? colors.accent : colors.textSecondary} 
-                />
-                <Text style={[
-                  styles.statusText,
-                  { color: formData.treatment_status === status.value ? colors.accent : colors.text }
-                ]}>
-                  {status.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+              />
             ))}
           </View>
         </View>
 
-        {/* Location — unified: GPS + reverse geocode + district/state */}
-        <View style={styles.section}>
-          <LocationField
-            value={{
-              latitude: formData.latitude,
-              longitude: formData.longitude,
-              locationName: formData.location_name,
-              district: formData.district,
-              state: formData.state,
-              formattedAddress: '',
-            }}
-            onChange={(loc) =>
-              setFormData({
-                ...formData,
-                latitude: loc.latitude,
-                longitude: loc.longitude,
-                location_name: loc.locationName,
-                district: loc.district,
-                state: loc.state,
-              })
-            }
-            autoFetch={true}
-          />
+        {/* Location */}
+        <View style={styles.section} onLayout={onSectionLayout('location')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Location</Text>
+          <View onLayout={onFieldLayout('location', 'location')}>
+            <LocationField
+              value={{
+                latitude: formData.latitude,
+                longitude: formData.longitude,
+                locationName: formData.location_name,
+                district: formData.district,
+                state: formData.state,
+                formattedAddress: '',
+              }}
+              onChange={(loc) => {
+                setFormData({
+                  ...formData,
+                  latitude: loc.latitude,
+                  longitude: loc.longitude,
+                  location_name: loc.locationName,
+                  district: loc.district,
+                  state: loc.state,
+                });
+                if (loc.locationName && loc.district && loc.state) clearError('location');
+              }}
+              autoFetch={true}
+            />
+            <FieldError message={errors.location} colors={colors} />
+          </View>
         </View>
 
         {/* Additional Notes */}
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="document-text" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Additional Notes</Text>
-          </View>
-
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Additional Notes</Text>
           <TextInput
-            style={[getInputStyle('notes'), styles.textArea]}
+            style={[...getInputStyle('notes'), styles.textArea]}
             placeholder="Any additional observations or notes..."
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.notes}
             onChangeText={(text) => setFormData({ ...formData, notes: text })}
             onFocus={() => setFocusedField('notes')}
@@ -516,29 +521,36 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             numberOfLines={4}
           />
         </View>
-
-        <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* Footer Buttons */}
-      <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.cancelBtn, { borderColor: colors.border }]}
+      {/* One-Hand Action Bar */}
+      <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+        <Pressable
           onPress={onCancel}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.cancelLink,
+            { backgroundColor: pressed ? colors.surfaceVariant : colors.surface },
+          ]}
         >
-          <Ionicons name="close" size={20} color={colors.text} />
-          <Text style={[styles.footerBtnText, { color: colors.text }]}>Cancel</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: colors.primary }]}
+          <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+        </Pressable>
+        <Pressable
           onPress={handleSubmit}
           disabled={loading}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.submitBtn,
+            {
+              backgroundColor: pressed ? colors.primaryDark : colors.primary,
+              opacity: loading ? 0.4 : 1,
+            },
+          ]}
         >
-          <Ionicons name="checkmark" size={20} color="#FFF" />
-          <Text style={[styles.footerBtnText, { color: '#FFF' }]}>
-            {loading ? 'Submitting...' : 'Submit Report'}
+          <Text style={[styles.submitText, { color: colors.onPrimary }]}>
+            {loading ? 'Submitting…' : 'Submit Report'}
           </Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       {/* Submission Modal */}
@@ -556,39 +568,40 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
-  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
-  backText: { color: '#FFF', fontSize: 16 },
-  headerContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle: { color: '#FFF', fontSize: 24, fontWeight: '700' },
-  headerSubtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 4 },
-  content: { flex: 1, paddingHorizontal: 20 },
+  header: { paddingTop: 50, paddingBottom: 16, paddingHorizontal: 16 },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: 12 },
+  backText: { fontSize: 16, fontWeight: '500' },
+  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerSubtitle: { fontSize: 15, lineHeight: 22, fontWeight: '500', marginTop: 2 },
+  content: { flex: 1 },
+  contentContainer: { paddingHorizontal: 16, paddingBottom: 24 },
   section: { marginTop: 24 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '700' },
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 12 },
-  input: { borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 15 },
-  textArea: { minHeight: 80, textAlignVertical: 'top' },
-  customInputContainer: { marginTop: 12 },
-  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
-  chipText: { fontSize: 13, fontWeight: '500' },
-  optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  optionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5 },
-  optionText: { fontSize: 13, fontWeight: '500' },
-  severityRow: { flexDirection: 'row', gap: 10 },
-  severityBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, alignItems: 'center' },
-  severityText: { fontSize: 13, fontWeight: '600' },
-  genderBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5 },
-  statusBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5 },
-  statusText: { fontSize: 12, fontWeight: '500' },
-  row: { flexDirection: 'row', gap: 12 },
-  halfField: { flex: 1 },
-  footer: { flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1 },
-  footerBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 12 },
-  cancelBtn: { borderWidth: 1.5 },
-  submitBtn: {},
-  footerBtnText: { fontSize: 16, fontWeight: '600' },
+  sectionLabel: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6,
+    textTransform: 'uppercase', marginBottom: 12,
+  },
+  label: {
+    fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.5,
+    textTransform: 'uppercase', marginBottom: 6, marginTop: 16,
+  },
+  input: { minHeight: 52, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15 },
+  textArea: { minHeight: 100, textAlignVertical: 'top' },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: 44, borderRadius: 999, borderWidth: 1.5, paddingHorizontal: 16, paddingVertical: 8,
+  },
+  chipLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
+  actionBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1,
+  },
+  cancelLink: { minWidth: 88, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  cancelText: { fontSize: 16, fontWeight: '700' },
+  submitBtn: { flex: 1, minHeight: 56, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  submitText: { fontSize: 16, fontWeight: '700' },
 });
 
 export default DiseaseReportForm;

@@ -5,6 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Text, ActivityIndicator, Platform, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { supabase } from './lib/supabase';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from './lib/ThemeContext';
 import AuthScreen from './components/AuthScreen';
 import { Session } from '@supabase/supabase-js';
@@ -285,10 +286,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <AppContent />
-      <StatusBar style="light" hidden={false} translucent />
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <AppContent />
+        <StatusBar style="light" hidden={false} translucent />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 

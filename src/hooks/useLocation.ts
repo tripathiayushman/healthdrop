@@ -111,7 +111,14 @@ export function useLocation(autoFetch = false): UseLocationReturn {
                 try {
                     const resp = await fetch(
                         `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`,
-                        { headers: { 'Accept-Language': 'en' } }
+                        {
+                            headers: {
+                                'Accept-Language': 'en',
+                                // Nominatim usage policy requires an identifying UA.
+                                // Web browsers silently drop this forbidden header — harmless.
+                                'User-Agent': 'HealthDrop/1.0 (github.com/tripathiayushman/healthdrop)',
+                            },
+                        }
                     );
                     const data = await resp.json();
                     if (data && data.address) {

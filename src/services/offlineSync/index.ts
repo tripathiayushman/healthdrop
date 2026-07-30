@@ -5,7 +5,7 @@
 // 1. INSTALL DEPENDENCIES
 //    npm install @react-native-async-storage/async-storage
 //                @react-native-community/netinfo
-//                uuid react-native-get-random-values
+//    (UUIDs come from the local ./uuid helper — no uuid package needed)
 //
 // 2. START THE SERVICE (App.tsx)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -46,56 +46,80 @@ export type { QueueItem, QueueItemStatus } from './SyncQueue';
 // Generic type for report data (extend as needed)
 type ReportData = Record<string, unknown>;
 
+/** Heuristic: did this failure happen at the transport layer (not the server)? */
+function isNetworkError(error: unknown): boolean {
+    const message = String((error as any)?.message ?? error ?? '').toLowerCase();
+    return (
+        message.includes('network') ||
+        message.includes('failed to fetch') ||
+        message.includes('fetch failed') ||
+        message.includes('fetcherror') ||
+        message.includes('timed out') ||
+        message.includes('timeout') ||
+        message.includes('abort') ||
+        message.includes('socket') ||
+        message.includes('econn')
+    );
+}
+
+/**
+ * Shared submit path:
+ * - NetInfo says definitively offline → enqueue immediately.
+ * - Otherwise (online, or isInternetReachable === null meaning "not probed
+ *   yet") → attempt direct submit; if the attempt fails at the network layer,
+ *   fall back to the queue instead of throwing. Server rejections (RLS,
+ *   validation) still throw so callers can surface them.
+ */
+async function submitOrQueue(
+    table: 'disease_reports' | 'water_quality_reports',
+    queueType: 'disease_report' | 'water_quality_report',
+    data: ReportData
+): Promise<{ queued: boolean; localId?: string }> {
+    const net = await NetInfo.fetch();
+    const maybeOnline = net.isConnected !== false && net.isInternetReachable !== false;
+
+    if (maybeOnline) {
+        // Direct submit — still attach localId in case of retry
+        const localId = generateUUID();
+        let failure: unknown = null;
+
+        try {
+            const { error } = await supabase
+                .from(table)
+                .upsert(
+                    { ...data, client_idempotency_key: localId },
+                    { onConflict: 'client_idempotency_key', ignoreDuplicates: true }
+                );
+            if (!error) return { queued: false, localId };
+            failure = new Error(error.message);
+        } catch (err) {
+            failure = err;
+        }
+
+        if (!isNetworkError(failure)) throw failure;
+        // Transport failed mid-flight → fall through to the offline queue.
+    }
+
+    const queuedId = await syncQueue.enqueue(queueType, data);
+    return { queued: true, localId: queuedId };
+}
+
 /**
  * Submit a disease report.
- * - Online  → submit directly to Supabase, no queue involved.
- * - Offline → add to local queue; auto-syncs on reconnect.
+ * - Online (or connectivity unknown) → submit directly to Supabase.
+ * - Offline / network failure → add to local queue; auto-syncs on reconnect.
  */
 export async function submitDiseaseReport(
     data: ReportData
 ): Promise<{ queued: boolean; localId?: string }> {
-    const net = await NetInfo.fetch();
-    const isOnline = net.isConnected && net.isInternetReachable;
-
-    if (isOnline) {
-        // Direct submit — still attach localId in case of retry
-        const localId = generateUUID();
-        const { error } = await supabase
-            .from('disease_reports')
-            .upsert(
-                { ...data, client_idempotency_key: localId },
-                { onConflict: 'client_idempotency_key', ignoreDuplicates: true }
-            );
-        if (error) throw new Error(error.message);
-        return { queued: false };
-    }
-
-    // Offline → enqueue
-    const localId = await syncQueue.enqueue('disease_report', data);
-    return { queued: true, localId };
+    return submitOrQueue('disease_reports', 'disease_report', data);
 }
 
 /** Same pattern for water quality reports */
 export async function submitWaterQualityReport(
     data: ReportData
 ): Promise<{ queued: boolean; localId?: string }> {
-    const net = await NetInfo.fetch();
-    const isOnline = net.isConnected && net.isInternetReachable;
-
-    if (isOnline) {
-        const localId = generateUUID();
-        const { error } = await supabase
-            .from('water_quality_reports')
-            .upsert(
-                { ...data, client_idempotency_key: localId },
-                { onConflict: 'client_idempotency_key', ignoreDuplicates: true }
-            );
-        if (error) throw new Error(error.message);
-        return { queued: false };
-    }
-
-    const localId = await syncQueue.enqueue('water_quality_report', data);
-    return { queued: true, localId };
+    return submitOrQueue('water_quality_reports', 'water_quality_report', data);
 }
 
 // ─── 4. UI HOOK — pending sync count for badge ────────────────────────────────

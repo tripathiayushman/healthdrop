@@ -1,18 +1,22 @@
-import React, { useState } from 'react';
+// =====================================================
+// AUTH SCREEN — "Prakash" design system
+// Flat headerBg band, ink-on-paper card, labels above
+// 52dp inputs, inline field errors (no Alert.alert),
+// solid-fill role selection, honest signup errors.
+// =====================================================
+import React, { useRef, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet,
   ScrollView, KeyboardAvoidingView, Platform, Modal,
-  ActivityIndicator, FlatList, ImageBackground, Dimensions,
+  ActivityIndicator, FlatList, SafeAreaView, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { supabase } from '../lib/supabase';
-import { Profile } from '../types/profile';
+import { Profile } from '../types';
+import { useTheme, spacing, radii } from '../lib/ThemeContext';
 
 interface AuthScreenProps { onAuthSuccess: () => void; }
-
-const SCREEN_HEIGHT = Dimensions.get('window').height;
-const BRAND_PRIMARY = '#1565C0';
 
 // ── Indian States ─────────────────────────────────────
 const INDIAN_STATES = [
@@ -26,7 +30,7 @@ const INDIAN_STATES = [
   'Jammu and Kashmir','Ladakh','Lakshadweep','Puducherry',
 ];
 
-// ── Roles ─────────────────────────────────────────────
+// ── Roles (icon = Ionicons base name; outline at rest, filled selected) ──
 const SIGNUP_ROLES: { value: Profile['role']; label: string; icon: string; desc: string }[] = [
   { value: 'clinic',      label: 'Clinic',       icon: 'medical',   desc: 'Healthcare facility' },
   { value: 'asha_worker', label: 'ASHA Worker',  icon: 'heart',     desc: 'Community health worker' },
@@ -65,99 +69,155 @@ const reverseGeocode = async (lat: number, lon: number) => {
   }
 };
 
-// ── Dark inset-shadow field (no browser outline) ──────
-const Field: React.FC<{
-  icon: string; value: string; onChange: (t: string) => void;
+const WEB_NO_OUTLINE = Platform.OS === 'web' ? ({ outlineStyle: 'none', outline: 'none' } as any) : null;
+
+// ── Inline field error (spec: no Alert.alert for validation) ──
+const FieldError: React.FC<{ message?: string }> = ({ message }) => {
+  const { colors } = useTheme();
+  if (!message) return null;
+  return (
+    <View style={s.errorRow}>
+      <Ionicons name="alert-circle" size={14} color={colors.danger} />
+      <Text style={[s.errorText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+        {message}
+      </Text>
+    </View>
+  );
+};
+
+// ── Labeled input — label ABOVE, 52dp field, 1.5px border ──
+const LabeledField: React.FC<{
+  label: string; icon: string; value: string; onChange: (t: string) => void;
   placeholder: string; keyboardType?: any; secure?: boolean;
   autoCapitalize?: any; autoComplete?: any; rightElement?: React.ReactNode;
-}> = ({ icon, value, onChange, placeholder, keyboardType, secure, autoCapitalize = 'none', autoComplete, rightElement }) => (
-  <View style={f.field}>
-    <Ionicons name={icon as any} size={16} color="#9ca3af" />
-    <TextInput
-      style={[f.input, Platform.OS === 'web' && ({ outline: 'none' } as any)]}
-      placeholder={placeholder}
-      placeholderTextColor="#4b5563"
-      value={value}
-      onChangeText={onChange}
-      keyboardType={keyboardType}
-      secureTextEntry={secure}
-      autoCapitalize={autoCapitalize}
-      autoComplete={autoComplete}
-    />
-    {rightElement}
-  </View>
-);
-
-const f = StyleSheet.create({
-  field: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderRadius: 25, paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: '#171717',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.8, shadowRadius: 6, elevation: 4,
-    marginBottom: 10,
-  },
-  input: {
-    flex: 1, color: '#d3d3d3', fontSize: 14,
-    // suppress web outline globally where possible
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none', outline: 'none' } as any : {}),
-  },
-});
+  error?: string;
+}> = ({ label, icon, value, onChange, placeholder, keyboardType, secure, autoCapitalize = 'none', autoComplete, rightElement, error }) => {
+  const { colors } = useTheme();
+  const [focused, setFocused] = useState(false);
+  const borderColor = error ? colors.inputErrorBorder : focused ? colors.inputFocusBorder : colors.inputBorder;
+  const borderWidth = error || focused ? 2 : 1.5;
+  return (
+    <View style={s.fieldWrap}>
+      <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+        {label}
+      </Text>
+      <View style={[s.fieldRow, { backgroundColor: colors.inputBackground, borderColor, borderWidth }]}>
+        <Ionicons name={icon as any} size={16} color={colors.textSecondary} />
+        <TextInput
+          style={[s.fieldInput, { color: colors.text }, WEB_NO_OUTLINE]}
+          placeholder={placeholder}
+          placeholderTextColor={colors.placeholder}
+          value={value}
+          onChangeText={onChange}
+          keyboardType={keyboardType}
+          secureTextEntry={secure}
+          autoCapitalize={autoCapitalize}
+          autoComplete={autoComplete}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+        />
+        {rightElement}
+      </View>
+      <FieldError message={error} />
+    </View>
+  );
+};
 
 // ── District + inline GPS button ──────────────────────
 const DistrictField: React.FC<{
   value: string; onChange: (t: string) => void;
-  loading: boolean; onGPS: () => void;
-}> = ({ value, onChange, loading, onGPS }) => (
-  <View style={g.row}>
-    <View style={[f.field, { flex: 1, marginBottom: 0 }]}>
-      <Ionicons name="business-outline" size={16} color="#9ca3af" />
-      <TextInput
-        style={[f.input, Platform.OS === 'web' ? { outline: 'none' } as any : {}]}
-        placeholder="District / City"
-        placeholderTextColor="#4b5563"
-        value={value}
-        onChangeText={onChange}
-        autoCapitalize="words"
-      />
+  loading: boolean; onGPS: () => void; error?: string;
+}> = ({ value, onChange, loading, onGPS, error }) => {
+  const { colors } = useTheme();
+  const [focused, setFocused] = useState(false);
+  const borderColor = error ? colors.inputErrorBorder : focused ? colors.inputFocusBorder : colors.inputBorder;
+  const borderWidth = error || focused ? 2 : 1.5;
+  return (
+    <View style={s.fieldWrap}>
+      <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+        District
+      </Text>
+      <View style={s.gpsRow}>
+        <View style={[s.fieldRow, { flex: 1, backgroundColor: colors.inputBackground, borderColor, borderWidth }]}>
+          <Ionicons name="business-outline" size={16} color={colors.textSecondary} />
+          <TextInput
+            style={[s.fieldInput, { color: colors.text }, WEB_NO_OUTLINE]}
+            placeholder="District / City"
+            placeholderTextColor={colors.placeholder}
+            value={value}
+            onChangeText={onChange}
+            autoCapitalize="words"
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+          />
+        </View>
+        <TouchableOpacity
+          style={[s.gpsBtn, { borderColor: colors.inputBorder }]}
+          onPress={onGPS}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Use GPS to fill district and state"
+        >
+          {loading
+            ? <ActivityIndicator size="small" color={colors.primary} />
+            : (
+              <>
+                <Ionicons name="locate-outline" size={16} color={colors.text} />
+                <Text style={[s.gpsTxt, { color: colors.text }]} maxFontSizeMultiplier={1.3}>GPS</Text>
+              </>
+            )}
+        </TouchableOpacity>
+      </View>
+      <FieldError message={error} />
     </View>
-    <TouchableOpacity style={g.btn} onPress={onGPS} disabled={loading} activeOpacity={0.8}>
-      {loading
-        ? <ActivityIndicator size="small" color="#3b82f6" />
-        : <><Ionicons name="locate" size={14} color="#3b82f6" /><Text style={g.txt}>GPS</Text></>
-      }
-    </TouchableOpacity>
-  </View>
-);
-
-const g = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  btn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#172554', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 10 },
-  txt: { color: '#3b82f6', fontSize: 12, fontWeight: '700' },
-});
+  );
+};
 
 // ── States searchable dropdown ─────────────────────────
-const StatesDropdown: React.FC<{ value: string; onSelect: (s: string) => void }> = ({ value, onSelect }) => {
+const StatesDropdown: React.FC<{ value: string; onSelect: (st: string) => void; error?: string }> = ({ value, onSelect, error }) => {
+  const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const filtered = INDIAN_STATES.filter(s => s.toLowerCase().includes(search.toLowerCase()));
+  const filtered = INDIAN_STATES.filter(st => st.toLowerCase().includes(search.toLowerCase()));
+  const borderColor = error ? colors.inputErrorBorder : colors.inputBorder;
   return (
-    <>
-      <TouchableOpacity style={[f.field, { marginBottom: 10 }]} onPress={() => setOpen(true)} activeOpacity={0.8}>
-        <Ionicons name="map-outline" size={16} color="#9ca3af" />
-        <Text style={{ flex: 1, color: value ? '#d3d3d3' : '#4b5563', fontSize: 14 }}>{value || 'Select State'}</Text>
-        <Ionicons name="chevron-down" size={15} color="#4b5563" />
+    <View style={s.fieldWrap}>
+      <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+        State
+      </Text>
+      <TouchableOpacity
+        style={[s.fieldRow, { backgroundColor: colors.inputBackground, borderColor, borderWidth: error ? 2 : 1.5 }]}
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={value ? `State: ${value}. Change state` : 'Select state'}
+      >
+        <Ionicons name="map-outline" size={16} color={colors.textSecondary} />
+        <Text
+          style={[s.fieldInput, { color: value ? colors.text : colors.placeholder }]}
+          numberOfLines={1}
+          maxFontSizeMultiplier={1.3}
+        >
+          {value || 'Select State'}
+        </Text>
+        <Ionicons name="chevron-down" size={16} color={colors.textTertiary} />
       </TouchableOpacity>
+      <FieldError message={error} />
+
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <TouchableOpacity style={dd.backdrop} activeOpacity={1} onPress={() => setOpen(false)} />
-        <View style={dd.panel}>
-          <Text style={dd.heading}>Select State</Text>
-          <View style={dd.searchBox}>
-            <Ionicons name="search" size={14} color="#9ca3af" />
+        <Pressable
+          style={[s.modalOverlay, { backgroundColor: colors.overlay }]}
+          onPress={() => setOpen(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Close state list"
+        />
+        <View style={[s.ddPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[s.ddHeading, { color: colors.text }]} maxFontSizeMultiplier={1.3}>Select State</Text>
+          <View style={[s.ddSearch, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+            <Ionicons name="search-outline" size={16} color={colors.textSecondary} />
             <TextInput
-              style={[{ flex: 1, color: '#d3d3d3', fontSize: 14 }, Platform.OS === 'web' ? { outline: 'none' } as any : {}]}
+              style={[s.fieldInput, { color: colors.text }, WEB_NO_OUTLINE]}
               placeholder="Search states…"
-              placeholderTextColor="#6b7280"
+              placeholderTextColor={colors.placeholder}
               value={search}
               onChangeText={setSearch}
               autoFocus
@@ -166,38 +226,39 @@ const StatesDropdown: React.FC<{ value: string; onSelect: (s: string) => void }>
           <FlatList
             data={filtered}
             keyExtractor={i => i}
-            style={{ maxHeight: 300 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[dd.item, item === value && dd.itemActive]}
-                onPress={() => { onSelect(item); setSearch(''); setOpen(false); }}
-              >
-                <Text style={[dd.itemTxt, item === value && dd.itemTxtActive]}>{item}</Text>
-                {item === value && <Ionicons name="checkmark" size={15} color="#3b82f6" />}
-              </TouchableOpacity>
-            )}
+            style={{ maxHeight: 320 }}
+            renderItem={({ item }) => {
+              const selected = item === value;
+              return (
+                <TouchableOpacity
+                  style={[s.ddItem, { borderBottomColor: colors.borderLight }]}
+                  onPress={() => { onSelect(item); setSearch(''); setOpen(false); }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={item}
+                >
+                  <Text
+                    style={[s.ddItemTxt, { color: selected ? colors.primary : colors.text, fontWeight: selected ? '700' : '500' }]}
+                    maxFontSizeMultiplier={1.3}
+                  >
+                    {item}
+                  </Text>
+                  {selected && <Ionicons name="checkmark" size={20} color={colors.primary} />}
+                </TouchableOpacity>
+              );
+            }}
           />
         </View>
       </Modal>
-    </>
+    </View>
   );
 };
-
-const dd = StyleSheet.create({
-  backdrop:     { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)' },
-  panel:        { position: 'absolute', left: 20, right: 20, top: '10%', backgroundColor: '#1f2937', borderRadius: 16, padding: 16, maxHeight: '75%', elevation: 20 },
-  heading:      { color: '#f9fafb', fontSize: 16, fontWeight: '700', marginBottom: 10 },
-  searchBox:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#111827', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 10 },
-  item:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  itemActive:   { backgroundColor: '#1e3a5f', borderRadius: 8, paddingHorizontal: 8 },
-  itemTxt:      { color: '#d3d3d3', fontSize: 14 },
-  itemTxtActive:{ color: '#60a5fa', fontWeight: '700' },
-});
 
 // ══════════════════════════════════════════════════════
 //  MAIN COMPONENT
 // ══════════════════════════════════════════════════════
 export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
+  const { colors, isDark, reduceMotion } = useTheme();
   const [isLogin, setIsLogin]       = useState(true);
   const [email, setEmail]           = useState('');
   const [password, setPassword]     = useState('');
@@ -213,17 +274,16 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [showPw, setShowPw]         = useState(false);
   const [showCPw, setShowCPw]       = useState(false);
 
-  // Modals
-  const [showOtpModal, setShowOtpModal]           = useState(false);
-  const [otpCode, setOtpCode]                     = useState('');
-  const [otpLoading, setOtpLoading]               = useState(false);
-  const [showSuccessModal, setShowSuccessModal]   = useState(false);
-  const [userEmail, setUserEmail]                 = useState('');
-  const [msgVisible, setMsgVisible]               = useState(false);
-  const [msgType, setMsgType]                     = useState<'error' | 'success'>('error');
-  const [msgTitle, setMsgTitle]                   = useState('');
-  const [msgText, setMsgText]                     = useState('');
-  const [msgCallback, setMsgCallback]             = useState<(() => void) | null>(null);
+  // Inline field-validation errors (spec: no alert modals for validation)
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const scrollRef = useRef<ScrollView>(null);
+
+  // Message modal — server/system responses only, never field validation
+  const [msgVisible, setMsgVisible]   = useState(false);
+  const [msgType, setMsgType]         = useState<'error' | 'success'>('error');
+  const [msgTitle, setMsgTitle]       = useState('');
+  const [msgText, setMsgText]         = useState('');
+  const [msgCallback, setMsgCallback] = useState<(() => void) | null>(null);
 
   const showMsg = (type: 'error' | 'success', title: string, text: string, cb?: () => void) => {
     setMsgType(type); setMsgTitle(title); setMsgText(text);
@@ -231,6 +291,15 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   };
   const closeMsg = () => { setMsgVisible(false); msgCallback?.(); };
   const isValidEmail = (t: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
+
+  const clearError = (key: string) => {
+    setErrors(prev => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
 
   // ── GPS fetch (Nominatim works on both web + native) ──
   const fetchLocation = async () => {
@@ -262,11 +331,12 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         return;
       }
 
-      if (geo.district) setDistrict(geo.district);
+      if (geo.district) { setDistrict(geo.district); clearError('district'); }
       if (geo.state) {
-        const matched = INDIAN_STATES.find(s => s.toLowerCase() === geo.state.toLowerCase())
-          || INDIAN_STATES.find(s => s.toLowerCase().includes(geo.state.toLowerCase()));
+        const matched = INDIAN_STATES.find(st => st.toLowerCase() === geo.state.toLowerCase())
+          || INDIAN_STATES.find(st => st.toLowerCase().includes(geo.state.toLowerCase()));
         setUserState(matched || geo.state);
+        clearError('state');
       }
       if (geo.pincode) setPincode(geo.pincode);
     } catch {
@@ -276,19 +346,30 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     }
   };
 
+  // ── Validation — inline errors, scroll to the form top ──
+  const validate = (): boolean => {
+    const next: Record<string, string> = {};
+    if (!email.trim()) next.email = 'Email is required';
+    else if (!isValidEmail(email)) next.email = 'Enter a valid email address';
+    if (!password) next.password = 'Password is required';
+    if (!isLogin) {
+      if (!fullName.trim()) next.fullName = 'Full name is required';
+      if (password && password.length < 8) next.password = 'Password must be at least 8 characters';
+      if (password && confirmPw !== password) next.confirmPw = "Passwords don't match";
+      if (!district.trim()) next.district = 'District is required';
+      if (!userState) next.state = 'State is required';
+    }
+    setErrors(next);
+    if (Object.keys(next).length > 0) {
+      scrollRef.current?.scrollTo({ y: 0, animated: !reduceMotion });
+      return false;
+    }
+    return true;
+  };
+
   // ── Auth ──────────────────────────────────────────────
   const handleAuth = async () => {
-    if (isLogin) {
-      if (!email || !password) { showMsg('error', 'Missing Fields', 'Please enter your email and password.'); return; }
-      if (!isValidEmail(email)) { showMsg('error', 'Invalid Email', 'Please enter a valid email address.'); return; }
-    } else {
-      if (!email || !password || !fullName || !district || !userState) {
-        showMsg('error', 'Missing Fields', 'Name, Email, Password, District and State are required.'); return;
-      }
-      if (!isValidEmail(email)) { showMsg('error', 'Invalid Email', 'Please enter a valid email address.'); return; }
-      if (password.length < 8) { showMsg('error', 'Weak Password', 'Password must be at least 8 characters.'); return; }
-      if (password !== confirmPw) { showMsg('error', 'Password Mismatch', 'Passwords do not match.'); return; }
-    }
+    if (!validate()) return;
 
     setLoading(true);
     try {
@@ -313,16 +394,25 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         if (se) { setLoading(false); showMsg('error', 'Sign Up Error', se.message); return; }
         if (sd?.user) {
           if (sd.session) {
-            try {
-              await supabase.from('profiles').upsert({
-                id: sd.user.id, email, full_name: fullName, role,
-                phone: phone || null, district: district || null,
-                state: userState || null, is_active: true, created_at: new Date().toISOString(),
-              }, { onConflict: 'id' });
-              await new Promise(r => setTimeout(r, 500));
-            } catch {}
+            // Surface the profile write honestly — never pretend success.
+            const { error: profileError } = await supabase.from('profiles').upsert({
+              id: sd.user.id, email, full_name: fullName, role,
+              phone: phone || null, district: district || null,
+              state: userState || null, is_active: true, created_at: new Date().toISOString(),
+            }, { onConflict: 'id' });
+            if (profileError) {
+              setLoading(false);
+              showMsg(
+                'error',
+                'Profile Not Saved',
+                `Your account was created, but your profile details could not be saved (${profileError.message}). Please sign in to try again.`,
+                () => setIsLogin(true)
+              );
+              return;
+            }
+            await new Promise(r => setTimeout(r, 500));
             setLoading(false);
-            showMsg('success', 'Account Created!', 'Welcome to HealthDrop!', () => onAuthSuccess());
+            showMsg('success', 'Account Created', 'Welcome to HealthDrop.', () => onAuthSuccess());
           } else {
             setLoading(false);
             showMsg('success', 'Check Your Email', 'Click the confirmation link we sent to verify your account.', () => setIsLogin(true));
@@ -338,292 +428,439 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     }
   };
 
-  const handleOtpVerification = async () => {
-    if (!otpCode || otpCode.length !== 6) { showMsg('error', 'Invalid OTP', 'Please enter the 6-digit code.'); return; }
-    setOtpLoading(true);
-    try {
-      const { data, error } = await supabase.auth.verifyOtp({ email: userEmail, token: otpCode, type: 'email' });
-      if (error) showMsg('error', 'OTP Error', error.message);
-      else if (data.user) {
-        const { error: pErr } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
-        if (pErr?.code === 'PGRST116') {
-          await supabase.from('profiles').insert({
-            id: data.user.id, full_name: fullName, role, district,
-            state: userState, is_active: true, created_at: new Date().toISOString(),
-          });
-        }
-        setShowOtpModal(false); setShowSuccessModal(true); setOtpCode('');
-      }
-    } catch { showMsg('error', 'Error', 'An unexpected error occurred.'); }
-    finally { setOtpLoading(false); }
-  };
-
-  const handleSuccessNext = () => {
-    setShowSuccessModal(false);
-    setEmail(''); setPassword(''); setConfirmPw(''); setFullName('');
-    setDistrict(''); setUserState(''); setPincode(''); setPhone('');
-    setIsLogin(true); onAuthSuccess();
-  };
-
-  const switchMode = () => {
-    setIsLogin(m => !m);
+  const switchMode = (login: boolean) => {
+    setIsLogin(login);
+    setErrors({});
     setEmail(''); setPassword(''); setConfirmPw(''); setFullName('');
     setDistrict(''); setUserState(''); setPincode(''); setPhone('');
   };
+
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub  = isDark ? colors.textSecondary : colors.primaryLight;
 
   // ── Render ────────────────────────────────────────────
   return (
-    <ImageBackground
-      source={require('../assets/44472001_grey_hexagons_on_black_background.jpg')}
-      style={s.bg}
-      imageStyle={{ opacity: 0.35 }}
-    >
+    <SafeAreaView style={[s.root, { backgroundColor: colors.background }]}>
       <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
-        {/* ── Top Tab Switcher ── */}
-        <View style={s.topBar}>
+        {/* ── Flat header band ── */}
+        <View
+          style={[
+            s.header,
+            { backgroundColor: colors.headerBg },
+            isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          ]}
+        >
+          <Text style={[s.headerTitle, { color: headerText }]} maxFontSizeMultiplier={1.3}>
+            HealthDrop
+          </Text>
+          <Text style={[s.headerSub, { color: headerSub }]} maxFontSizeMultiplier={1.3}>
+            Community health surveillance
+          </Text>
+        </View>
+
+        {/* ── Sign In / Sign Up switcher ── */}
+        <View style={[s.topBar, { borderBottomColor: colors.border }]}>
           {(['Sign In', 'Sign Up'] as const).map((label, i) => {
             const active = (i === 0) === isLogin;
             return (
               <TouchableOpacity
                 key={label}
-                style={[s.topTab, active && s.topTabActive]}
-                onPress={() => i === 0 ? setIsLogin(true) : setIsLogin(false)}
+                style={[s.topTab, active && { borderBottomColor: colors.primary }]}
+                onPress={() => switchMode(i === 0)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={label}
               >
-                <Text style={[s.topTabTxt, active && s.topTabTxtActive]}>{label}</Text>
+                <Text
+                  style={[s.topTabTxt, { color: active ? colors.primary : colors.textSecondary, fontWeight: active ? '700' : '600' }]}
+                  maxFontSizeMultiplier={1.3}
+                >
+                  {label}
+                </Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
-        {/* ── Centered Scroll ── */}
+        {/* ── Scroll ── */}
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={s.scroll}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={s.card}>
-            <Text style={s.heading}>{isLogin ? 'Login' : 'Sign Up'}</Text>
+          <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.shadow }]}>
+            <Text style={[s.heading, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+              {isLogin ? 'Sign in to continue' : 'Create your account'}
+            </Text>
 
             {isLogin ? (
               /* ══ SIGN IN ══════════════════════════════ */
               <>
-                <Field icon="at" value={email} onChange={setEmail} placeholder="Email address" keyboardType="email-address" autoComplete="email" />
-                <Field
-                  icon="lock-closed"
-                  value={password}
-                  onChange={setPassword}
-                  placeholder="Password"
-                  secure={!showPw}
-                  autoComplete="password"
+                <LabeledField
+                  label="Email" icon="at-outline" value={email}
+                  onChange={(t) => { setEmail(t); clearError('email'); }}
+                  placeholder="Email address" keyboardType="email-address" autoComplete="email"
+                  error={errors.email}
+                />
+                <LabeledField
+                  label="Password" icon="lock-closed-outline" value={password}
+                  onChange={(t) => { setPassword(t); clearError('password'); }}
+                  placeholder="Password" secure={!showPw} autoComplete="password"
+                  error={errors.password}
                   rightElement={
-                    <TouchableOpacity onPress={() => setShowPw(p => !p)} style={{ padding: 4 }}>
-                      <Ionicons name={showPw ? 'eye-off' : 'eye'} size={17} color="#6b7280" />
+                    <TouchableOpacity
+                      onPress={() => setShowPw(p => !p)}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                    >
+                      <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
                   }
                 />
-                <TouchableOpacity style={s.submitBtn} onPress={handleAuth} disabled={loading} activeOpacity={0.85}>
-                  {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitTxt}>Login</Text>}
-                </TouchableOpacity>
               </>
 
             ) : (
               /* ══ SIGN UP ══════════════════════════════ */
               <>
-                <Field icon="person" value={fullName} onChange={setFullName} placeholder="Full name" autoCapitalize="words" />
-                <Field icon="at" value={email} onChange={setEmail} placeholder="Email address" keyboardType="email-address" autoComplete="email" />
-                <Field icon="call" value={phone} onChange={setPhone} placeholder="Phone (optional)" keyboardType="phone-pad" autoComplete="tel" />
+                <LabeledField
+                  label="Full Name" icon="person-outline" value={fullName}
+                  onChange={(t) => { setFullName(t); clearError('fullName'); }}
+                  placeholder="Full name" autoCapitalize="words"
+                  error={errors.fullName}
+                />
+                <LabeledField
+                  label="Email" icon="at-outline" value={email}
+                  onChange={(t) => { setEmail(t); clearError('email'); }}
+                  placeholder="Email address" keyboardType="email-address" autoComplete="email"
+                  error={errors.email}
+                />
+                <LabeledField
+                  label="Phone (Optional)" icon="call-outline" value={phone}
+                  onChange={setPhone}
+                  placeholder="Phone number" keyboardType="phone-pad" autoComplete="tel"
+                />
 
                 {/* Role */}
+                <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                  Role
+                </Text>
                 <View style={s.roleWrap}>
                   {SIGNUP_ROLES.map(r => {
                     const active = role === r.value;
                     return (
-                      <TouchableOpacity key={r.value} style={[s.roleRow, active && s.roleRowActive]} onPress={() => setRole(r.value)}>
-                        <View style={[s.roleIcon, active && s.roleIconActive]}>
-                          <Ionicons name={r.icon as any} size={15} color={active ? '#fff' : '#9ca3af'} />
-                        </View>
+                      <TouchableOpacity
+                        key={r.value}
+                        style={[
+                          s.roleRow,
+                          active
+                            ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                            : { backgroundColor: colors.card, borderColor: colors.border },
+                        ]}
+                        onPress={() => setRole(r.value)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Role: ${r.label}. ${r.desc}`}
+                      >
+                        <Ionicons
+                          name={(active ? r.icon : `${r.icon}-outline`) as any}
+                          size={20}
+                          color={active ? colors.onPrimary : colors.textSecondary}
+                        />
                         <View style={{ flex: 1 }}>
-                          <Text style={[s.roleLabel, active && s.roleLabelActive]}>{r.label}</Text>
-                          <Text style={s.roleDesc}>{r.desc}</Text>
+                          <Text
+                            style={[s.roleLabel, { color: active ? colors.onPrimary : colors.text }]}
+                            maxFontSizeMultiplier={1.3}
+                          >
+                            {r.label}
+                          </Text>
+                          <Text
+                            style={[s.roleDesc, { color: active ? colors.onPrimary : colors.textSecondary }]}
+                            maxFontSizeMultiplier={1.3}
+                          >
+                            {r.desc}
+                          </Text>
                         </View>
-                        {active && <Ionicons name="checkmark-circle" size={17} color="#3b82f6" />}
+                        {active && <Ionicons name="checkmark-circle" size={20} color={colors.onPrimary} />}
                       </TouchableOpacity>
                     );
                   })}
                 </View>
 
                 {/* Location */}
-                <Text style={s.sectionLabel}>Location</Text>
-                <DistrictField value={district} onChange={setDistrict} loading={fetchingLoc} onGPS={fetchLocation} />
-                <StatesDropdown value={userState} onSelect={setUserState} />
-                <Field icon="pin" value={pincode} onChange={setPincode} placeholder="Pincode (optional)" keyboardType="numeric" />
+                <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                  Location
+                </Text>
+                <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+                  Your location is sent to OpenStreetMap to fill district/state.
+                </Text>
+                <DistrictField
+                  value={district}
+                  onChange={(t) => { setDistrict(t); clearError('district'); }}
+                  loading={fetchingLoc}
+                  onGPS={fetchLocation}
+                  error={errors.district}
+                />
+                <StatesDropdown
+                  value={userState}
+                  onSelect={(st) => { setUserState(st); clearError('state'); }}
+                  error={errors.state}
+                />
+                <LabeledField
+                  label="Pincode (Optional)" icon="pin-outline" value={pincode}
+                  onChange={setPincode}
+                  placeholder="Pincode" keyboardType="numeric"
+                />
 
                 {/* Password */}
-                <Text style={s.sectionLabel}>Password</Text>
-                <Field
-                  icon="lock-closed"
-                  value={password}
-                  onChange={setPassword}
-                  placeholder="Create password (min 8 chars)"
-                  secure={!showPw}
-                  autoComplete="new-password"
+                <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                  Password
+                </Text>
+                <LabeledField
+                  label="Password" icon="lock-closed-outline" value={password}
+                  onChange={(t) => { setPassword(t); clearError('password'); }}
+                  placeholder="Create password (min 8 chars)" secure={!showPw} autoComplete="new-password"
+                  error={errors.password}
                   rightElement={
-                    <TouchableOpacity onPress={() => setShowPw(p => !p)} style={{ padding: 4 }}>
-                      <Ionicons name={showPw ? 'eye-off' : 'eye'} size={17} color="#6b7280" />
+                    <TouchableOpacity
+                      onPress={() => setShowPw(p => !p)}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                    >
+                      <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
                   }
                 />
-                <Field
-                  icon="lock-closed"
-                  value={confirmPw}
-                  onChange={setConfirmPw}
-                  placeholder="Confirm password"
-                  secure={!showCPw}
-                  autoComplete="new-password"
+                <LabeledField
+                  label="Confirm Password" icon="lock-closed-outline" value={confirmPw}
+                  onChange={(t) => { setConfirmPw(t); clearError('confirmPw'); }}
+                  placeholder="Confirm password" secure={!showCPw} autoComplete="new-password"
+                  error={errors.confirmPw || (confirmPw.length > 0 && confirmPw !== password ? "Passwords don't match" : undefined)}
                   rightElement={
-                    <TouchableOpacity onPress={() => setShowCPw(p => !p)} style={{ padding: 4 }}>
-                      <Ionicons name={showCPw ? 'eye-off' : 'eye'} size={17} color={confirmPw && confirmPw !== password ? '#ef4444' : '#6b7280'} />
+                    <TouchableOpacity
+                      onPress={() => setShowCPw(p => !p)}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={showCPw ? 'Hide password' : 'Show password'}
+                    >
+                      <Ionicons name={showCPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
                   }
                 />
-                {confirmPw.length > 0 && confirmPw !== password && (
-                  <Text style={s.pwMismatch}>Passwords don't match</Text>
-                )}
-
-                <TouchableOpacity style={s.submitBtn} onPress={handleAuth} disabled={loading} activeOpacity={0.85}>
-                  {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitTxt}>Create Account</Text>}
-                </TouchableOpacity>
               </>
             )}
+
+            {/* Primary action — 56dp, background-change press state */}
+            <Pressable
+              style={({ pressed }) => [
+                s.submitBtn,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                loading && { opacity: 0.4 },
+              ]}
+              onPress={handleAuth}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel={isLogin ? 'Sign in' : 'Create account'}
+            >
+              {loading
+                ? <ActivityIndicator size="small" color={colors.onPrimary} />
+                : (
+                  <Text style={[s.submitTxt, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                    {isLogin ? 'Sign In' : 'Create Account'}
+                  </Text>
+                )}
+            </Pressable>
           </View>
 
           {/* Footer */}
           <View style={s.footer}>
-            <Ionicons name="shield-checkmark-outline" size={12} color="#374151" />
-            <Text style={s.footerTxt}>Secured by Supabase · Encrypted at rest</Text>
+            <Ionicons name="shield-checkmark-outline" size={16} color={colors.textTertiary} />
+            <Text style={[s.footerTxt, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+              Secured by Supabase · Encrypted at rest
+            </Text>
           </View>
         </ScrollView>
 
-        {/* ── OTP Modal ── */}
-        <Modal visible={showOtpModal} transparent animationType="slide" onRequestClose={() => setShowOtpModal(false)}>
-          <View style={mod.overlay}>
-            <View style={[mod.card, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
-              <Ionicons name="keypad-outline" size={36} color={BRAND_PRIMARY} style={{ marginBottom: 12 }} />
-              <Text style={mod.title}>Enter Verification Code</Text>
-              <Text style={mod.sub}>We sent a 6-digit code to {userEmail}</Text>
-              <TextInput style={mod.otpInput} value={otpCode} onChangeText={setOtpCode} placeholder="000000" keyboardType="numeric" maxLength={6} />
-              <TouchableOpacity style={[mod.btn, otpLoading && { opacity: 0.6 }]} onPress={handleOtpVerification} disabled={otpLoading}>
-                {otpLoading ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={mod.btnTxt}>Verify Code</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity style={mod.cancel} onPress={() => setShowOtpModal(false)}>
-                <Text style={mod.cancelTxt}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-        {/* ── Success Modal ── */}
-        <Modal visible={showSuccessModal} transparent animationType="fade" onRequestClose={() => setShowSuccessModal(false)}>
-          <View style={mod.overlay}>
-            <View style={[mod.card, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
-              <Ionicons name="checkmark-circle" size={48} color="#10B981" style={{ marginBottom: 12 }} />
-              <Text style={mod.title}>Account Created!</Text>
-              <Text style={mod.sub}>Welcome to HealthDrop. Let's get started.</Text>
-              <TouchableOpacity style={[mod.btn, { backgroundColor: '#10B981' }]} onPress={handleSuccessNext}>
-                <Text style={mod.btnTxt}>Get Started</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-        {/* ── Message Modal ── */}
+        {/* ── Message Modal — server/system responses only ── */}
         <Modal visible={msgVisible} transparent animationType="fade" onRequestClose={closeMsg}>
-          <View style={mod.overlay}>
-            <View style={[mod.card, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
+          <View style={[s.modalOverlay, { backgroundColor: colors.overlay }]}>
+            <View style={[s.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Ionicons
                 name={msgType === 'error' ? 'alert-circle' : 'checkmark-circle'}
-                size={48} color={msgType === 'error' ? '#EF4444' : '#10B981'}
-                style={{ marginBottom: 12 }}
+                size={48}
+                color={msgType === 'error' ? colors.danger : colors.success}
+                style={{ marginBottom: spacing.md }}
               />
-              <Text style={mod.title}>{msgTitle}</Text>
-              <Text style={mod.sub}>{msgText}</Text>
-              <TouchableOpacity style={[mod.btn, { backgroundColor: msgType === 'error' ? '#EF4444' : '#10B981' }]} onPress={closeMsg}>
-                <Text style={mod.btnTxt}>OK</Text>
-              </TouchableOpacity>
+              <Text style={[s.modalTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                {msgTitle}
+              </Text>
+              <Text style={[s.modalSub, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                {msgText}
+              </Text>
+              <Pressable
+                style={({ pressed }) => [
+                  s.modalBtn,
+                  { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                ]}
+                onPress={closeMsg}
+                accessibilityRole="button"
+                accessibilityLabel="OK"
+              >
+                <Text style={[s.submitTxt, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>OK</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
       </KeyboardAvoidingView>
-    </ImageBackground>
+    </SafeAreaView>
   );
 }
 
-// ── Styles ─────────────────────────────────────────────
+// ── Styles — 4pt grid, radii/spacing tokens only ───────
 const s = StyleSheet.create({
-  bg:    { flex: 1, backgroundColor: '#0a0a0a' },
-  root:  { flex: 1 },
+  root: { flex: 1 },
 
-  // Tabs at top
-  topBar:          { flexDirection: 'row', paddingTop: Platform.OS === 'ios' ? 56 : 36, paddingHorizontal: 24, backgroundColor: 'transparent' },
-  topTab:          { flex: 1, alignItems: 'center', paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  topTabActive:    { borderBottomColor: '#3b82f6' },
-  topTabTxt:       { fontSize: 15, fontWeight: '600', color: '#4b5563' },
-  topTabTxtActive: { color: '#3b82f6' },
+  /* Header band — clears the translucent Android status bar manually
+     (this screen uses the core RN SafeAreaView, which only insets on iOS) */
+  header: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? spacing.xl) + spacing.md : spacing.xl,
+    paddingBottom: spacing.lg,
+  },
+  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerSub:   { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2 },
 
-  // Centered scroll
+  /* Mode switcher */
+  topBar: { flexDirection: 'row', borderBottomWidth: 1 },
+  topTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  topTabTxt: { fontSize: 15, lineHeight: 22 },
+
+  /* Scroll + card */
   scroll: {
     flexGrow: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    minHeight: SCREEN_HEIGHT * 0.75,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
   },
-
-  // Dark card
   card: {
-    backgroundColor: 'rgba(23,23,23,0.97)',
-    borderRadius: 25,
-    paddingHorizontal: 22,
-    paddingVertical: 26,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#2d2d2d',
+    padding: spacing.lg,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  heading: { textAlign: 'center', color: '#ffffff', fontSize: 20, fontWeight: '700', marginBottom: 20 },
+  heading: { fontSize: 16, lineHeight: 22, fontWeight: '700', marginBottom: spacing.lg },
 
-  // Section labels
-  sectionLabel: { color: '#6b7280', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8, marginTop: 4 },
+  /* Fields */
+  fieldWrap: { marginBottom: spacing.lg },
+  fieldLabel: {
+    fontSize: 13, lineHeight: 18, fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: 0.6,
+    marginBottom: spacing.xs + 2,
+  },
+  fieldRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm + 2,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.lg - 2,
+    minHeight: 52,
+  },
+  fieldInput: { flex: 1, fontSize: 15, lineHeight: 22, paddingVertical: spacing.sm },
+  errorRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.xs + 2,
+  },
+  errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flexShrink: 1 },
 
-  // Role selector
-  roleWrap:       { marginBottom: 14 },
-  roleRow:        { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 14, borderWidth: 1.5, borderColor: '#2d2d2d', backgroundColor: '#1f1f1f', marginBottom: 7 },
-  roleRowActive:  { borderColor: '#3b82f6', backgroundColor: '#172554' },
-  roleIcon:       { width: 34, height: 34, borderRadius: 10, backgroundColor: '#2d2d2d', alignItems: 'center', justifyContent: 'center' },
-  roleIconActive: { backgroundColor: '#1d4ed8' },
-  roleLabel:      { fontSize: 13, fontWeight: '700', color: '#d1d5db' },
-  roleLabelActive:{ color: '#60a5fa' },
-  roleDesc:       { fontSize: 11, color: '#6b7280', marginTop: 1 },
+  /* Section eyebrow + disclosure */
+  sectionLabel: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: 0.6,
+    marginBottom: spacing.sm, marginTop: spacing.sm,
+  },
+  disclosure: { fontSize: 12, lineHeight: 16, fontWeight: '600', marginBottom: spacing.sm },
 
-  // Password mismatch
-  pwMismatch: { color: '#ef4444', fontSize: 12, marginTop: -6, marginBottom: 6, marginLeft: 14 },
+  /* Role selector */
+  roleWrap: { marginBottom: spacing.sm },
+  roleRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    minHeight: 56,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderRadius: radii.md, borderWidth: 1.5,
+    marginBottom: spacing.sm,
+  },
+  roleLabel: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  roleDesc:  { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 1 },
 
-  // Submit
-  submitBtn: { marginTop: 16, backgroundColor: '#252525', borderRadius: 8, alignItems: 'center', paddingVertical: 13 },
-  submitTxt: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
+  /* GPS */
+  gpsRow: { flexDirection: 'row', alignItems: 'stretch', gap: spacing.sm },
+  gpsBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,
+    minHeight: 52, minWidth: 72,
+    borderRadius: radii.md, borderWidth: 1.5,
+    paddingHorizontal: spacing.md,
+  },
+  gpsTxt: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
 
-  // Footer
-  footer:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 18 },
-  footerTxt: { fontSize: 11, color: '#374151' },
-});
+  /* Submit */
+  submitBtn: {
+    marginTop: spacing.sm,
+    minHeight: 56,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitTxt: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
 
-const mod = StyleSheet.create({
-  overlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  card:      { backgroundColor: '#1f2937', borderRadius: 24, padding: 28, width: '100%', maxWidth: 380, alignItems: 'center', elevation: 20 },
-  title:     { fontSize: 20, fontWeight: '800', color: '#f9fafb', textAlign: 'center', marginBottom: 8 },
-  sub:       { fontSize: 14, color: '#9ca3af', textAlign: 'center', marginBottom: 24, lineHeight: 20 },
-  otpInput:  { width: '100%', borderWidth: 2, borderColor: '#374151', borderRadius: 14, padding: 18, textAlign: 'center', fontSize: 28, letterSpacing: 10, fontWeight: '700', color: '#f9fafb', backgroundColor: '#111827', marginBottom: 20 },
-  btn:       { backgroundColor: '#1565C0', width: '100%', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  btnTxt:    { color: '#fff', fontSize: 16, fontWeight: '700' },
-  cancel:    { marginTop: 14, padding: 10 },
-  cancelTxt: { color: '#6b7280', fontSize: 14 },
+  /* Footer */
+  footer: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.xs + 2, marginTop: spacing.lg, minHeight: 24,
+  },
+  footerTxt: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
+
+  /* States dropdown modal */
+  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.xl },
+  ddPanel: {
+    position: 'absolute', left: spacing.xl, right: spacing.xl, top: '12%',
+    borderRadius: radii.lg, borderWidth: 1,
+    padding: spacing.lg, maxHeight: '72%',
+  },
+  ddHeading: { fontSize: 16, lineHeight: 22, fontWeight: '700', marginBottom: spacing.md },
+  ddSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    borderRadius: radii.md, borderWidth: 1.5,
+    paddingHorizontal: spacing.md, minHeight: 48,
+    marginBottom: spacing.md,
+  },
+  ddItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    minHeight: 48, paddingHorizontal: spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  ddItemTxt: { fontSize: 15, lineHeight: 22, flexShrink: 1 },
+
+  /* Message modal */
+  modalCard: {
+    borderRadius: radii.lg, borderWidth: 1,
+    padding: spacing.xl, width: '100%', maxWidth: 380,
+    alignItems: 'center',
+  },
+  modalTitle: { fontSize: 20, lineHeight: 26, fontWeight: '800', textAlign: 'center', marginBottom: spacing.sm },
+  modalSub:   { fontSize: 15, lineHeight: 22, fontWeight: '500', textAlign: 'center', marginBottom: spacing.xl },
+  modalBtn:   {
+    minHeight: 56, borderRadius: radii.md,
+    alignItems: 'center', justifyContent: 'center',
+    alignSelf: 'stretch',
+  },
 });

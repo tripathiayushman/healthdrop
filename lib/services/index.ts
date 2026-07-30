@@ -7,12 +7,7 @@ export { waterQualityService } from './waterQuality';
 export { campaignsService } from './campaigns';
 export { usersService } from './users';
 export { notificationsService } from './notifications';
-export {
-	saveAIInsight,
-	logAuditEvent,
-	pushNotification,
-	healthCheckMongoCollections,
-} from './mongoService';
+export { sanitizeSearchTerm } from './searchSanitize';
 export {
 	getDistrictHealthRanking,
 	getCampaignEffectiveness,

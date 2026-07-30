@@ -1,8 +1,15 @@
+// =====================================================
+// TREND CHART — one ink series on a hairline grid.
+// No gradient fills, no bezier decoration; min/max/
+// latest labelled in 12px tabular text. Empty state is
+// a quiet zero, not an empty axis.
+// =====================================================
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
+import { Ionicons } from '@expo/vector-icons';
 import { TrendData } from '../../types';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, radii } from '../../lib/ThemeContext';
 
 interface TrendChartProps {
   data: TrendData[];
@@ -21,7 +28,7 @@ const toChartValue = (value: number | null | undefined): number => {
 };
 
 export const TrendChart: React.FC<TrendChartProps> = ({ data, maxPoints = 10 }) => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { width } = useWindowDimensions();
 
   const rows = useMemo(() => {
@@ -31,7 +38,6 @@ export const TrendChart: React.FC<TrendChartProps> = ({ data, maxPoints = 10 }) 
       .map((row) => ({
         ...row,
         total_cases: toChartValue(row.total_cases),
-        moving_avg: toChartValue(row.moving_avg),
       }));
   }, [data, maxPoints]);
 
@@ -43,54 +49,73 @@ export const TrendChart: React.FC<TrendChartProps> = ({ data, maxPoints = 10 }) 
       datasets: [
         {
           data: rows.map((row) => row.total_cases),
-          color: (opacity = 1) => `rgba(220, 38, 38, ${opacity})`,
-          strokeWidth: 2,
-        },
-        {
-          data: rows.map((row) => row.moving_avg),
-          color: (opacity = 1) => `rgba(37, 99, 235, ${opacity})`,
+          color: () => colors.chartLine,
           strokeWidth: 2,
         },
       ],
-      legend: ['Cases', 'Moving Avg'],
+    };
+  }, [rows, colors.chartLine]);
+
+  const summary = useMemo(() => {
+    if (rows.length === 0) return null;
+    const values = rows.map((row) => row.total_cases);
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      latest: values[values.length - 1],
     };
   }, [rows]);
 
   if (rows.length === 0) {
     return (
-      <View style={[styles.emptyWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
-        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No trend points available.</Text>
+      <View style={[styles.emptyWrap, { borderColor: colors.borderLight, backgroundColor: colors.surface }]}>
+        <Ionicons name="checkmark-circle-outline" size={24} color={colors.success} />
+        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+          No trend points yet — nothing reported in this window.
+        </Text>
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(12,12,16,0.85)' : colors.card }]}>
+    <View style={[styles.container, { borderColor: colors.border, backgroundColor: colors.card }]}>
       <LineChart
         data={chartData}
         width={chartWidth}
         height={220}
-        bezier
         fromZero
-        withShadow
+        withShadow={false}
         withDots
         chartConfig={{
-          backgroundGradientFrom: 'transparent',
-          backgroundGradientTo: 'transparent',
+          backgroundGradientFrom: colors.card,
+          backgroundGradientTo: colors.card,
+          fillShadowGradientFromOpacity: 0,
+          fillShadowGradientToOpacity: 0,
           decimalPlaces: 0,
-          color: (opacity = 1) => `rgba(37, 99, 235, ${opacity})`,
-          labelColor: (opacity = 1) => `rgba(${isDark ? '226,232,240' : '71,85,105'}, ${opacity})`,
+          color: () => colors.chartLine,
+          labelColor: () => colors.textSecondary,
           propsForBackgroundLines: {
-            stroke: isDark ? '#334155' : '#E2E8F0',
+            stroke: colors.chartGrid,
+            strokeWidth: 1,
+            strokeDasharray: '',
           },
           propsForDots: {
             r: '3',
             strokeWidth: '1',
-            stroke: isDark ? '#0F172A' : '#FFFFFF',
+            stroke: colors.card,
           },
         }}
         style={styles.chart}
       />
+      {summary && (
+        <View style={styles.summaryRow}>
+          <Text style={[styles.summaryText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+            MIN <Text style={{ color: colors.text }}>{summary.min}</Text>
+            {'   ·   '}MAX <Text style={{ color: colors.text }}>{summary.max}</Text>
+            {'   ·   '}LATEST <Text style={{ color: colors.text }}>{summary.latest}</Text>
+          </Text>
+        </View>
+      )}
     </View>
   );
 };
@@ -98,23 +123,37 @@ export const TrendChart: React.FC<TrendChartProps> = ({ data, maxPoints = 10 }) 
 const styles = StyleSheet.create({
   container: {
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: radii.md,
     paddingVertical: 12,
     paddingHorizontal: 8,
   },
   chart: {
-    borderRadius: 12,
+    borderRadius: radii.sm,
     marginRight: 12,
+  },
+  summaryRow: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+  },
+  summaryText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    fontVariant: ['tabular-nums'],
   },
   emptyWrap: {
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: radii.md,
+    padding: 24,
     alignItems: 'center',
+    gap: 8,
   },
   emptyText: {
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '500',
+    textAlign: 'center',
   },
 });
 

@@ -1,5 +1,7 @@
 // =====================================================
-// SUBMISSION MODAL - Success/Error Confirmation UI
+// SUBMISSION MODAL — Success/Error Confirmation UI
+// Flat opaque card, token colors, single 200ms fade
+// (static under reduce-motion). No glass, no springs.
 // =====================================================
 import React, { useEffect } from 'react';
 import {
@@ -7,23 +9,14 @@ import {
   Text,
   StyleSheet,
   Modal,
-  TouchableOpacity,
+  Pressable,
   Animated,
   Dimensions,
-  Platform,
-  ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, radii } from '../../lib/ThemeContext';
 
 const { width } = Dimensions.get('window');
-
-const webBlurStyle: ViewStyle | undefined = Platform.OS === 'web'
-  ? ({
-      backdropFilter: 'blur(16px)',
-      WebkitBackdropFilter: 'blur(16px)',
-    } as ViewStyle & Record<string, string>)
-  : undefined;
 
 interface SubmissionModalProps {
   visible: boolean;
@@ -46,25 +39,20 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
   autoClose = false,
   autoCloseDelay = 3000,
 }) => {
-  const { colors, isDark } = useTheme();
-  const scaleAnim = React.useRef(new Animated.Value(0)).current;
+  const { colors, isDark, reduceMotion } = useTheme();
   const opacityAnim = React.useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (visible) {
-      Animated.parallel([
-        Animated.spring(scaleAnim, {
-          toValue: 1,
-          friction: 8,
-          tension: 40,
-          useNativeDriver: true,
-        }),
+      if (reduceMotion) {
+        opacityAnim.setValue(1);
+      } else {
         Animated.timing(opacityAnim, {
           toValue: 1,
           duration: 200,
           useNativeDriver: true,
-        }),
-      ]).start();
+        }).start();
+      }
 
       // Auto close for success
       if (autoClose && type === 'success') {
@@ -74,24 +62,21 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
         return () => clearTimeout(timer);
       }
     } else {
-      scaleAnim.setValue(0);
       opacityAnim.setValue(0);
     }
-  }, [visible, type]);
+  }, [visible, type, reduceMotion]);
 
   const handleClose = () => {
-    Animated.parallel([
-      Animated.spring(scaleAnim, {
-        toValue: 0,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacityAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
+    if (reduceMotion) {
+      opacityAnim.setValue(0);
+      onClose();
+      return;
+    }
+    Animated.timing(opacityAnim, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
       onClose();
     });
   };
@@ -99,13 +84,13 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
   const getIconConfig = () => {
     switch (type) {
       case 'success':
-        return { name: 'checkmark-circle', color: '#10B981', bgColor: '#10B98120' };
+        return { name: 'checkmark-circle', color: colors.success, bgColor: colors.successBg };
       case 'error':
-        return { name: 'close-circle', color: '#EF4444', bgColor: '#EF444420' };
+        return { name: 'close-circle', color: colors.danger, bgColor: colors.dangerBg };
       case 'loading':
-        return { name: 'hourglass', color: '#3B82F6', bgColor: '#3B82F620' };
+        return { name: 'hourglass-outline', color: colors.info, bgColor: colors.infoBg };
       default:
-        return { name: 'information-circle', color: colors.primary, bgColor: colors.primary + '20' };
+        return { name: 'information-circle-outline', color: colors.primary, bgColor: colors.primaryLight };
     }
   };
 
@@ -119,36 +104,39 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
       statusBarTranslucent
       onRequestClose={handleClose}
     >
-      <Animated.View 
+      <Animated.View
         style={[
-          styles.overlay, 
-          { 
-            backgroundColor: 'rgba(0,0,0,0.6)',
+          styles.overlay,
+          {
+            backgroundColor: colors.overlay,
             opacity: opacityAnim,
-          }
+          },
         ]}
       >
         <Animated.View
+          accessibilityLiveRegion="polite"
           style={[
             styles.modalContainer,
             {
-              backgroundColor: isDark ? 'rgba(31,41,55,0.92)' : 'rgba(255,255,255,0.92)',
-              transform: [{ scale: scaleAnim }],
+              backgroundColor: colors.card,
+              borderColor: colors.border,
             },
-            webBlurStyle
+            !isDark && styles.cardShadow,
           ]}
         >
           {/* Icon */}
           <View style={[styles.iconContainer, { backgroundColor: iconConfig.bgColor }]}>
             <Ionicons
               name={iconConfig.name as any}
-              size={60}
+              size={40}
               color={iconConfig.color}
             />
           </View>
 
           {/* Title */}
-          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+          <Text style={[styles.title, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+            {title}
+          </Text>
 
           {/* Message */}
           <Text style={[styles.message, { color: colors.textSecondary }]}>{message}</Text>
@@ -156,39 +144,52 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
           {/* Buttons */}
           <View style={styles.buttonContainer}>
             {type === 'error' && onRetry && (
-              <TouchableOpacity
-                style={[styles.button, styles.retryButton, { backgroundColor: '#EF4444' }]}
+              <Pressable
                 onPress={onRetry}
+                accessibilityRole="button"
+                accessibilityLabel="Try Again"
+                style={({ pressed }) => [
+                  styles.button,
+                  { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                ]}
               >
-                <Ionicons name="refresh" size={20} color="#FFFFFF" />
-                <Text style={styles.buttonText}>Try Again</Text>
-              </TouchableOpacity>
+                <Ionicons name="refresh" size={20} color={colors.onPrimary} />
+                <Text style={[styles.buttonText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                  Try Again
+                </Text>
+              </Pressable>
             )}
-            
-            <TouchableOpacity
-              style={[
-                styles.button,
-                type === 'success' 
-                  ? { backgroundColor: '#10B981' }
-                  : type === 'error' && onRetry
-                    ? { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }
-                    : { backgroundColor: colors.primary }
-              ]}
+
+            <Pressable
               onPress={handleClose}
+              accessibilityRole="button"
+              style={({ pressed }) => [
+                styles.button,
+                type === 'error' && onRetry
+                  ? {
+                      backgroundColor: pressed ? colors.surfaceVariant : 'transparent',
+                      borderWidth: 1.5,
+                      borderColor: colors.inputBorder,
+                    }
+                  : { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+              ]}
             >
-              <Text style={[
-                styles.buttonText,
-                type === 'error' && onRetry && { color: colors.text }
-              ]}>
+              <Text
+                style={[
+                  styles.buttonText,
+                  { color: type === 'error' && onRetry ? colors.text : colors.onPrimary },
+                ]}
+                maxFontSizeMultiplier={1.3}
+              >
                 {type === 'success' ? 'Done' : type === 'error' && onRetry ? 'Cancel' : 'Close'}
               </Text>
-            </TouchableOpacity>
+            </Pressable>
           </View>
 
           {/* Auto close indicator for success */}
           {autoClose && type === 'success' && (
-            <Text style={[styles.autoCloseText, { color: colors.textSecondary }]}>
-              Auto-closing in a few seconds...
+            <Text style={[styles.autoCloseText, { color: colors.textTertiary }]}>
+              Auto-closing in a few seconds…
             </Text>
           )}
         </Animated.View>
@@ -207,35 +208,40 @@ const styles = StyleSheet.create({
   modalContainer: {
     width: width - 40,
     maxWidth: 400,
-    borderRadius: 20,
-    padding: 30,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    padding: 24,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 15,
+  },
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
   iconContainer: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   title: {
     fontSize: 22,
-    fontWeight: 'bold',
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.4,
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   message: {
     fontSize: 15,
-    textAlign: 'center',
     lineHeight: 22,
-    marginBottom: 25,
-    paddingHorizontal: 10,
+    fontWeight: '500',
+    textAlign: 'center',
+    marginBottom: 24,
+    paddingHorizontal: 8,
   },
   buttonContainer: {
     flexDirection: 'row',
@@ -247,21 +253,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
+    minHeight: 52,
+    borderRadius: radii.md,
     gap: 8,
   },
-  retryButton: {
-    backgroundColor: '#EF4444',
-  },
   buttonText: {
-    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   autoCloseText: {
     fontSize: 12,
-    marginTop: 15,
+    lineHeight: 16,
+    fontWeight: '600',
+    marginTop: 16,
   },
 });
 

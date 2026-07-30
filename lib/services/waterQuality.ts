@@ -5,6 +5,7 @@ import { supabase } from '../supabase';
 import { WaterQualityReport, WaterQualityReportInput, WaterReportStatus, ApiResponse } from '../../types';
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
+import { sanitizeSearchTerm } from './searchSanitize';
 
 const LEGACY_SCHEMA_FALLBACK_PATTERNS = [
   'client_idempotency_key',
@@ -64,7 +65,10 @@ export const waterQualityService = {
       if (quality) query = query.eq('overall_quality', quality);
       if (sourceType) query = query.eq('source_type', sourceType);
       if (searchQuery) {
-        query = query.or(`source_name.ilike.%${searchQuery}%,location_name.ilike.%${searchQuery}%`);
+        const term = sanitizeSearchTerm(searchQuery);
+        if (term) {
+          query = query.or(`source_name.ilike.%${term}%,location_name.ilike.%${term}%`);
+        }
       }
       if (dateFrom) query = query.gte('created_at', dateFrom);
       if (dateTo) query = query.lte('created_at', dateTo + 'T23:59:59');

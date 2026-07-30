@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -10,7 +9,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Profile, DistrictHealthRanking } from '../../types';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, Theme } from '../../lib/ThemeContext';
+import { EmptyState, ErrorCard, SkeletonBlock } from '../dashboards/DashboardShared';
 import { getDistrictHealthRanking } from '../../lib/services/advancedAnalytics';
 
 interface HealthScoreScreenProps {
@@ -18,15 +18,22 @@ interface HealthScoreScreenProps {
   onBack: () => void;
 }
 
-const scoreColor = (value: number): string => {
-  if (value >= 80) return '#10B981';
-  if (value >= 60) return '#0EA5E9';
-  if (value >= 40) return '#F59E0B';
-  return '#DC2626';
+const scoreColor = (value: number, t: Theme): string => {
+  if (value >= 80) return t.success;
+  if (value >= 60) return t.info;
+  if (value >= 40) return t.warning;
+  return t.danger;
+};
+
+const scoreBg = (value: number, t: Theme): string => {
+  if (value >= 80) return t.successBg;
+  if (value >= 60) return t.infoBg;
+  if (value >= 40) return t.warningBg;
+  return t.dangerBg;
 };
 
 const HealthScoreScreen: React.FC<HealthScoreScreenProps> = ({ profile, onBack }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [scores, setScores] = useState<DistrictHealthRanking[]>([]);
@@ -39,11 +46,8 @@ const HealthScoreScreen: React.FC<HealthScoreScreenProps> = ({ profile, onBack }
     try {
       const data = await getDistrictHealthRanking(profile);
       setScores(data);
-      if (data.length === 0) {
-        setError('No health score records are available yet for your visible scope.');
-      }
     } catch {
-      setError('Unable to load district health score data right now.');
+      setError("Couldn't load district health scores — check connection.");
       setScores([]);
     } finally {
       setLoading(false);
@@ -66,33 +70,59 @@ const HealthScoreScreen: React.FC<HealthScoreScreenProps> = ({ profile, onBack }
     return scores.find((item) => item.district.trim().toLowerCase() === districtName) ?? null;
   }, [scores, profile.district]);
 
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}> 
-      <View style={[styles.header, { backgroundColor: colors.secondary }]}> 
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
-          <Ionicons name="chevron-back" size={20} color="#FFFFFF" />
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+        >
+          <Ionicons name="chevron-back" size={22} color={headerText} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>District Health Score</Text>
-          <Text style={styles.headerSubtitle}>Risk ranking, outbreaks, and response health indicators</Text>
+          <Text style={[styles.headerTitle, { color: headerText }]}>District Health Score</Text>
+          <Text style={[styles.headerSubtitle, { color: headerSub }]}>Risk ranking, outbreaks, and response health indicators</Text>
         </View>
       </View>
 
       <ScrollView
         style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.secondary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
       >
-        {districtSummary && (
-          <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-            <Text style={[styles.summaryLabel, { color: colors.textSecondary }]}>Your district health score</Text>
+        {districtSummary && !loading && (
+          <View
+            style={[
+              styles.summaryCard,
+              { backgroundColor: colors.card, borderColor: colors.border, borderTopColor: scoreColor(districtSummary.health_score, colors) },
+              !isDark && styles.cardShadow,
+            ]}
+            accessible
+            accessibilityLabel={`Your district health score: ${Math.round(districtSummary.health_score)}, risk rank ${districtSummary.risk_rank}`}
+          >
+            <Text style={[styles.summaryLabel, { color: colors.textSecondary }]}>YOUR DISTRICT HEALTH SCORE</Text>
             <View style={styles.summaryRow}>
-              <Text style={[styles.summaryScore, { color: scoreColor(districtSummary.health_score) }]}>
+              <Text style={[styles.summaryScore, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                 {Math.round(districtSummary.health_score)}
               </Text>
-              <View style={[styles.rankPill, { backgroundColor: `${scoreColor(districtSummary.health_score)}22` }]}> 
-                <Text style={[styles.rankText, { color: scoreColor(districtSummary.health_score) }]}>
-                  Risk Rank #{districtSummary.risk_rank}
+              <View style={[styles.rankPill, { backgroundColor: scoreBg(districtSummary.health_score, colors) }]}>
+                <Text
+                  style={[styles.rankText, { color: scoreColor(districtSummary.health_score, colors) }]}
+                  maxFontSizeMultiplier={1.3}
+                >
+                  RISK RANK #{districtSummary.risk_rank}
                 </Text>
               </View>
             </View>
@@ -106,30 +136,51 @@ const HealthScoreScreen: React.FC<HealthScoreScreenProps> = ({ profile, onBack }
         )}
 
         {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="large" color={colors.secondary} />
-            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading health scores...</Text>
+          <View style={{ gap: 12 }}>
+            <SkeletonBlock height={132} radius={12} />
+            <SkeletonBlock height={96} radius={12} />
+            <SkeletonBlock height={96} radius={12} />
+            <SkeletonBlock height={96} radius={12} />
           </View>
+        ) : error ? (
+          <ErrorCard message={error} onRetry={loadScores} />
+        ) : scores.length === 0 ? (
+          <EmptyState
+            icon="checkmark-circle-outline"
+            color={colors.success}
+            title="No health scores yet"
+            subtitle="No district health score records are available for your visible scope."
+          />
         ) : (
           <>
-            {error && (
-              <View style={[styles.errorCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-                <Ionicons name="alert-circle-outline" size={18} color={colors.textSecondary} />
-                <Text style={[styles.errorText, { color: colors.textSecondary }]}>{error}</Text>
-              </View>
-            )}
-
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                DISTRICT RANKING
+                <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${scores.length}`}</Text>
+              </Text>
+            </View>
             {scores.map((item) => {
-              const color = scoreColor(item.health_score);
+              const color = scoreColor(item.health_score, colors);
               return (
-                <View key={`${item.district}-${item.risk_rank}`} style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
+                <View
+                  key={`${item.district}-${item.risk_rank}`}
+                  style={[
+                    styles.itemCard,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                    !isDark && styles.cardShadow,
+                  ]}
+                  accessible
+                  accessibilityLabel={`${item.district}: health score ${Math.round(item.health_score)}, rank ${item.risk_rank}`}
+                >
                   <View style={styles.itemHeader}>
                     <Text style={[styles.itemDistrict, { color: colors.text }]} numberOfLines={1}>
                       {item.district}
                     </Text>
-                    <Text style={[styles.itemScore, { color }]}>{Math.round(item.health_score)}</Text>
+                    <Text style={[styles.itemScore, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {Math.round(item.health_score)}
+                    </Text>
                   </View>
-                  <View style={[styles.progressTrack, { backgroundColor: colors.border }]}> 
+                  <View style={[styles.progressTrack, { backgroundColor: colors.surfaceVariant }]}>
                     <View style={[styles.progressFill, { width: `${Math.max(4, Math.round(item.health_score))}%`, backgroundColor: color }]} />
                   </View>
                   <View style={styles.itemMetaRow}>
@@ -154,32 +205,37 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
   header: {
     paddingTop: 18,
     paddingBottom: 16,
     paddingHorizontal: 16,
-    borderBottomLeftRadius: 18,
-    borderBottomRightRadius: 18,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
   backBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '800',
+    letterSpacing: -0.4,
   },
   headerSubtitle: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
     marginTop: 2,
   },
   content: {
@@ -187,84 +243,95 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 20,
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
   summaryCard: {
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
+    borderTopWidth: 3,
+    borderRadius: 12,
+    padding: 16,
     marginBottom: 12,
   },
   summaryLabel: {
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 16,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   summaryRow: {
     marginTop: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
   },
   summaryScore: {
-    fontSize: 34,
-    fontWeight: '900',
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   rankPill: {
-    borderRadius: 12,
+    borderRadius: 999,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 6,
   },
   rankText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    fontVariant: ['tabular-nums'],
   },
   summaryMetrics: {
     marginTop: 8,
     gap: 4,
   },
   summaryMetric: {
-    fontSize: 12,
-  },
-  loadingWrap: {
-    paddingTop: 36,
-    alignItems: 'center',
-    gap: 10,
-  },
-  loadingText: {
     fontSize: 13,
-  },
-  errorCard: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  errorText: {
-    fontSize: 12,
-    flex: 1,
+    lineHeight: 18,
+    fontWeight: '500',
+    fontVariant: ['tabular-nums'],
   },
   itemCard: {
     borderWidth: 1,
     borderRadius: 12,
-    padding: 10,
-    marginBottom: 10,
+    padding: 16,
+    marginBottom: 12,
   },
   itemHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 8,
     gap: 8,
   },
   itemDistrict: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 22,
     fontWeight: '700',
   },
   itemScore: {
-    fontSize: 20,
-    fontWeight: '900',
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
   },
   progressTrack: {
     height: 7,
@@ -282,7 +349,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   itemMeta: {
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
 });
 

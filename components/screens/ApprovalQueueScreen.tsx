@@ -1,21 +1,25 @@
 // =====================================================
-// APPROVAL QUEUE SCREEN
-// Handles pending disease reports, water reports,
-// campaign approvals — role-colored per admin type
+// APPROVAL QUEUE SCREEN ("Prakash" design)
+// Pending disease / water / campaign / alert approvals.
+// Flat headerBg band + Role Ribbon, flat data rows with
+// hairline dividers, token-driven status pills, 4-state
+// data region, One-Hand Action Bar on the detail modal.
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
-  ScrollView, Platform, ViewStyle
+  TextInput, Modal, ActivityIndicator, RefreshControl,
+  ScrollView, Pressable,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
-import { ROLE_GRADIENTS, ROLE_ACCENT } from '../dashboards/DashboardShared';
+import {
+  ROLE_ACCENT, SkeletonBlock, ErrorCard, EmptyState,
+  getSeverityColor, getWaterQualityColor,
+} from '../dashboards/DashboardShared';
 
 interface Props { profile: Profile; onBack: () => void; initialTab?: QueueTab }
 
@@ -58,31 +62,25 @@ interface HealthAlert {
 
 type QueueItem = DiseaseReport | WaterReport | Campaign | HealthAlert;
 
-const URGENCY_COLOR: Record<string,string> = {
-  critical: '#DC2626', high: '#F59E0B', medium: '#3B82F6', low: '#10B981',
-};
-const SEVERITY_COLOR: Record<string,string> = {
-  critical: '#EF4444', severe: '#F97316', moderate: '#F59E0B', mild: '#10B981',
-};
-const QUALITY_COLOR: Record<string,string> = {
-  safe: '#10B981', moderate: '#F59E0B', unsafe: '#F97316', critical: '#EF4444',
-};
-const STATUS_COLOR: Record<string,string> = {
-  approved: '#10B981', pending_approval: '#F59E0B', rejected: '#EF4444',
+/** Legacy disease-severity vocab → severity token key */
+const severityKey = (s: string): string => {
+  switch (s?.toLowerCase()) {
+    case 'critical': return 'critical';
+    case 'severe':
+    case 'high':     return 'high';
+    case 'moderate':
+    case 'medium':   return 'medium';
+    case 'mild':
+    case 'low':      return 'low';
+    default:         return '';
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialTab }) => {
-  const { colors, isDark } = useTheme();
-  const accent   = ROLE_ACCENT[profile.role] ?? '#42A5F5';
-  const gradient = ROLE_GRADIENTS[profile.role] ?? ['#0F172A','#1E3A5F','#1976D2'];
-  const webSheetStyle: ViewStyle | undefined = Platform.OS === 'web'
-    ? ({
-        backdropFilter: 'blur(16px)',
-        WebkitBackdropFilter: 'blur(16px)',
-      } as React.CSSProperties as unknown as ViewStyle)
-    : undefined;
+  const { colors, isDark, reduceMotion } = useTheme();
+  const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
 
   const isClinic = profile.role === 'clinic';
   const isDistrictOfficer = profile.role === 'district_officer';
@@ -97,6 +95,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
 
   const [tab, setTab] = useState<QueueTab>(initialTab ?? 'disease');
   const [loading, setLoading]     = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch]       = useState('');
 
@@ -128,11 +127,11 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   };
 
   // ── Tabs based on role ───────────────────────────────────────────────────
-  const allTabs: { id: QueueTab; label: string; icon: string }[] = [
-    { id: 'disease',   label: 'Disease',   icon: 'medkit' },
-    { id: 'water',     label: 'Water',     icon: 'water' },
-    { id: 'campaigns', label: 'Campaigns', icon: 'megaphone' },
-    { id: 'alerts',    label: 'Alerts',    icon: 'alert-circle' },
+  const allTabs: { id: QueueTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { id: 'disease',   label: 'Disease',   icon: 'medkit-outline' },
+    { id: 'water',     label: 'Water',     icon: 'water-outline' },
+    { id: 'campaigns', label: 'Campaigns', icon: 'megaphone-outline' },
+    { id: 'alerts',    label: 'Alerts',    icon: 'alert-circle-outline' },
   ];
   // Admins see all; district_officer sees disease/water/campaigns; clinic sees disease/water only
   const visibleTabs = isAdmin
@@ -148,6 +147,9 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     setLoading(true);
     try {
       await Promise.all([loadDiseaseReports(), loadWaterReports(), loadCampaigns(), loadAlerts()]);
+      setFetchError(null);
+    } catch {
+      setFetchError("Couldn't load the queue — check connection");
     } finally { setLoading(false); setRefreshing(false); }
   };
 
@@ -156,7 +158,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const loadDiseaseReports = async () => {
     let q = supabase.from('disease_reports').select('*').order('created_at', { ascending: false });
     if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
-    const { data } = await q;
+    const { data, error } = await q;
+    if (error) throw error;
     const rows = data ?? [];
     setDiseaseReports(rows);
     setPendingCounts(p => ({ ...p, disease: rows.filter(r => r.approval_status === 'pending_approval').length }));
@@ -164,7 +167,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const loadWaterReports = async () => {
     let q = supabase.from('water_quality_reports').select('*').order('created_at', { ascending: false });
     if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
-    const { data } = await q;
+    const { data, error } = await q;
+    if (error) throw error;
     const rows = data ?? [];
     setWaterReports(rows);
     setPendingCounts(p => ({ ...p, water: rows.filter(r => r.approval_status === 'pending_approval').length }));
@@ -173,20 +177,22 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     if (isClinic) return; // clinics dont approve campaigns
     let q = supabase.from('health_campaigns').select('*').order('created_at', { ascending: false });
     if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
-    const { data } = await q;
+    const { data, error } = await q;
+    if (error) throw error;
     const rows = data ?? [];
     setCampaigns(rows);
     setPendingCounts(p => ({ ...p, campaigns: rows.filter(r => r.approval_status === 'pending_approval').length }));
   };
   const loadAlerts = async () => {
     if (!isAdmin) return; // only admins approve alerts
-    const { data } = await supabase.from('health_alerts').select('*').order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('health_alerts').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
     const rows = data ?? [];
     setAlerts(rows);
     setPendingCounts(p => ({ ...p, alerts: rows.filter(r => r.approval_status === 'pending_approval').length }));
   };
 
-  // ── Delete ───────────────────────────────────────────────────────────────
+  // ── Delete (reports/campaigns/alerts — records without a soft-delete flag) ─
   const deleteItem = (id: string, type: QueueTab) => {
     // Use a custom Modal instead of Alert.alert (Alert.alert is no-op on web)
     setDeleteTarget({ id, type });
@@ -203,7 +209,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       if (error) throw error;
       setShowDetailModal(false);
       load();
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) { showFeedback('Error', e?.message ?? 'Failed to delete item.', 'error'); }
     finally { setActionLoading(false); setDeleteTarget(null); }
   };
 
@@ -216,7 +222,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       if (error) throw error;
       setSelectedItem(prev => prev ? { ...prev, status: newStatus } : prev);
       load();
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) { showFeedback('Error', e?.message ?? 'Failed to update verification.', 'error'); }
     finally { setActionLoading(false); }
   };
 
@@ -257,21 +263,31 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     finally { setActionLoading(false); }
   };
 
-  const feedbackVisual: { icon: keyof typeof Ionicons.glyphMap; color: string } =
+  const feedbackVisual: { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string } =
     feedbackType === 'error'
-      ? { icon: 'alert-circle', color: '#EF4444' }
+      ? { icon: 'alert-circle-outline', color: colors.danger, bg: colors.dangerBg }
       : feedbackType === 'warning'
-      ? { icon: 'warning', color: '#F59E0B' }
-      : { icon: 'checkmark-circle', color: '#10B981' };
+      ? { icon: 'warning-outline', color: colors.warning, bg: colors.warningBg }
+      : { icon: 'checkmark-circle-outline', color: colors.success, bg: colors.successBg };
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  const statusChip = (s?: string) => (
-    <View style={[qst.chip, { backgroundColor: (STATUS_COLOR[s??''] ?? colors.textSecondary) + '22' }]}>
-      <Text style={[qst.chipText, { color: STATUS_COLOR[s??''] ?? colors.textSecondary }]}>
-        {s === 'pending_approval' ? 'Pending' : s === 'approved' ? 'Approved' : s === 'rejected' ? 'Rejected' : 'Unknown'}
-      </Text>
-    </View>
-  );
+  // ── Status pill — dot + UPPERCASE label on *Bg token ─────────────────────
+  const statusPill = (s?: string) => {
+    const fg = s === 'approved' ? colors.success
+      : s === 'pending_approval' ? colors.warning
+      : s === 'rejected' ? colors.danger
+      : colors.textSecondary;
+    const bg = s === 'approved' ? colors.successBg
+      : s === 'pending_approval' ? colors.warningBg
+      : s === 'rejected' ? colors.dangerBg
+      : colors.surfaceVariant;
+    const label = s === 'pending_approval' ? 'PENDING' : s === 'approved' ? 'APPROVED' : s === 'rejected' ? 'REJECTED' : 'UNKNOWN';
+    return (
+      <View style={[qst.pill, { backgroundColor: bg }]} accessibilityLabel={`Status: ${label.toLowerCase()}`}>
+        <View style={[qst.pillDot, { backgroundColor: fg }]} />
+        <Text style={[qst.pillText, { color: fg }]} maxFontSizeMultiplier={1.3}>{label}</Text>
+      </View>
+    );
+  };
 
   // ── Filtered lists ────────────────────────────────────────────────────────
   const q = search.toLowerCase();
@@ -283,43 +299,42 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   });
   const fAlerts    = alerts.filter(r => !q || r.title?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
 
-  // ── Card renderer ─────────────────────────────────────────────────────────
-  const renderCard = (item: QueueItem, type: QueueTab) => {
-    const isPending = item.approval_status === 'pending_approval';
-    let iconColor = accent;
-    let iconName: string = 'document-text';
+  // ── Flat row renderer — surface bg, hairline divider ─────────────────────
+  const renderRow = (item: QueueItem, type: QueueTab) => {
+    let iconColor: string = colors.textSecondary;
+    let iconName: keyof typeof Ionicons.glyphMap = 'document-text-outline';
     let titleText = '';
     let subtitleText = '';
 
     switch (type) {
       case 'disease': {
         const diseaseItem = item as DiseaseReport;
-        iconColor = SEVERITY_COLOR[diseaseItem.severity] ?? '#EF4444';
-        iconName = 'medkit';
+        iconColor = getSeverityColor(severityKey(diseaseItem.severity), colors);
+        iconName = 'medkit-outline';
         titleText = diseaseItem.disease_name ?? 'Unknown Disease';
         subtitleText = `Cases: ${diseaseItem.cases_count ?? 0} · ${diseaseItem.district}, ${diseaseItem.state}`;
         break;
       }
       case 'water': {
         const waterItem = item as WaterReport;
-        iconColor = QUALITY_COLOR[waterItem.overall_quality] ?? '#3B82F6';
-        iconName = 'water';
+        iconColor = getWaterQualityColor(waterItem.overall_quality, colors);
+        iconName = 'water-outline';
         titleText = waterItem.source_name ?? 'Unknown Source';
         subtitleText = `${waterItem.source_type} · ${waterItem.district}, ${waterItem.state}`;
         break;
       }
       case 'campaigns': {
         const campaignItem = item as Campaign;
-        iconColor = '#8B5CF6';
-        iconName = 'megaphone';
+        iconColor = colors.primary;
+        iconName = 'megaphone-outline';
         titleText = campaignItem.campaign_name || campaignItem.title || campaignItem.name || 'Unnamed Campaign';
         subtitleText = `${campaignItem.campaign_type} · ${campaignItem.district}, ${campaignItem.state}`;
         break;
       }
       case 'alerts': {
         const alertItem = item as HealthAlert;
-        iconColor = URGENCY_COLOR[alertItem.urgency_level] ?? '#F59E0B';
-        iconName = 'alert-circle';
+        iconColor = getSeverityColor(alertItem.urgency_level, colors);
+        iconName = 'alert-circle-outline';
         titleText = alertItem.title ?? 'Untitled Alert';
         subtitleText = `${alertItem.alert_type ?? ''} · ${alertItem.district}, ${alertItem.state}`;
         break;
@@ -327,26 +342,31 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     }
 
     return (
-      <TouchableOpacity
+      <Pressable
         key={item.id}
-        style={[qst.card, { backgroundColor: colors.card, borderColor: isPending ? accent : colors.border, borderLeftWidth: isPending ? 4 : 1, borderLeftColor: isPending ? accent : colors.border }]}
+        style={({ pressed }) => [
+          qst.row,
+          {
+            backgroundColor: pressed ? colors.cardHover : colors.surface,
+            borderBottomColor: colors.borderLight,
+          },
+        ]}
         onPress={() => { setSelectedItem(item); setSelectedType(type); setShowDetailModal(true); }}
-        activeOpacity={0.78}
+        accessibilityRole="button"
+        accessibilityLabel={`${titleText}, status ${item.approval_status === 'pending_approval' ? 'pending' : item.approval_status ?? 'unknown'}`}
       >
-        <View style={qst.cardRow}>
-          <View style={[qst.iconWrap, { backgroundColor: iconColor + '22' }]}>
-            <Ionicons name={iconName as any} size={20} color={iconColor} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[qst.cardTitle, { color: colors.text }]} numberOfLines={1}>{titleText}</Text>
-            <Text style={[qst.cardSub, { color: colors.textSecondary }]} numberOfLines={1}>{subtitleText}</Text>
-            <Text style={[qst.cardDate, { color: colors.textSecondary }]}>
-              {item.created_at ? format(new Date(item.created_at), 'MMM d, yyyy') : ''}
-            </Text>
-          </View>
-          {statusChip(item.approval_status)}
+        <View style={[qst.iconWrap, { backgroundColor: iconColor + '14' }]}>
+          <Ionicons name={iconName} size={20} color={iconColor} />
         </View>
-      </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <Text style={[qst.rowTitle, { color: colors.text }]} numberOfLines={1}>{titleText}</Text>
+          <Text style={[qst.rowSub, { color: colors.textSecondary }]} numberOfLines={1}>{subtitleText}</Text>
+          <Text style={[qst.rowDate, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+            {item.created_at ? format(new Date(item.created_at), 'd MMM yyyy') : ''}
+          </Text>
+        </View>
+        {statusPill(item.approval_status)}
+      </Pressable>
     );
   };
 
@@ -388,138 +408,203 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   // ── Detail modal fields ───────────────────────────────────────────────────
   const DetailRow = ({ label, value }: { label: string; value?: string|number }) => (
     value !== undefined && value !== null && value !== '' && value !== 0
-      ? <View style={[qst.detailRow, { borderBottomColor: colors.border }]}>
+      ? <View style={[qst.detailRow, { borderBottomColor: colors.borderLight }]}>
           <Text style={[qst.detailLabel, { color: colors.textSecondary }]}>{label}</Text>
           <Text style={[qst.detailValue, { color: colors.text }]}>{String(value)}</Text>
         </View>
       : null
   );
 
+  const showApproveBar = !!selectedItem && canApproveSelected &&
+    (selectedItem.approval_status === 'pending_approval' || canReReviewSelected);
+
+  // Header text: navy band in light mode → white; surface band in dark → ink.
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
   return (
     <View style={[qst.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <LinearGradient colors={gradient as any} style={qst.header}>
-        <TouchableOpacity onPress={onBack} style={qst.back}>
-          <Ionicons name="arrow-back" size={22} color="#FFF" />
+      {/* Header — flat headerBg band */}
+      <View
+        style={[
+          qst.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={onBack}
+          style={qst.back}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="arrow-back" size={22} color={headerText} />
         </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={qst.headerTitle}>Approval Queue</Text>
-          <Text style={qst.headerSub}>{totalPending} pending reviews</Text>
+        <View style={{ flex: 1, marginLeft: spacing.md }}>
+          <Text style={[qst.headerTitle, { color: headerText }]}>Approval Queue</Text>
+          <Text style={[qst.headerSub, { color: headerSub }]} maxFontSizeMultiplier={1.3}>
+            {totalPending} pending review{totalPending !== 1 ? 's' : ''}
+          </Text>
         </View>
-        {totalPending > 0 && (
-          <View style={[qst.totalBadge, { backgroundColor: accent }]}>
-            <Text style={qst.totalBadgeText}>{totalPending}</Text>
-          </View>
-        )}
-      </LinearGradient>
+      </View>
+      {/* Role Ribbon */}
+      <View style={[qst.roleRibbon, { backgroundColor: accent }]} />
 
       {/* Tab bar */}
-      <View style={[qst.tabBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[qst.tabBar, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         {visibleTabs.map(t => {
           const active = tab === t.id;
           const count  = { disease: pendingCounts.disease, water: pendingCounts.water, campaigns: pendingCounts.campaigns, alerts: pendingCounts.alerts }[t.id];
           return (
-            <TouchableOpacity key={t.id} style={qst.tabItem} onPress={() => setTab(t.id)}>
-              <Ionicons name={t.icon as any} size={18} color={active ? accent : colors.textSecondary} />
-              <Text style={[qst.tabLabel, { color: active ? accent : colors.textSecondary, fontWeight: active ? '700' : '400' }]}>
+            <TouchableOpacity
+              key={t.id}
+              style={qst.tabItem}
+              onPress={() => setTab(t.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={count > 0 ? `${t.label}, ${count} pending` : t.label}
+            >
+              <Ionicons name={t.icon} size={18} color={active ? colors.primary : colors.textSecondary} />
+              <Text
+                style={[
+                  qst.tabLabel,
+                  { color: active ? colors.primary : colors.textSecondary, fontWeight: active ? '700' : '600' },
+                ]}
+                maxFontSizeMultiplier={1.3}
+              >
                 {t.label}
               </Text>
               {count > 0 && (
-                <View style={[qst.tabBadge, { backgroundColor: accent }]}>
-                  <Text style={qst.tabBadgeText}>{count}</Text>
+                <View style={[qst.tabBadge, { backgroundColor: colors.danger }]}>
+                  <Text style={[qst.tabBadgeText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>{count}</Text>
                 </View>
               )}
-              {active && <View style={[qst.tabUnderline, { backgroundColor: accent }]} />}
+              {active && <View style={[qst.tabUnderline, { backgroundColor: colors.primary }]} />}
             </TouchableOpacity>
           );
         })}
       </View>
 
       {/* Search */}
-      <View style={[qst.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[qst.searchRow, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
         <Ionicons name="search-outline" size={16} color={colors.textSecondary} />
         <TextInput
           style={[qst.searchInput, { color: colors.text }]}
           placeholder="Search..."
-          placeholderTextColor={colors.textSecondary}
+          placeholderTextColor={colors.placeholder}
           value={search}
           onChangeText={setSearch}
         />
         {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
+          <TouchableOpacity
+            onPress={() => setSearch('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             <Ionicons name="close-circle" size={16} color={colors.textSecondary} />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Summary row */}
-      <View style={[qst.summaryRow, { backgroundColor: colors.surface }]}>
-        <Text style={[qst.summaryText, { color: colors.textSecondary }]}>
-          {currentData.length} items · {pendingOfTab} pending
+      {/* Column-header eyebrow row */}
+      <View style={[qst.tableHead, { backgroundColor: colors.surfaceVariant, borderBottomColor: colors.border }]}>
+        <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+          ITEMS
+          <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${currentData.length}`}</Text>
+        </Text>
+        <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+          PENDING
+          <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${pendingOfTab}`}</Text>
         </Text>
       </View>
 
-      {/* List */}
-      {loading
-        ? <ActivityIndicator size="large" color={accent} style={{ marginTop: 40 }} />
-        : (
-          <FlatList
-            data={currentData}
-            keyExtractor={item => item.id}
-            renderItem={({ item }) => renderCard(item, tab)}
-            contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={accent} />}
-            ListEmptyComponent={
-              <View style={qst.empty}>
-                <Ionicons name="checkmark-circle-outline" size={48} color="#10B981" />
-                <Text style={[qst.emptyText, { color: colors.textSecondary }]}>No items found</Text>
+      {/* Data region — skeleton / error / quiet-zero / content */}
+      {fetchError && !loading && (
+        <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+          <ErrorCard message={fetchError} onRetry={load} />
+        </View>
+      )}
+      {loading ? (
+        <View style={qst.skeletonWrap} accessibilityElementsHidden>
+          <SkeletonBlock height={64} radius={radii.sm} />
+          <SkeletonBlock height={64} radius={radii.sm} />
+          <SkeletonBlock height={64} radius={radii.sm} />
+          <SkeletonBlock height={64} radius={radii.sm} />
+        </View>
+      ) : (
+        <FlatList
+          data={currentData}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => renderRow(item, tab)}
+          contentContainerStyle={{ paddingBottom: 120 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
+          ListEmptyComponent={
+            fetchError ? null : (
+              <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
+                <EmptyState
+                  icon={search ? 'search-outline' : 'checkmark-circle-outline'}
+                  color={search ? colors.textSecondary : colors.success}
+                  title={search
+                    ? 'No items match — try a different search.'
+                    : 'Queue clear — nothing waiting for review.'}
+                />
               </View>
-            }
-          />
-        )
-      }
+            )
+          }
+        />
+      )}
 
-      {/* ── Detail / Approve Modal ──────────────────────────────────────── */}
-      <Modal visible={showDetailModal} animationType="slide" transparent onRequestClose={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}>
-        <TouchableOpacity
-          style={qst.overlay}
-          activeOpacity={1}
-          onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}
-        >
+      {/* ── Detail / Approve Modal — One-Hand Action Bar ────────────────── */}
+      <Modal
+        visible={showDetailModal}
+        animationType={reduceMotion ? 'none' : 'slide'}
+        transparent
+        onRequestClose={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}
+      >
+        <View style={[qst.overlay, { backgroundColor: colors.overlay }]}>
+          <Pressable
+            style={StyleSheet.absoluteFillObject}
+            onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}
+            accessibilityLabel="Close details"
+          />
           {selectedItem && (
-            <TouchableOpacity activeOpacity={1} onPress={() => {}} accessible={false}>
-            <View style={[
-              qst.sheet, 
-              { backgroundColor: colors.card },
-              webSheetStyle,
-            ]}>
+            <View style={[qst.sheet, { backgroundColor: colors.card }]}>
               {/* Modal header */}
-              <View style={[qst.modalHeader, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
+              <View style={[qst.modalHeader, { borderBottomColor: colors.borderLight }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[qst.modalTitle, { color: colors.text }]} numberOfLines={2}>
                     {getSelectedTitle(selectedItem)}
                   </Text>
-                  <Text style={[qst.modalSub, { color: colors.textSecondary }]}>{selectedItem.district}, {selectedItem.state}</Text>
+                  <Text style={[qst.modalSub, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {selectedItem.district}, {selectedItem.state}
+                  </Text>
                 </View>
-                <TouchableOpacity onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}>
+                <TouchableOpacity
+                  onPress={() => { setShowDetailModal(false); setShowRejectInput(false); setRejectReason(''); }}
+                  style={[qst.closeBtn, { backgroundColor: colors.surfaceVariant }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
                   <Ionicons name="close" size={22} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={{ padding: 16 }}>
-                {/* Approval / Rejection status chip */}
-                <View style={qst.statusRow}>{statusChip(selectedItem.approval_status)}</View>
-
-                {/* Verification status chip (disease + water only) */}
-                {(selectedType === 'disease' || selectedType === 'water') && selectedItem.status && (
-                  <View style={[qst.statusRow, { marginTop: -4 }]}>
-                    <View style={[qst.chip, { backgroundColor: selectedItem.status === 'verified' ? '#10B98122' : '#3B82F622' }]}>
-                      <Text style={[qst.chipText, { color: selectedItem.status === 'verified' ? '#10B981' : '#3B82F6' }]}>
-                        {selectedItem.status === 'verified' ? 'Verified' : 'Reported'}
+              <ScrollView style={{ paddingHorizontal: spacing.lg }}>
+                {/* Approval + verification pills */}
+                <View style={qst.statusRow}>
+                  {statusPill(selectedItem.approval_status)}
+                  {(selectedType === 'disease' || selectedType === 'water') && selectedItem.status && (
+                    <View style={[qst.pill, { backgroundColor: selectedItem.status === 'verified' ? colors.successBg : colors.infoBg }]}>
+                      <View style={[qst.pillDot, { backgroundColor: selectedItem.status === 'verified' ? colors.success : colors.info }]} />
+                      <Text style={[qst.pillText, { color: selectedItem.status === 'verified' ? colors.success : colors.info }]} maxFontSizeMultiplier={1.3}>
+                        {selectedItem.status === 'verified' ? 'VERIFIED' : 'REPORTED'}
                       </Text>
                     </View>
-                  </View>
-                )}
+                  )}
+                </View>
 
                 {/* Fields based on type */}
                 {isDiseaseItem(selectedItem) && <>
@@ -545,8 +630,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <DetailRow label="Name" value={selectedItem.campaign_name || selectedItem.title || selectedItem.name} />
                   <DetailRow label="Type" value={selectedItem.campaign_type} />
                   <DetailRow label="Status" value={selectedItem.status} />
-                  <DetailRow label="Start" value={selectedItem.start_date ? format(new Date(selectedItem.start_date), 'MMM d, yyyy') : ''} />
-                  <DetailRow label="End" value={selectedItem.end_date ? format(new Date(selectedItem.end_date), 'MMM d, yyyy') : ''} />
+                  <DetailRow label="Start" value={selectedItem.start_date ? format(new Date(selectedItem.start_date), 'd MMM yyyy') : ''} />
+                  <DetailRow label="End" value={selectedItem.end_date ? format(new Date(selectedItem.end_date), 'd MMM yyyy') : ''} />
                   <DetailRow label="Target Pop." value={selectedItem.target_population} />
                   <DetailRow label="Volunteers" value={selectedItem.volunteers_needed} />
                   <DetailRow label="Location" value={`${selectedItem.district}, ${selectedItem.state}`} />
@@ -566,12 +651,12 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
 
                 {/* Reject reason input */}
                 {showRejectInput && (
-                  <View style={{ marginTop: 12 }}>
-                    <Text style={[qst.rejectLabel, { color: colors.text }]}>Reason for rejection</Text>
+                  <View style={{ marginTop: spacing.md }}>
+                    <Text style={[qst.rejectLabel, { color: colors.textSecondary }]}>REASON FOR REJECTION</Text>
                     <TextInput
-                      style={[qst.rejectInput, { backgroundColor: colors.surface, borderColor: '#EF4444', color: colors.text }]}
+                      style={[qst.rejectInput, { backgroundColor: colors.inputBackground, borderColor: colors.inputErrorBorder, color: colors.text }]}
                       placeholder="Optional rejection reason..."
-                      placeholderTextColor={colors.textSecondary}
+                      placeholderTextColor={colors.placeholder}
                       value={rejectReason}
                       onChangeText={setRejectReason}
                       multiline
@@ -580,162 +665,217 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   </View>
                 )}
 
-                {/* Verify / Unverify buttons — disease + water only, for admins and clinics */}
+                {/* Verify / Unverify — disease + water only, for admins and clinics */}
                 {canVerifyReports && (selectedType === 'disease' || selectedType === 'water') && (
-                  <View style={[qst.actionRow, { marginTop: 12 }]}>
-                    <TouchableOpacity
-                      style={[qst.actionBtn, {
-                        backgroundColor: selectedItem.status === 'verified' ? '#1E40AF' : '#10B981',
-                        flex: 1,
-                      }]}
-                      onPress={() => verifyItem(
-                        selectedItem.id,
-                        selectedType,
-                        selectedItem.status === 'verified' ? 'reported' : 'verified'
-                      )}
-                      disabled={actionLoading}
-                    >
-                      <Ionicons
-                        name={selectedItem.status === 'verified' ? 'close-circle-outline' : 'checkmark-done-circle'}
-                        size={18} color="#FFF"
-                      />
-                      <Text style={qst.actionBtnText}>
-                        {selectedItem.status === 'verified' ? 'Unverify' : 'Mark Verified'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* Approve/Reject buttons — role + type aware */}
-                {canApproveSelected && (selectedItem.approval_status === 'pending_approval' || canReReviewSelected) && (
-                  <View style={qst.actionRow}>
-                    {!showRejectInput
-                      ? <>
-                          <TouchableOpacity
-                            style={[qst.actionBtn, { backgroundColor: '#EF4444' }]}
-                            onPress={() => setShowRejectInput(true)}
-                          >
-                            <Ionicons name="close-circle" size={18} color="#FFF" />
-                            <Text style={qst.actionBtnText}>Reject</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[qst.actionBtn, { backgroundColor: '#10B981' }]}
-                            onPress={() => approve(selectedItem.id, selectedType)}
-                            disabled={actionLoading}
-                          >
-                            {actionLoading
-                              ? <ActivityIndicator size={18} color="#FFF" />
-                              : <Ionicons name="checkmark-circle" size={18} color="#FFF" />
-                            }
-                            <Text style={qst.actionBtnText}>Approve</Text>
-                          </TouchableOpacity>
-                        </>
-                      : <>
-                          <TouchableOpacity
-                            style={[qst.actionBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
-                            onPress={() => { setShowRejectInput(false); setRejectReason(''); }}
-                          >
-                            <Text style={[qst.actionBtnText, { color: colors.text }]}>Cancel</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[qst.actionBtn, { backgroundColor: '#EF4444' }]}
-                            onPress={() => reject(selectedItem.id, selectedType, rejectReason)}
-                            disabled={actionLoading}
-                          >
-                            {actionLoading
-                              ? <ActivityIndicator size={18} color="#FFF" />
-                              : <Ionicons name="trash" size={18} color="#FFF" />
-                            }
-                            <Text style={qst.actionBtnText}>Confirm Reject</Text>
-                          </TouchableOpacity>
-                        </>
-                    }
-                  </View>
+                  <Pressable
+                    style={({ pressed }) => [
+                      qst.secondaryBtn,
+                      {
+                        backgroundColor: pressed ? colors.cardHover : colors.card,
+                        borderColor: colors.inputBorder,
+                      },
+                    ]}
+                    onPress={() => verifyItem(
+                      selectedItem.id,
+                      selectedType,
+                      selectedItem.status === 'verified' ? 'reported' : 'verified'
+                    )}
+                    disabled={actionLoading}
+                    accessibilityRole="button"
+                    accessibilityLabel={selectedItem.status === 'verified' ? 'Unverify report' : 'Mark report verified'}
+                  >
+                    <Ionicons
+                      name={selectedItem.status === 'verified' ? 'close-circle-outline' : 'checkmark-done-circle-outline'}
+                      size={18} color={colors.text}
+                    />
+                    <Text style={[qst.secondaryBtnText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {selectedItem.status === 'verified' ? 'Unverify' : 'Mark Verified'}
+                    </Text>
+                  </Pressable>
                 )}
 
                 {/* Delete — super_admin and health_admin only (NOT clinic) */}
                 {isAdmin && (
-                  <View style={{ marginTop: 12 }}>
-                    <TouchableOpacity
-                      style={[qst.deleteBtn]}
-                      onPress={() => deleteItem(selectedItem.id, selectedType)}
-                      disabled={actionLoading}
-                    >
-                      <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                      <Text style={qst.deleteBtnText}>Delete Report Permanently</Text>
-                    </TouchableOpacity>
-                  </View>
+                  <Pressable
+                    style={({ pressed }) => [
+                      qst.secondaryBtn,
+                      {
+                        backgroundColor: pressed ? colors.cardHover : colors.card,
+                        borderColor: colors.danger,
+                      },
+                    ]}
+                    onPress={() => deleteItem(selectedItem.id, selectedType)}
+                    disabled={actionLoading}
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete record permanently"
+                  >
+                    <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                    <Text style={[qst.secondaryBtnText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+                      Delete Permanently
+                    </Text>
+                  </Pressable>
                 )}
-                <View style={{ height: 40 }} />
+                <View style={{ height: spacing.xl }} />
               </ScrollView>
+
+              {/* One-Hand Action Bar — Approve / Reject docked at bottom */}
+              {showApproveBar && (
+                <View style={[qst.actionBar, { borderTopColor: colors.borderLight, backgroundColor: colors.card }]}>
+                  {!showRejectInput
+                    ? <>
+                        <Pressable
+                          style={({ pressed }) => [
+                            qst.actionBtn,
+                            {
+                              backgroundColor: pressed ? colors.cardHover : colors.card,
+                              borderWidth: 1.5, borderColor: colors.danger,
+                            },
+                          ]}
+                          onPress={() => setShowRejectInput(true)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Reject"
+                        >
+                          <Ionicons name="close-circle-outline" size={18} color={colors.danger} />
+                          <Text style={[qst.actionBtnText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>Reject</Text>
+                        </Pressable>
+                        <Pressable
+                          style={({ pressed }) => [
+                            qst.actionBtn,
+                            { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                            actionLoading && { opacity: 0.4 },
+                          ]}
+                          onPress={() => approve(selectedItem.id, selectedType)}
+                          disabled={actionLoading}
+                          accessibilityRole="button"
+                          accessibilityLabel="Approve"
+                        >
+                          {actionLoading
+                            ? <ActivityIndicator size={18} color={colors.onPrimary} />
+                            : <Ionicons name="checkmark-circle-outline" size={18} color={colors.onPrimary} />
+                          }
+                          <Text style={[qst.actionBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>Approve</Text>
+                        </Pressable>
+                      </>
+                    : <>
+                        <Pressable
+                          style={({ pressed }) => [
+                            qst.actionBtn,
+                            {
+                              backgroundColor: pressed ? colors.cardHover : colors.card,
+                              borderWidth: 1.5, borderColor: colors.inputBorder,
+                            },
+                          ]}
+                          onPress={() => { setShowRejectInput(false); setRejectReason(''); }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Cancel rejection"
+                        >
+                          <Text style={[qst.actionBtnText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>Cancel</Text>
+                        </Pressable>
+                        <Pressable
+                          style={({ pressed }) => [
+                            qst.actionBtn,
+                            { backgroundColor: colors.danger },
+                            (pressed || actionLoading) && { opacity: 0.4 },
+                          ]}
+                          onPress={() => reject(selectedItem.id, selectedType, rejectReason)}
+                          disabled={actionLoading}
+                          accessibilityRole="button"
+                          accessibilityLabel="Confirm reject"
+                        >
+                          {actionLoading
+                            ? <ActivityIndicator size={18} color={colors.textInverse} />
+                            : <Ionicons name="close-circle-outline" size={18} color={colors.textInverse} />
+                          }
+                          <Text style={[qst.actionBtnText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>Confirm Reject</Text>
+                        </Pressable>
+                      </>
+                  }
+                </View>
+              )}
             </View>
-            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* ── Delete Confirm Modal (web-compatible) ───────────────────────── */}
-      <Modal visible={showDeleteConfirm} transparent animationType="fade" onRequestClose={() => setShowDeleteConfirm(false)}>
-        <TouchableOpacity style={qst.overlay} activeOpacity={1} onPress={() => setShowDeleteConfirm(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}} accessible={false}>
-          <View style={[
-            qst.confirmCard, 
-            { backgroundColor: colors.card },
-            webSheetStyle,
-          ]}>
-            <View style={qst.confirmIconWrap}>
-              <Ionicons name="trash" size={32} color="#EF4444" />
+      <Modal
+        visible={showDeleteConfirm}
+        transparent
+        animationType={reduceMotion ? 'none' : 'fade'}
+        onRequestClose={() => setShowDeleteConfirm(false)}
+      >
+        <View style={[qst.centerOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[qst.confirmCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[qst.confirmIconWrap, { backgroundColor: colors.dangerBg }]}>
+              <Ionicons name="trash-outline" size={28} color={colors.danger} />
             </View>
             <Text style={[qst.confirmTitle, { color: colors.text }]}>Delete Permanently?</Text>
             <Text style={[qst.confirmSub, { color: colors.textSecondary }]}>
               This action cannot be undone. The record will be permanently removed from the database.
             </Text>
             <View style={qst.confirmBtnRow}>
-              <TouchableOpacity
-                style={[qst.confirmBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
+              <Pressable
+                style={({ pressed }) => [
+                  qst.confirmBtn,
+                  {
+                    backgroundColor: pressed ? colors.cardHover : colors.card,
+                    borderWidth: 1.5, borderColor: colors.inputBorder,
+                  },
+                ]}
                 onPress={() => { setShowDeleteConfirm(false); setDeleteTarget(null); }}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel delete"
               >
                 <Text style={[qst.confirmBtnText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[qst.confirmBtn, { backgroundColor: '#EF4444' }]}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  qst.confirmBtn,
+                  { backgroundColor: colors.danger },
+                  (pressed || actionLoading) && { opacity: 0.4 },
+                ]}
                 onPress={confirmDelete}
                 disabled={actionLoading}
+                accessibilityRole="button"
+                accessibilityLabel="Delete permanently"
               >
                 {actionLoading
-                  ? <ActivityIndicator size="small" color="#FFF" />
-                  : <Text style={[qst.confirmBtnText, { color: '#FFF' }]}>Delete</Text>
+                  ? <ActivityIndicator size="small" color={colors.textInverse} />
+                  : <Text style={[qst.confirmBtnText, { color: colors.textInverse }]}>Delete</Text>
                 }
-              </TouchableOpacity>
+              </Pressable>
             </View>
           </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* ── Feedback Modal (web-compatible) ─────────────────────────────── */}
-      <Modal visible={showFeedbackModal} transparent animationType="fade" onRequestClose={() => setShowFeedbackModal(false)}>
-        <TouchableOpacity style={qst.overlay} activeOpacity={1} onPress={() => setShowFeedbackModal(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}} accessible={false}>
-            <View style={[qst.feedbackCard, { backgroundColor: colors.card }, webSheetStyle]}>
-              <View style={qst.feedbackIconWrap}>
-                <Ionicons
-                  name={feedbackVisual.icon}
-                  size={30}
-                  color={feedbackVisual.color}
-                />
-              </View>
-              <Text style={[qst.feedbackTitle, { color: colors.text }]}>{feedbackTitle}</Text>
-              <Text style={[qst.feedbackMessage, { color: colors.textSecondary }]}>{feedbackMessage}</Text>
-              <TouchableOpacity
-                style={[qst.confirmBtn, { marginTop: 16, width: '100%', backgroundColor: accent }]}
-                onPress={() => setShowFeedbackModal(false)}
-              >
-                <Text style={[qst.confirmBtnText, { color: '#FFF' }]}>OK</Text>
-              </TouchableOpacity>
+      <Modal
+        visible={showFeedbackModal}
+        transparent
+        animationType={reduceMotion ? 'none' : 'fade'}
+        onRequestClose={() => setShowFeedbackModal(false)}
+      >
+        <View style={[qst.centerOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[qst.confirmCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[qst.confirmIconWrap, { backgroundColor: feedbackVisual.bg }]}>
+              <Ionicons name={feedbackVisual.icon} size={28} color={feedbackVisual.color} />
             </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
+            <Text style={[qst.confirmTitle, { color: colors.text }]}>{feedbackTitle}</Text>
+            <Text style={[qst.confirmSub, { color: colors.textSecondary }]}>{feedbackMessage}</Text>
+            <Pressable
+              style={({ pressed }) => [
+                qst.confirmBtn,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary, alignSelf: 'stretch' },
+              ]}
+              onPress={() => setShowFeedbackModal(false)}
+              accessibilityRole="button"
+              accessibilityLabel="OK"
+            >
+              <Text style={[qst.confirmBtnText, { color: colors.onPrimary }]}>OK</Text>
+            </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -743,66 +883,93 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
 
 const qst = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 20, paddingTop: 36 },
-  back: { padding: 4 },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: '#FFF' },
-  headerSub: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  totalBadge: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  totalBadgeText: { color: '#FFF', fontWeight: '800', fontSize: 14 },
-  // Tabs
+  /* Header */
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.xl, paddingTop: 42 },
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
+  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2, fontVariant: ['tabular-nums'] },
+  roleRibbon: { height: 4, width: '100%' },
+  /* Tabs */
   tabBar: { flexDirection: 'row', borderBottomWidth: 1 },
-  tabItem: { flex: 1, alignItems: 'center', paddingVertical: 12, gap: 2, position: 'relative' },
-  tabLabel: { fontSize: 11 },
-  tabBadge: { position: 'absolute', top: 6, right: 4, minWidth: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
-  tabBadgeText: { color: '#FFF', fontSize: 9, fontWeight: '700' },
-  tabUnderline: { position: 'absolute', bottom: 0, left: 8, right: 8, height: 2, borderRadius: 1 },
-  // Search
-  searchRow: { flexDirection: 'row', alignItems: 'center', margin: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1, gap: 8 },
-  searchInput: { flex: 1, fontSize: 14 },
-  // Summary
-  summaryRow: { paddingHorizontal: 16, paddingVertical: 6 },
-  summaryText: { fontSize: 12 },
-  // Card
-  card: { borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 10 },
-  cardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconWrap: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { fontSize: 15, fontWeight: '600' },
-  cardSub: { fontSize: 12, marginTop: 2 },
-  cardDate: { fontSize: 11, marginTop: 2 },
-  chip: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  chipText: { fontSize: 11, fontWeight: '600' },
-  empty: { paddingTop: 60, alignItems: 'center', gap: 12 },
-  emptyText: { fontSize: 15 },
-  // Modal
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  sheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '92%' },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', padding: 20, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  modalTitle: { fontSize: 17, fontWeight: '700' },
-  modalSub: { fontSize: 12, marginTop: 2 },
-  statusRow: { flexDirection: 'row', marginBottom: 12 },
-  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 10, borderBottomWidth: 1 },
-  detailLabel: { fontSize: 12, fontWeight: '600', flex: 1 },
-  detailValue: { fontSize: 13, flex: 2, textAlign: 'right' },
-  rejectLabel: { fontSize: 13, fontWeight: '600', marginBottom: 6 },
-  rejectInput: { borderWidth: 1.5, borderRadius: 10, padding: 10, fontSize: 13, minHeight: 80 },
-  actionRow: { flexDirection: 'row', gap: 10, marginTop: 20 },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 12 },
-  actionBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
-  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13, borderRadius: 12, borderWidth: 1.5, borderColor: '#EF4444', backgroundColor: '#EF444410' },
-  deleteBtnText: { color: '#EF4444', fontWeight: '700', fontSize: 14 },
-  // Confirm-delete modal
-  confirmCard:    { margin: 24, borderRadius: 20, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 20, elevation: 14 },
-  confirmIconWrap:{ width: 72, height: 72, borderRadius: 20, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  confirmTitle:   { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
-  confirmSub:     { fontSize: 13, textAlign: 'center', lineHeight: 19, marginBottom: 24 },
-  confirmBtnRow:  { flexDirection: 'row', gap: 12, width: '100%' },
-  confirmBtn:     { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
+  tabItem: { flex: 1, alignItems: 'center', paddingVertical: spacing.md, gap: 2, position: 'relative', minHeight: 48, justifyContent: 'center' },
+  tabLabel: { fontSize: 12, lineHeight: 16 },
+  tabBadge: { position: 'absolute', top: 6, right: spacing.xs, minWidth: 18, height: 18, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  tabBadgeText: { fontSize: 12, lineHeight: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  tabUnderline: { position: 'absolute', bottom: 0, left: spacing.sm, right: spacing.sm, height: 2, borderRadius: 1 },
+  /* Search */
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: spacing.lg, marginTop: spacing.lg, marginBottom: spacing.md,
+    paddingHorizontal: spacing.md, minHeight: 48,
+    borderRadius: radii.md, borderWidth: 1.5, gap: spacing.sm,
+  },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: spacing.sm },
+  /* Table head */
+  tableHead: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  tableHeadText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6 },
+  /* Flat data rows */
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    minHeight: 64, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  iconWrap: { width: 44, height: 44, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
+  rowTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  rowSub: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  rowDate: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  /* Pills */
+  pill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  pillDot: { width: 6, height: 6, borderRadius: 3 },
+  pillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
+  /* Skeleton */
+  skeletonWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.md },
+  /* Detail modal */
+  overlay: { flex: 1, justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, maxHeight: '92%', overflow: 'hidden' },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, borderBottomWidth: 1 },
+  modalTitle: { fontSize: 16, lineHeight: 22, fontWeight: '800' },
+  modalSub: { fontSize: 13, lineHeight: 18, marginTop: 2 },
+  closeBtn: { width: 44, height: 44, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginLeft: spacing.sm },
+  statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.lg, marginBottom: spacing.xs },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: spacing.md, borderBottomWidth: 1, gap: spacing.md },
+  detailLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700', flex: 1 },
+  detailValue: { fontSize: 15, lineHeight: 22, fontWeight: '500', flex: 2, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  rejectLabel: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: spacing.xs },
+  rejectInput: { borderWidth: 2, borderRadius: radii.md, padding: spacing.md, fontSize: 15, minHeight: 80, textAlignVertical: 'top' },
+  secondaryBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    minHeight: 48, borderRadius: radii.md, borderWidth: 1.5,
+    marginTop: spacing.md,
+  },
+  secondaryBtnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  /* One-Hand Action Bar */
+  actionBar: {
+    flexDirection: 'row', gap: spacing.md,
+    padding: spacing.lg, paddingBottom: spacing.xl,
+    borderTopWidth: 1,
+  },
+  actionBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    minHeight: 56, borderRadius: radii.md,
+  },
+  actionBtnText: { fontWeight: '700', fontSize: 15 },
+  /* Confirm / feedback modals */
+  centerOverlay: { flex: 1, justifyContent: 'center', padding: spacing.xl },
+  confirmCard: { borderRadius: radii.lg, borderWidth: 1, padding: spacing.xl, alignItems: 'center' },
+  confirmIconWrap: { width: 56, height: 56, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md },
+  confirmTitle: { fontSize: 16, lineHeight: 22, fontWeight: '800', textAlign: 'center', marginBottom: spacing.sm },
+  confirmSub: { fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: spacing.xl },
+  confirmBtnRow: { flexDirection: 'row', gap: spacing.md, alignSelf: 'stretch' },
+  confirmBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 56, borderRadius: radii.md },
   confirmBtnText: { fontWeight: '700', fontSize: 15 },
-  // Feedback modal
-  feedbackCard:     { margin: 24, borderRadius: 20, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 20, elevation: 14, minWidth: 300 },
-  feedbackIconWrap: { width: 64, height: 64, borderRadius: 20, backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  feedbackTitle:    { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
-  feedbackMessage:  { fontSize: 14, textAlign: 'center', lineHeight: 20 },
 });
 
 export default ApprovalQueueScreen;

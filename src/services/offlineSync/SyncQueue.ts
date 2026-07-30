@@ -39,7 +39,34 @@ const QUEUE_KEY = '@healthdrop/sync_queue';
 
 // ── SyncQueue class ───────────────────────────────────────────────────────────
 
+type QueueChangeListener = () => void;
+
 export class SyncQueue {
+    /** Listeners invoked whenever the queue mutates (enqueue / removal). */
+    private changeListeners: QueueChangeListener[] = [];
+
+    /**
+     * Subscribe to queue mutations. Used by OfflineSyncService to re-notify
+     * pending-count subscribers the moment an item is queued or removed.
+     * Returns an unsubscribe function.
+     */
+    onChange(listener: QueueChangeListener): () => void {
+        this.changeListeners.push(listener);
+        return () => {
+            this.changeListeners = this.changeListeners.filter((l) => l !== listener);
+        };
+    }
+
+    private emitChange(): void {
+        this.changeListeners.forEach((listener) => {
+            try {
+                listener();
+            } catch (err) {
+                console.warn('[SyncQueue] change listener failed:', err);
+            }
+        });
+    }
+
     /** Read the entire queue from AsyncStorage */
     async getAll(): Promise<QueueItem[]> {
         const raw = await AsyncStorage.getItem(QUEUE_KEY);
@@ -70,13 +97,8 @@ export class SyncQueue {
         };
 
         const items = await this.getAll();
-
-        // Deduplication guard: never queue the same localId twice
-        if (items.some((i) => i.localId === localId)) {
-            return localId;
-        }
-
         await this.saveAll([...items, item as QueueItem]);
+        this.emitChange();
         return localId;
     }
 
@@ -96,6 +118,7 @@ export class SyncQueue {
     async removeSynced(): Promise<void> {
         const items = await this.getAll();
         await this.saveAll(items.filter((i) => i.status !== 'synced'));
+        this.emitChange();
     }
 
     /** All items waiting to be synced (pending + failed with retries remaining) */

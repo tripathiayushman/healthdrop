@@ -1,21 +1,24 @@
 // =====================================================
-// CAMPAIGN FORM - Modern UI with Vector Icons
+// CAMPAIGN FORM — Prakash restyle
+// Flat header, labels-above 52dp inputs, 44dp selection
+// chips, inline errors + scroll-to-first-error,
+// One-Hand Action Bar. Zero hex literals.
 // =====================================================
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
-  Alert,
+  Pressable,
   TextInput,
+  LayoutChangeEvent,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, Theme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { StateDropdown, SubmissionModal } from '../shared';
+import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 
@@ -24,16 +27,61 @@ interface CampaignFormProps {
   onCancel: () => void;
 }
 
+// ── Local building blocks ────────────────────────────────────────────────────
+
+const SelectChip: React.FC<{
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  colors: Theme;
+}> = ({ label, selected, onPress, colors }) => (
+  <Pressable
+    onPress={onPress}
+    accessibilityRole="button"
+    accessibilityState={{ selected }}
+    style={({ pressed }) => [
+      styles.chip,
+      {
+        backgroundColor: selected ? colors.primary : pressed ? colors.cardHover : colors.card,
+        borderColor: selected ? colors.primary : colors.border,
+      },
+    ]}
+  >
+    {selected && <Ionicons name="checkmark" size={16} color={colors.onPrimary} />}
+    <Text style={[styles.chipLabel, { color: selected ? colors.onPrimary : colors.text }]}>
+      {label}
+    </Text>
+  </Pressable>
+);
+
+const FieldError: React.FC<{ message?: string; colors: Theme }> = ({ message, colors }) => {
+  if (!message) return null;
+  return (
+    <View style={styles.errorRow} accessibilityLiveRegion="polite">
+      <Ionicons name="alert-circle" size={16} color={colors.danger} />
+      <Text style={[styles.errorText, { color: colors.danger }]}>{message}</Text>
+    </View>
+  );
+};
+
+const FIELD_ORDER = ['campaign_name', 'location', 'end_date'];
+
 export const CampaignForm: React.FC<CampaignFormProps> = ({
   onSuccess,
   onCancel,
 }) => {
-  const { colors } = useTheme();
+  const { colors, isDark, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [modalVisible, setModalVisible] = useState(false);
   const [modalType, setModalType] = useState<'success' | 'error'>('success');
   const [modalMessage, setModalMessage] = useState('');
+
+  const scrollRef = useRef<ScrollView>(null);
+  const sectionYRef = useRef<Record<string, number>>({});
+  const fieldYRef = useRef<Record<string, number>>({});
+  const fieldSectionRef = useRef<Record<string, string>>({});
 
   const today = new Date();
   const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -57,61 +105,80 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
   });
 
   const campaignTypeOptions = [
-    { label: 'Vaccination', value: 'vaccination', color: '#10B981', icon: 'syringe' },
-    { label: 'Health Checkup', value: 'health_checkup', color: '#3B82F6', icon: 'stethoscope' },
-    { label: 'Awareness', value: 'awareness', color: '#8B5CF6', icon: 'bullhorn' },
-    { label: 'Medicine Distribution', value: 'medicine_distribution', color: '#F59E0B', icon: 'pill' },
-    { label: 'Medical Camp', value: 'medical_camp', color: '#EC4899', icon: 'hospital-box' },
-    { label: 'Eye Camp', value: 'eye_camp', color: '#06B6D4', icon: 'eye' },
-    { label: 'Dental Camp', value: 'dental_camp', color: '#14B8A6', icon: 'tooth' },
-    { label: 'Mental Health', value: 'mental_health', color: '#6366F1', icon: 'brain' },
-    { label: 'Maternal Health', value: 'maternal_health', color: '#F472B6', icon: 'human-pregnant' },
-    { label: 'Child Health', value: 'child_health', color: '#84CC16', icon: 'baby-face' },
-    { label: 'Water & Sanitation', value: 'water_sanitation', color: '#0EA5E9', icon: 'water' },
-    { label: 'Nutrition', value: 'nutrition', color: '#EF4444', icon: 'food-apple' },
-    { label: 'Other', value: 'other', color: '#6B7280', icon: 'clipboard-list' },
+    { label: 'Vaccination', value: 'vaccination' },
+    { label: 'Health Checkup', value: 'health_checkup' },
+    { label: 'Awareness', value: 'awareness' },
+    { label: 'Medicine Distribution', value: 'medicine_distribution' },
+    { label: 'Medical Camp', value: 'medical_camp' },
+    { label: 'Eye Camp', value: 'eye_camp' },
+    { label: 'Dental Camp', value: 'dental_camp' },
+    { label: 'Mental Health', value: 'mental_health' },
+    { label: 'Maternal Health', value: 'maternal_health' },
+    { label: 'Child Health', value: 'child_health' },
+    { label: 'Water & Sanitation', value: 'water_sanitation' },
+    { label: 'Nutrition', value: 'nutrition' },
+    { label: 'Other', value: 'other' },
   ];
 
   const targetAudienceOptions = [
-    { label: 'All Public', value: 'all', icon: 'people' },
-    { label: 'Children (0-5)', value: 'children_0_5', icon: 'happy' },
-    { label: 'Children (6-14)', value: 'children_6_14', icon: 'school' },
-    { label: 'Adolescents', value: 'adolescents', icon: 'person' },
-    { label: 'Adults', value: 'adults', icon: 'people' },
-    { label: 'Elderly', value: 'elderly', icon: 'accessibility' },
-    { label: 'Pregnant Women', value: 'pregnant_women', icon: 'body' },
-    { label: 'Lactating Mothers', value: 'lactating_mothers', icon: 'heart' },
-    { label: 'Women', value: 'women', icon: 'female' },
-    { label: 'Men', value: 'men', icon: 'male' },
-    { label: 'Other', value: 'other', icon: 'clipboard' },
+    { label: 'All Public', value: 'all' },
+    { label: 'Children (0-5)', value: 'children_0_5' },
+    { label: 'Children (6-14)', value: 'children_6_14' },
+    { label: 'Adolescents', value: 'adolescents' },
+    { label: 'Adults', value: 'adults' },
+    { label: 'Elderly', value: 'elderly' },
+    { label: 'Pregnant Women', value: 'pregnant_women' },
+    { label: 'Lactating Mothers', value: 'lactating_mothers' },
+    { label: 'Women', value: 'women' },
+    { label: 'Men', value: 'men' },
+    { label: 'Other', value: 'other' },
   ];
 
-  const validateForm = (): boolean => {
-    if (!formData.campaign_name.trim()) {
-      Alert.alert('Required', 'Please enter campaign name');
-      return false;
-    }
-    if (!formData.location_name.trim()) {
-      Alert.alert('Required', 'Please enter location');
-      return false;
-    }
-    if (!formData.district.trim()) {
-      Alert.alert('Required', 'Please enter district');
-      return false;
-    }
-    if (!formData.state) {
-      Alert.alert('Required', 'Please select a state');
-      return false;
+  // ── Layout tracking for scroll-to-first-error ─────────────────────────────
+  const onSectionLayout = (section: string) => (e: LayoutChangeEvent) => {
+    sectionYRef.current[section] = e.nativeEvent.layout.y;
+  };
+  const onFieldLayout = (section: string, field: string) => (e: LayoutChangeEvent) => {
+    fieldYRef.current[field] = e.nativeEvent.layout.y;
+    fieldSectionRef.current[field] = section;
+  };
+  const scrollToFirstError = (errs: Record<string, string>) => {
+    const first = FIELD_ORDER.find((f) => errs[f]);
+    if (!first) return;
+    const section = fieldSectionRef.current[first];
+    const y =
+      (section ? sectionYRef.current[section] ?? 0 : 0) + (fieldYRef.current[first] ?? 0);
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: !reduceMotion });
+  };
+
+  const clearError = (field: string) => {
+    setErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const validateForm = (): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    if (!formData.campaign_name.trim()) errs.campaign_name = 'Enter a campaign name';
+    if (!formData.location_name.trim() || !formData.district.trim() || !formData.state) {
+      errs.location = 'Enter location, district and state';
     }
     if (formData.end_date < formData.start_date) {
-      Alert.alert('Invalid', 'End date cannot be before start date');
-      return false;
+      errs.end_date = 'End date cannot be before start date';
     }
-    return true;
+    return errs;
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    const errs = validateForm();
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      scrollToFirstError(errs);
+      return;
+    }
 
     setLoading(true);
     try {
@@ -156,7 +223,7 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
       if (!isOnline) {
         await syncQueue.enqueue('campaign', payload);
         setModalType('success');
-        setModalMessage('No internet connection — your campaign has been saved offline and will sync automatically when connectivity is restored.');
+        setModalMessage('Saved on phone — will sync. Your campaign will upload automatically when you are back online.');
         setModalVisible(true);
         return;
       }
@@ -188,157 +255,112 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
   const getInputStyle = (fieldName: string) => [
     styles.input,
     {
-      backgroundColor: colors.card,
-      borderColor: focusedField === fieldName ? colors.primary : colors.border,
+      backgroundColor: colors.inputBackground,
       color: colors.text,
+      borderColor: errors[fieldName]
+        ? colors.inputErrorBorder
+        : focusedField === fieldName
+          ? colors.inputFocusBorder
+          : colors.inputBorder,
+      borderWidth: errors[fieldName] || focusedField === fieldName ? 2 : 1.5,
     },
   ];
-
-  const getCampaignColor = () => {
-    const campaign = campaignTypeOptions.find(c => c.value === formData.campaign_type);
-    return campaign?.color || colors.primary;
-  };
-
-  const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
-    const cleaned = hex.replace('#', '');
-    if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) {
-      return null;
-    }
-    return {
-      r: parseInt(cleaned.slice(0, 2), 16),
-      g: parseInt(cleaned.slice(2, 4), 16),
-      b: parseInt(cleaned.slice(4, 6), 16),
-    };
-  };
-
-  const getLuminance = (hex: string): number => {
-    const rgb = hexToRgb(hex);
-    if (!rgb) return 0;
-    const srgb = [rgb.r, rgb.g, rgb.b].map(v => {
-      const x = v / 255;
-      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-    });
-    return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
-  };
-
-  const getContrastRatio = (hexA: string, hexB: string): number => {
-    const l1 = getLuminance(hexA);
-    const l2 = getLuminance(hexB);
-    const lighter = Math.max(l1, l2);
-    const darker = Math.min(l1, l2);
-    return (lighter + 0.05) / (darker + 0.05);
-  };
-
-  const getReadableTextColor = (bgHex: string): string => {
-    const whiteContrast = getContrastRatio(bgHex, '#FFFFFF');
-    // WCAG AA threshold for large text
-    return whiteContrast >= 3 ? '#FFFFFF' : '#111111';
-  };
-
-  const submitBgColor = getCampaignColor();
-  const submitTextColor = getReadableTextColor(submitBgColor);
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-IN', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
-  };
 
   const getDuration = () => {
     const start = new Date(formData.start_date);
     const end = new Date(formData.end_date);
     const diffTime = Math.abs(end.getTime() - start.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
+    return isNaN(diffDays) ? 0 : diffDays;
   };
+
+  const headerText = isDark ? colors.text : colors.textInverse;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: getCampaignColor() }]}>
-        <TouchableOpacity onPress={onCancel} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
-          <Text style={styles.backText}>Back</Text>
-        </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <Ionicons name="megaphone" size={28} color="#FFF" />
-          <Text style={styles.headerTitle}>Create Health Campaign</Text>
-        </View>
-        <Text style={styles.headerSubtitle}>Organize health initiatives for your community</Text>
+      {/* Header — flat band */}
+      <View
+        style={[
+          styles.header,
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: isDark ? 1 : 0,
+            borderBottomColor: colors.border,
+          },
+        ]}
+      >
+        <Pressable
+          onPress={onCancel}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={headerText} />
+          <Text style={[styles.backText, { color: headerText }]}>Back</Text>
+        </Pressable>
+        <Text style={[styles.headerTitle, { color: headerText }]}>Create Health Campaign</Text>
+        <Text style={[styles.headerSubtitle, { color: headerText }]}>
+          Organize health initiatives for your community
+        </Text>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Campaign Details */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="clipboard" size={20} color={getCampaignColor()} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Campaign Details</Text>
+        <View style={styles.section} onLayout={onSectionLayout('details')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Campaign Details</Text>
+
+          <View onLayout={onFieldLayout('details', 'campaign_name')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Campaign Name *</Text>
+            <TextInput
+              style={getInputStyle('campaign_name')}
+              placeholder="e.g., Polio Vaccination Drive"
+              placeholderTextColor={colors.inputPlaceholderColor}
+              value={formData.campaign_name}
+              onChangeText={(text) => { setFormData({ ...formData, campaign_name: text }); clearError('campaign_name'); }}
+              onFocus={() => setFocusedField('campaign_name')}
+              onBlur={() => setFocusedField(null)}
+            />
+            <FieldError message={errors.campaign_name} colors={colors} />
           </View>
 
-          <Text style={[styles.label, { color: colors.text }]}>Campaign Name *</Text>
-          <TextInput
-            style={getInputStyle('campaign_name')}
-            placeholder="e.g., Polio Vaccination Drive"
-            placeholderTextColor={colors.textSecondary}
-            value={formData.campaign_name}
-            onChangeText={(text) => setFormData({ ...formData, campaign_name: text })}
-            onFocus={() => setFocusedField('campaign_name')}
-            onBlur={() => setFocusedField(null)}
-          />
-
-          {/* Campaign Type */}
-          <Text style={[styles.label, { color: colors.text }]}>Campaign Type *</Text>
-          <View style={styles.chipGrid}>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Campaign Type *</Text>
+          <View style={styles.chipWrap}>
             {campaignTypeOptions.map((type) => (
-              <TouchableOpacity
+              <SelectChip
                 key={type.value}
-                style={[
-                  styles.typeChip,
-                  {
-                    backgroundColor: formData.campaign_type === type.value ? type.color + '20' : colors.card,
-                    borderColor: formData.campaign_type === type.value ? type.color : colors.border,
-                  }
-                ]}
+                label={type.label}
+                selected={formData.campaign_type === type.value}
                 onPress={() => setFormData({ ...formData, campaign_type: type.value })}
-              >
-                <MaterialCommunityIcons 
-                  name={type.icon as any} 
-                  size={16} 
-                  color={formData.campaign_type === type.value ? type.color : colors.textSecondary} 
-                />
-                <Text style={[
-                  styles.chipText,
-                  { color: formData.campaign_type === type.value ? type.color : colors.text }
-                ]}>
-                  {type.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+              />
             ))}
           </View>
 
-          {/* Custom Campaign Type Input */}
           {formData.campaign_type === 'other' && (
-            <View style={styles.customInputContainer}>
+            <>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Campaign Type</Text>
               <TextInput
                 style={getInputStyle('custom_campaign_type')}
                 placeholder="Specify campaign type..."
-                placeholderTextColor={colors.textSecondary}
+                placeholderTextColor={colors.inputPlaceholderColor}
                 value={formData.custom_campaign_type}
                 onChangeText={(text) => setFormData({ ...formData, custom_campaign_type: text })}
                 onFocus={() => setFocusedField('custom_campaign_type')}
                 onBlur={() => setFocusedField(null)}
               />
-            </View>
+            </>
           )}
 
-          <Text style={[styles.label, { color: colors.text }]}>Description</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Description</Text>
           <TextInput
-            style={[getInputStyle('description'), styles.textArea]}
+            style={[...getInputStyle('description'), styles.textArea]}
             placeholder="Brief description of the campaign objectives..."
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.description}
             onChangeText={(text) => setFormData({ ...formData, description: text })}
             onFocus={() => setFocusedField('description')}
@@ -350,59 +372,40 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
 
         {/* Target Audience */}
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="people" size={20} color={getCampaignColor()} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Target Audience</Text>
-          </View>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Target Audience</Text>
 
-          <View style={styles.chipGrid}>
+          <View style={styles.chipWrap}>
             {targetAudienceOptions.map((audience) => (
-              <TouchableOpacity
+              <SelectChip
                 key={audience.value}
-                style={[
-                  styles.audienceChip,
-                  {
-                    backgroundColor: formData.target_audience === audience.value ? getCampaignColor() + '20' : colors.card,
-                    borderColor: formData.target_audience === audience.value ? getCampaignColor() : colors.border,
-                  }
-                ]}
+                label={audience.label}
+                selected={formData.target_audience === audience.value}
                 onPress={() => setFormData({ ...formData, target_audience: audience.value })}
-              >
-                <Ionicons 
-                  name={audience.icon as any} 
-                  size={16} 
-                  color={formData.target_audience === audience.value ? getCampaignColor() : colors.textSecondary} 
-                />
-                <Text style={[
-                  styles.chipText,
-                  { color: formData.target_audience === audience.value ? getCampaignColor() : colors.text }
-                ]}>
-                  {audience.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+              />
             ))}
           </View>
 
-          {/* Custom Target Audience Input */}
           {formData.target_audience === 'other' && (
-            <View style={styles.customInputContainer}>
+            <>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Target Audience</Text>
               <TextInput
                 style={getInputStyle('custom_target_audience')}
                 placeholder="Specify target audience..."
-                placeholderTextColor={colors.textSecondary}
+                placeholderTextColor={colors.inputPlaceholderColor}
                 value={formData.custom_target_audience}
                 onChangeText={(text) => setFormData({ ...formData, custom_target_audience: text })}
                 onFocus={() => setFocusedField('custom_target_audience')}
                 onBlur={() => setFocusedField(null)}
               />
-            </View>
+            </>
           )}
 
-          <Text style={[styles.label, { color: colors.text }]}>Target Beneficiaries</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Target Beneficiaries</Text>
           <TextInput
             style={getInputStyle('target_beneficiaries')}
             placeholder="Expected number of beneficiaries"
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.target_beneficiaries}
             onChangeText={(text) => setFormData({ ...formData, target_beneficiaries: text.replace(/[^0-9]/g, '') })}
             onFocus={() => setFocusedField('target_beneficiaries')}
@@ -411,95 +414,91 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
           />
         </View>
 
-        {/* Location — unified: GPS + reverse geocode + district/state */}
-        <View style={styles.section}>
-          <LocationField
-            value={{
-              latitude: null,
-              longitude: null,
-              locationName: formData.location_name,
-              district: formData.district,
-              state: formData.state,
-              formattedAddress: '',
-            }}
-            onChange={(loc) =>
-              setFormData({
-                ...formData,
-                location_name: loc.locationName,
-                district: loc.district,
-                state: loc.state,
-              })
-            }
-            autoFetch={true}
-          />
+        {/* Location */}
+        <View style={styles.section} onLayout={onSectionLayout('location')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Location</Text>
+          <View onLayout={onFieldLayout('location', 'location')}>
+            <LocationField
+              value={{
+                latitude: null,
+                longitude: null,
+                locationName: formData.location_name,
+                district: formData.district,
+                state: formData.state,
+                formattedAddress: '',
+              }}
+              onChange={(loc) => {
+                setFormData({
+                  ...formData,
+                  location_name: loc.locationName,
+                  district: loc.district,
+                  state: loc.state,
+                });
+                if (loc.locationName && loc.district && loc.state) clearError('location');
+              }}
+              autoFetch={true}
+            />
+            <FieldError message={errors.location} colors={colors} />
+          </View>
         </View>
 
         {/* Campaign Duration */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="calendar" size={20} color={getCampaignColor()} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Campaign Duration</Text>
+        <View style={styles.section} onLayout={onSectionLayout('schedule')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Campaign Duration</Text>
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Start Date</Text>
+          <TextInput
+            style={getInputStyle('start_date')}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.start_date}
+            onChangeText={(text) => { setFormData({ ...formData, start_date: text }); clearError('end_date'); }}
+            onFocus={() => setFocusedField('start_date')}
+            onBlur={() => setFocusedField(null)}
+          />
+
+          <View onLayout={onFieldLayout('schedule', 'end_date')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>End Date</Text>
+            <TextInput
+              style={getInputStyle('end_date')}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.inputPlaceholderColor}
+              value={formData.end_date}
+              onChangeText={(text) => { setFormData({ ...formData, end_date: text }); clearError('end_date'); }}
+              onFocus={() => setFocusedField('end_date')}
+              onBlur={() => setFocusedField(null)}
+            />
+            <FieldError message={errors.end_date} colors={colors} />
           </View>
 
-          <View style={styles.dateRow}>
-            <View style={styles.dateField}>
-              <Text style={[styles.label, { color: colors.text }]}>Start Date</Text>
-              <TextInput
-                style={getInputStyle('start_date')}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.start_date}
-                onChangeText={(text) => setFormData({ ...formData, start_date: text })}
-                onFocus={() => setFocusedField('start_date')}
-                onBlur={() => setFocusedField(null)}
-              />
-            </View>
-
-            <View style={styles.dateField}>
-              <Text style={[styles.label, { color: colors.text }]}>End Date</Text>
-              <TextInput
-                style={getInputStyle('end_date')}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.end_date}
-                onChangeText={(text) => setFormData({ ...formData, end_date: text })}
-                onFocus={() => setFocusedField('end_date')}
-                onBlur={() => setFocusedField(null)}
-              />
-            </View>
-          </View>
-
-          <View style={[styles.durationCard, { backgroundColor: getCampaignColor() + '15', borderColor: getCampaignColor() }]}>
-            <Ionicons name="time" size={18} color={getCampaignColor()} />
-            <Text style={[styles.durationText, { color: getCampaignColor() }]}>
-              Duration: {getDuration()} day{getDuration() > 1 ? 's' : ''}
+          <View style={styles.durationRow}>
+            <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
+            <Text style={[styles.durationText, { color: colors.text }]}>
+              Duration: {getDuration()} day{getDuration() === 1 ? '' : 's'}
             </Text>
           </View>
         </View>
 
         {/* Contact Information */}
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="call" size={20} color={getCampaignColor()} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Contact Information</Text>
-          </View>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Contact Information</Text>
 
-          <Text style={[styles.label, { color: colors.text }]}>Contact Person</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Contact Person</Text>
           <TextInput
             style={getInputStyle('contact_person')}
             placeholder="Name of person in charge"
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.contact_person}
             onChangeText={(text) => setFormData({ ...formData, contact_person: text })}
             onFocus={() => setFocusedField('contact_person')}
             onBlur={() => setFocusedField(null)}
           />
 
-          <Text style={[styles.label, { color: colors.text }]}>Contact Phone</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Contact Phone</Text>
           <TextInput
             style={getInputStyle('contact_phone')}
             placeholder="Phone number"
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.contact_phone}
             onChangeText={(text) => setFormData({ ...formData, contact_phone: text.replace(/[^0-9]/g, '') })}
             onFocus={() => setFocusedField('contact_phone')}
@@ -511,15 +510,11 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
 
         {/* Additional Notes */}
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="document-text" size={20} color={getCampaignColor()} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Additional Notes</Text>
-          </View>
-
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Additional Notes</Text>
           <TextInput
-            style={[getInputStyle('notes'), styles.textArea]}
+            style={[...getInputStyle('notes'), styles.textArea]}
             placeholder="Any additional information, requirements, or instructions..."
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.notes}
             onChangeText={(text) => setFormData({ ...formData, notes: text })}
             onFocus={() => setFocusedField('notes')}
@@ -528,29 +523,36 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
             numberOfLines={4}
           />
         </View>
-
-        <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* Footer Buttons */}
-      <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.cancelBtn, { borderColor: colors.border }]}
+      {/* One-Hand Action Bar */}
+      <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+        <Pressable
           onPress={onCancel}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.cancelLink,
+            { backgroundColor: pressed ? colors.surfaceVariant : colors.surface },
+          ]}
         >
-          <Ionicons name="close" size={20} color={colors.text} />
-          <Text style={[styles.footerBtnText, { color: colors.text }]}>Cancel</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: submitBgColor }]}
+          <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+        </Pressable>
+        <Pressable
           onPress={handleSubmit}
           disabled={loading}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.submitBtn,
+            {
+              backgroundColor: pressed ? colors.primaryDark : colors.primary,
+              opacity: loading ? 0.4 : 1,
+            },
+          ]}
         >
-          <Ionicons name="checkmark" size={20} color={submitTextColor} />
-          <Text style={[styles.footerBtnText, { color: submitTextColor }]}>
-            {loading ? 'Creating...' : 'Create Campaign'}
+          <Text style={[styles.submitText, { color: colors.onPrimary }]}>
+            {loading ? 'Creating…' : 'Create Campaign'}
           </Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       {/* Submission Modal */}
@@ -568,33 +570,42 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
-  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
-  backText: { color: '#FFF', fontSize: 16 },
-  headerContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle: { color: '#FFF', fontSize: 24, fontWeight: '700' },
-  headerSubtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 4 },
-  content: { flex: 1, paddingHorizontal: 20 },
+  header: { paddingTop: 50, paddingBottom: 16, paddingHorizontal: 16 },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: 12 },
+  backText: { fontSize: 16, fontWeight: '500' },
+  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerSubtitle: { fontSize: 15, lineHeight: 22, fontWeight: '500', marginTop: 2 },
+  content: { flex: 1 },
+  contentContainer: { paddingHorizontal: 16, paddingBottom: 24 },
   section: { marginTop: 24 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '700' },
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 12 },
-  input: { borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 15 },
-  textArea: { minHeight: 80, textAlignVertical: 'top' },
-  customInputContainer: { marginTop: 12 },
-  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  typeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
-  audienceChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
-  chipText: { fontSize: 13, fontWeight: '500' },
-  dateRow: { flexDirection: 'row', gap: 12 },
-  dateField: { flex: 1 },
-  durationCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, marginTop: 12 },
-  durationText: { fontSize: 14, fontWeight: '600' },
-  footer: { flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1 },
-  footerBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 12 },
-  cancelBtn: { borderWidth: 1.5 },
-  submitBtn: {},
-  footerBtnText: { fontSize: 16, fontWeight: '600' },
+  sectionLabel: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6,
+    textTransform: 'uppercase', marginBottom: 12,
+  },
+  label: {
+    fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.5,
+    textTransform: 'uppercase', marginBottom: 6, marginTop: 16,
+  },
+  input: { minHeight: 52, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15 },
+  textArea: { minHeight: 100, textAlignVertical: 'top' },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: 44, borderRadius: 999, borderWidth: 1.5, paddingHorizontal: 16, paddingVertical: 8,
+  },
+  chipLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
+  durationRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 24 },
+  durationText: { fontSize: 13, lineHeight: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  actionBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1,
+  },
+  cancelLink: { minWidth: 88, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  cancelText: { fontSize: 16, fontWeight: '700' },
+  submitBtn: { flex: 1, minHeight: 56, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  submitText: { fontSize: 16, fontWeight: '700' },
 });
 
 export default CampaignForm;

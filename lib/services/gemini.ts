@@ -1,8 +1,9 @@
 // =====================================================
-// OPENROUTER AI SERVICE - Direct API implementation
+// OPENROUTER AI SERVICE - Proxy-first (Supabase Edge
+// Function 'openrouter-proxy'), direct API fallback
 // =====================================================
 
-import { saveAIInsight } from './mongoService';
+import { supabase } from '../supabase';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
@@ -108,7 +109,68 @@ function extractResponseText(data: OpenRouterResponse): string {
     return '';
 }
 
-async function callOpenRouter(
+/**
+ * Tolerant extraction of the reply text from a proxy response payload.
+ * Accepts { content: string }, a raw OpenRouter passthrough shape, or a
+ * plain/JSON-encoded string body.
+ */
+function extractProxyContent(data: unknown): string {
+    if (typeof data === 'string') {
+        const raw = data.trim();
+        if (!raw) return '';
+        try {
+            return extractProxyContent(JSON.parse(raw));
+        } catch {
+            return raw; // plain-text body — treat as the content itself
+        }
+    }
+
+    if (data && typeof data === 'object') {
+        const obj = data as { content?: unknown; error?: unknown } & OpenRouterResponse;
+
+        if (obj.error) {
+            const msg = typeof obj.error === 'string'
+                ? obj.error
+                : (obj.error as { message?: string })?.message ?? 'unknown error';
+            throw new Error(`AI proxy returned an error: ${msg}`);
+        }
+
+        if (typeof obj.content === 'string' && obj.content.trim()) {
+            return obj.content;
+        }
+
+        // Tolerate a raw OpenRouter response passed through unchanged.
+        return extractResponseText(obj);
+    }
+
+    return '';
+}
+
+/** Primary transport: Supabase Edge Function keeps the API key server-side. */
+async function callProxy(
+    messages: ORMessage[],
+    temperature: number,
+    max_tokens: number,
+): Promise<string> {
+    const { data, error } = await supabase.functions.invoke('openrouter-proxy', {
+        body: { messages, model: OPENROUTER_MODEL, temperature, max_tokens },
+    });
+
+    if (error) {
+        // FunctionsHttpError (4xx/5xx, e.g. server key not configured),
+        // relay or network errors — all fall through to the direct path.
+        throw new Error(`AI proxy request failed: ${error.message ?? String(error)}`);
+    }
+
+    const content = extractProxyContent(data);
+    if (!content) {
+        throw new Error('AI proxy returned empty content.');
+    }
+    return content;
+}
+
+/** Fallback transport: direct OpenRouter call using the client-side key. */
+async function callOpenRouterDirect(
     messages: ORMessage[],
     temperature = 0.7,
     max_tokens = 350,
@@ -156,6 +218,26 @@ async function callOpenRouter(
     return content;
 }
 
+/**
+ * Proxy-first dispatcher: try the Supabase Edge Function, fall back to the
+ * direct OpenRouter call when the proxy errors or is not configured.
+ */
+async function callOpenRouter(
+    messages: ORMessage[],
+    temperature = 0.7,
+    max_tokens = 350,
+): Promise<string> {
+    try {
+        return await callProxy(messages, temperature, max_tokens);
+    } catch (proxyError) {
+        if (!OPENROUTER_API_KEY) {
+            // No direct fallback available — surface the proxy failure.
+            throw proxyError;
+        }
+        return callOpenRouterDirect(messages, temperature, max_tokens);
+    }
+}
+
 // -- getAIInsights ------------------------------------------------------------
 export async function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
     const hasCritical = ctx.alerts.some(a => ['critical', 'high'].includes(a.urgency_level?.toLowerCase()));
@@ -194,16 +276,6 @@ export async function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
         emoji,
         accentColor,
     };
-
-    // Non-blocking secondary persistence (MongoDB). Failures must never impact primary flow.
-    void saveAIInsight({
-        district: ctx.userDistrict ?? null,
-        state: ctx.userState ?? null,
-        scope: ctx.scope,
-        type: 'ai_recommendation',
-        data: aiResponse,
-        created_at: new Date(),
-    });
 
     return aiResponse;
 }

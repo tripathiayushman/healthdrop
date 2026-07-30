@@ -1,22 +1,24 @@
 // =====================================================
-// HEALTH ALERT FORM - Send Urgent Health Alerts (Vector Icons)
+// HEALTH ALERT FORM — Send Urgent Health Alerts
+// Prakash design: flat header, labels-above 52dp inputs,
+// 44dp selection chips, inline errors + scroll-to-first-error,
+// One-Hand Action Bar. Zero hex literals.
 // =====================================================
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
-  Alert,
+  Pressable,
   TextInput,
-  Switch,
+  LayoutChangeEvent,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, getSeverityColor, Theme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { StateDropdown, SubmissionModal } from '../shared';
+import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { Profile } from '../../types';
 import { ALERT_RADIUS_KM, shouldReceiveAlert } from '../../lib/services/alertRadius';
@@ -28,64 +30,115 @@ interface AlertFormProps {
   profile?: Profile;
 }
 
+// ── Local building blocks ────────────────────────────────────────────────────
+
+const SelectChip: React.FC<{
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  colors: Theme;
+  fill?: string;
+  selectedLabelColor?: string;
+}> = ({ label, selected, onPress, colors, fill, selectedLabelColor }) => {
+  const bg = fill ?? colors.primary;
+  const labelColor = selectedLabelColor ?? colors.onPrimary;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [
+        styles.chip,
+        {
+          backgroundColor: selected ? bg : pressed ? colors.cardHover : colors.card,
+          borderColor: selected ? bg : colors.border,
+        },
+      ]}
+    >
+      {selected && <Ionicons name="checkmark" size={16} color={labelColor} />}
+      <Text style={[styles.chipLabel, { color: selected ? labelColor : colors.text }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+};
+
+const FieldError: React.FC<{ message?: string; colors: Theme }> = ({ message, colors }) => {
+  if (!message) return null;
+  return (
+    <View style={styles.errorRow} accessibilityLiveRegion="polite">
+      <Ionicons name="alert-circle" size={16} color={colors.danger} />
+      <Text style={[styles.errorText, { color: colors.danger }]}>{message}</Text>
+    </View>
+  );
+};
+
+const FIELD_ORDER = ['title', 'description', 'location'];
+
 export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profile }) => {
-  const { colors } = useTheme();
+  const { colors, isDark, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [modalVisible, setModalVisible] = useState(false);
   const [modalType, setModalType] = useState<'success' | 'error'>('success');
   const [modalMessage, setModalMessage] = useState('');
+
+  const scrollRef = useRef<ScrollView>(null);
+  const sectionYRef = useRef<Record<string, number>>({});
+  const fieldYRef = useRef<Record<string, number>>({});
+  const fieldSectionRef = useRef<Record<string, string>>({});
 
   const [formData, setFormData] = useState({
     // Alert Type
     alert_type: 'disease_outbreak',
     urgency_level: 'high',
-    
+
     // Alert Details
     title: '',
     description: '',
-    
+
     // Affected Area
     location_name: '',
     district: '',
     state: '',
     affected_population: '',
-    
+
     // Health Details
     disease_or_issue: '',
     custom_disease: '',
     symptoms_to_watch: '',
     cases_reported: '',
     deaths_reported: '',
-    
+
     // Precautions & Actions
     immediate_actions: '',
     precautionary_measures: '',
-    
+
     // Contact Info
     contact_person: '',
     contact_phone: '',
     emergency_helpline: '',
-    
+
     // Notification scope: 'officials' = district officials/clinics/ASHA workers, 'all' = all users
     notify_scope: 'officials' as 'officials' | 'all',
   });
 
   const alertTypes = [
-    { label: 'Disease Outbreak', value: 'disease_outbreak', color: '#EF4444', desc: 'Report new disease outbreak', icon: 'virus', iconFamily: 'material' as const },
-    { label: 'Water Contamination', value: 'water_contamination', color: '#3B82F6', desc: 'Unsafe water supply alert', icon: 'water', iconFamily: 'ionicons' as const },
-    { label: 'Food Poisoning', value: 'food_poisoning', color: '#F59E0B', desc: 'Mass food poisoning incident', icon: 'restaurant', iconFamily: 'ionicons' as const },
-    { label: 'Vector Alert', value: 'vector_alert', color: '#8B5CF6', desc: 'Mosquito/pest outbreak', icon: 'bug', iconFamily: 'ionicons' as const },
-    { label: 'Toxic Exposure', value: 'toxic_exposure', color: '#DC2626', desc: 'Chemical/toxic exposure', icon: 'skull', iconFamily: 'ionicons' as const },
-    { label: 'Medical Emergency', value: 'medical_emergency', color: '#EC4899', desc: 'Mass casualty/emergency', icon: 'medical', iconFamily: 'ionicons' as const },
-    { label: 'General Health Alert', value: 'general', color: '#6B7280', desc: 'Other health concerns', icon: 'warning', iconFamily: 'ionicons' as const },
+    { label: 'Disease Outbreak', value: 'disease_outbreak' },
+    { label: 'Water Contamination', value: 'water_contamination' },
+    { label: 'Food Poisoning', value: 'food_poisoning' },
+    { label: 'Vector Alert', value: 'vector_alert' },
+    { label: 'Toxic Exposure', value: 'toxic_exposure' },
+    { label: 'Medical Emergency', value: 'medical_emergency' },
+    { label: 'General Health Alert', value: 'general' },
   ];
 
   const urgencyLevels = [
-    { label: 'Critical', value: 'critical', color: '#DC2626', desc: 'Immediate action needed' },
-    { label: 'High', value: 'high', color: '#F59E0B', desc: 'Urgent attention required' },
-    { label: 'Medium', value: 'medium', color: '#3B82F6', desc: 'Important, monitor closely' },
-    { label: 'Low', value: 'low', color: '#10B981', desc: 'Advisory information' },
+    { label: 'Critical', value: 'critical', desc: 'Immediate action needed' },
+    { label: 'High', value: 'high', desc: 'Urgent attention required' },
+    { label: 'Medium', value: 'medium', desc: 'Important, monitor closely' },
+    { label: 'Low', value: 'low', desc: 'Advisory information' },
   ];
 
   const commonDiseases = [
@@ -93,38 +146,56 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     'COVID-19', 'Influenza', 'Hepatitis', 'Diarrhea', 'Gastroenteritis', 'Other',
   ];
 
+  // ── Layout tracking for scroll-to-first-error ─────────────────────────────
+  const onSectionLayout = (section: string) => (e: LayoutChangeEvent) => {
+    sectionYRef.current[section] = e.nativeEvent.layout.y;
+  };
+  const onFieldLayout = (section: string, field: string) => (e: LayoutChangeEvent) => {
+    fieldYRef.current[field] = e.nativeEvent.layout.y;
+    fieldSectionRef.current[field] = section;
+  };
+  const scrollToFirstError = (errs: Record<string, string>) => {
+    const first = FIELD_ORDER.find((f) => errs[f]);
+    if (!first) return;
+    const section = fieldSectionRef.current[first];
+    const y =
+      (section ? sectionYRef.current[section] ?? 0 : 0) + (fieldYRef.current[first] ?? 0);
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: !reduceMotion });
+  };
+
+  const clearError = (field: string) => {
+    setErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
   const getInputStyle = (fieldName: string) => [
     styles.input,
     {
-      backgroundColor: colors.card,
-      borderColor: focusedField === fieldName ? colors.primary : colors.border,
+      backgroundColor: colors.inputBackground,
       color: colors.text,
+      borderColor: errors[fieldName]
+        ? colors.inputErrorBorder
+        : focusedField === fieldName
+          ? colors.inputFocusBorder
+          : colors.inputBorder,
+      borderWidth: errors[fieldName] || focusedField === fieldName ? 2 : 1.5,
     },
   ];
 
-  const getTextAreaStyle = (fieldName: string) => [
-    styles.textArea,
-    {
-      backgroundColor: colors.card,
-      borderColor: focusedField === fieldName ? colors.primary : colors.border,
-      color: colors.text,
-    },
-  ];
+  const getTextAreaStyle = (fieldName: string) => [...getInputStyle(fieldName), styles.textArea];
 
-  const validateForm = (): boolean => {
-    if (!formData.title.trim()) {
-      Alert.alert('Required', 'Please enter an alert title');
-      return false;
-    }
-    if (!formData.description.trim()) {
-      Alert.alert('Required', 'Please provide alert description');
-      return false;
-    }
+  const validateForm = (): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    if (!formData.title.trim()) errs.title = 'Enter an alert title';
+    if (!formData.description.trim()) errs.description = 'Describe the health emergency';
     if (!formData.location_name.trim() || !formData.district.trim() || !formData.state) {
-      Alert.alert('Required', 'Please provide complete location details');
-      return false;
+      errs.location = 'Enter location, district and state';
     }
-    return true;
+    return errs;
   };
 
   // ── Push notification sender ─────────────────────────────────────────────
@@ -185,7 +256,12 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    const errs = validateForm();
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      scrollToFirstError(errs);
+      return;
+    }
 
     setLoading(true);
     try {
@@ -219,6 +295,13 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         contact_person: formData.contact_person,
         contact_phone: formData.contact_phone,
         status: 'active',
+        // health_alerts has no deaths_reported / emergency_helpline columns in the
+        // live schema — persist them in the metadata jsonb column instead of
+        // silently dropping what the worker typed.
+        metadata: {
+          deaths_reported: parseInt(formData.deaths_reported) || 0,
+          emergency_helpline: formData.emergency_helpline.trim() || null,
+        },
       };
 
       const net = await NetInfo.fetch();
@@ -229,11 +312,11 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         setModalType('success');
         if (isAshaWorker) {
           setModalMessage(
-            'No internet connection — your alert request has been saved offline and will sync automatically for admin review when connectivity is restored.'
+            'Saved on phone — will sync. Your alert request will upload automatically when you are back online, then go to Admin/Clinic review before other users see it in the app.'
           );
         } else {
           setModalMessage(
-            'No internet connection — your alert has been saved offline and will be published automatically when connectivity is restored.'
+            'Saved on phone — will sync. Your alert will be published automatically when you are back online.'
           );
         }
         setModalVisible(true);
@@ -252,18 +335,20 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         location_name: formData.location_name,
       });
 
-      // Role-aware success message
+      // Role-aware, honest success message
+      const pushSentMsg = formData.notify_scope === 'all'
+        ? `Push notifications have been sent to app users within the ${ALERT_RADIUS_KM} km zone.`
+        : `Push notifications have been sent to district officials, clinics and ASHA workers within ${ALERT_RADIUS_KM} km.`;
+      setModalType('success');
       if (isAshaWorker) {
-        setModalType('success');
+        // Honest per actual insert behavior: the row is inserted immediately and the
+        // push fan-out above has already fired; only in-app visibility for other
+        // users waits on Admin/Clinic approval (DB auto_approve trigger).
         setModalMessage(
-          'Your alert request has been submitted for review. An Admin or Clinic staff member will review and approve it before it becomes visible to others.'
+          `Your alert has been submitted. ${pushSentMsg} It will appear inside the app for other users after an Admin or Clinic staff member approves it.`
         );
       } else {
-        const scopeMsg = formData.notify_scope === 'all'
-          ? `All relevant users in the affected ${ALERT_RADIUS_KM} km zone have been notified via push notification.`
-          : `Relevant district officials, clinics, and ASHA workers within ${ALERT_RADIUS_KM} km have been notified.`;
-        setModalType('success');
-        setModalMessage(`Your health alert has been published successfully.\n\n${scopeMsg}`);
+        setModalMessage(`Your health alert has been published successfully.\n\n${pushSentMsg}`);
       }
       setModalVisible(true);
     } catch (error: any) {
@@ -285,171 +370,160 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
   const selectedAlertType = alertTypes.find(a => a.value === formData.alert_type);
   const selectedUrgency = urgencyLevels.find(u => u.value === formData.urgency_level);
+  const urgencyColorFor = (value: string) => getSeverityColor(value, colors);
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const isAsha = profile?.role === 'asha_worker';
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: selectedAlertType?.color || colors.danger }]}>
-        <TouchableOpacity onPress={onCancel} style={styles.backBtn}>
-          <View style={styles.backRow}>
-            <Ionicons name="arrow-back" size={20} color="#FFF" />
-            <Text style={styles.backText}>Cancel</Text>
-          </View>
-        </TouchableOpacity>
-        <View style={styles.headerTitleRow}>
-          <Ionicons name="alert-circle" size={28} color="#FFF" />
-          <Text style={styles.headerTitle}>Send Health Alert</Text>
-        </View>
-        <Text style={styles.headerSubtitle}>Notify authorities about health emergencies</Text>
+      {/* Header — flat band */}
+      <View
+        style={[
+          styles.header,
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: isDark ? 1 : 0,
+            borderBottomColor: colors.border,
+          },
+        ]}
+      >
+        <Pressable
+          onPress={onCancel}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={headerText} />
+          <Text style={[styles.backText, { color: headerText }]}>Back</Text>
+        </Pressable>
+        <Text style={[styles.headerTitle, { color: headerText }]}>Send Health Alert</Text>
+        <Text style={[styles.headerSubtitle, { color: headerText }]}>
+          Notify authorities about health emergencies
+        </Text>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Alert Type Selection */}
+      <ScrollView
+        ref={scrollRef}
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Alert Type */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Alert Type</Text>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Alert Type</Text>
           <Text style={[styles.sectionDesc, { color: colors.textSecondary }]}>
             What type of health emergency?
           </Text>
-          
-          <View style={styles.alertTypesGrid}>
+          <View style={styles.chipWrap}>
             {alertTypes.map((type) => (
-              <TouchableOpacity
+              <SelectChip
                 key={type.value}
-                style={[
-                  styles.alertTypeCard,
-                  {
-                    backgroundColor: formData.alert_type === type.value ? type.color + '15' : colors.card,
-                    borderColor: formData.alert_type === type.value ? type.color : colors.border,
-                  }
-                ]}
+                label={type.label}
+                selected={formData.alert_type === type.value}
                 onPress={() => setFormData({ ...formData, alert_type: type.value })}
-              >
-                {type.iconFamily === 'material' ? (
-                  <MaterialCommunityIcons name={type.icon as any} size={24} color={type.color} />
-                ) : (
-                  <Ionicons name={type.icon as any} size={24} color={type.color} />
-                )}
-                <Text style={[styles.alertTypeLabel, { color: colors.text }]}>
-                  {type.label}
-                </Text>
-                <Text style={[styles.alertTypeDesc, { color: colors.textSecondary }]} numberOfLines={1}>
-                  {type.desc}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+              />
             ))}
           </View>
         </View>
 
         {/* Urgency Level */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Urgency Level</Text>
-          <View style={styles.urgencyRow}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Urgency Level</Text>
+          <View style={styles.chipWrap}>
             {urgencyLevels.map((level) => (
-              <TouchableOpacity
+              <SelectChip
                 key={level.value}
-                style={[
-                  styles.urgencyBtn,
-                  {
-                    backgroundColor: formData.urgency_level === level.value ? level.color : colors.card,
-                    borderColor: level.color,
-                  }
-                ]}
+                label={level.label}
+                selected={formData.urgency_level === level.value}
                 onPress={() => setFormData({ ...formData, urgency_level: level.value })}
-              >
-                <View style={[styles.urgencyDot, { backgroundColor: formData.urgency_level === level.value ? '#FFF' : level.color }]} />
-                <Text style={[
-                  styles.urgencyLabel,
-                  { color: formData.urgency_level === level.value ? '#FFF' : level.color }
-                ]}>
-                  {level.label}
-                </Text>
-              </TouchableOpacity>
+                colors={colors}
+                fill={urgencyColorFor(level.value)}
+                selectedLabelColor={colors.textInverse}
+              />
             ))}
           </View>
           {selectedUrgency && (
-            <Text style={[styles.urgencyHint, { color: selectedUrgency.color }]}>
+            <Text style={[styles.hintText, { color: colors.textSecondary }]}>
               {selectedUrgency.desc}
             </Text>
           )}
         </View>
 
         {/* Alert Details */}
-        <View style={styles.section}>
-          <View style={styles.sectionTitleRow}>
-            <Ionicons name="document-text" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Alert Details</Text>
-          </View>
-          
-          <Text style={[styles.label, { color: colors.text }]}>Alert Title *</Text>
-          <TextInput
-            style={getInputStyle('title')}
-            placeholder="Brief title for the alert"
-            placeholderTextColor={colors.textSecondary}
-            value={formData.title}
-            onChangeText={(text) => setFormData({ ...formData, title: text })}
-            onFocus={() => setFocusedField('title')}
-            onBlur={() => setFocusedField(null)}
-          />
+        <View style={styles.section} onLayout={onSectionLayout('details')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Alert Details</Text>
 
-          <Text style={[styles.label, { color: colors.text }]}>Description *</Text>
-          <TextInput
-            style={getTextAreaStyle('description')}
-            placeholder="Describe the health emergency in detail..."
-            placeholderTextColor={colors.textSecondary}
-            value={formData.description}
-            onChangeText={(text) => setFormData({ ...formData, description: text })}
-            onFocus={() => setFocusedField('description')}
-            onBlur={() => setFocusedField(null)}
-            multiline
-            numberOfLines={4}
-          />
+          <View onLayout={onFieldLayout('details', 'title')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Alert Title *</Text>
+            <TextInput
+              style={getInputStyle('title')}
+              placeholder="Brief title for the alert"
+              placeholderTextColor={colors.inputPlaceholderColor}
+              value={formData.title}
+              onChangeText={(text) => { setFormData({ ...formData, title: text }); clearError('title'); }}
+              onFocus={() => setFocusedField('title')}
+              onBlur={() => setFocusedField(null)}
+            />
+            <FieldError message={errors.title} colors={colors} />
+          </View>
+
+          <View onLayout={onFieldLayout('details', 'description')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Description *</Text>
+            <TextInput
+              style={getTextAreaStyle('description')}
+              placeholder="Describe the health emergency in detail..."
+              placeholderTextColor={colors.inputPlaceholderColor}
+              value={formData.description}
+              onChangeText={(text) => { setFormData({ ...formData, description: text }); clearError('description'); }}
+              onFocus={() => setFocusedField('description')}
+              onBlur={() => setFocusedField(null)}
+              multiline
+              numberOfLines={4}
+            />
+            <FieldError message={errors.description} colors={colors} />
+          </View>
 
           {/* Quick Disease Selection */}
           {(formData.alert_type === 'disease_outbreak' || formData.alert_type === 'food_poisoning') && (
             <>
-              <Text style={[styles.label, { color: colors.text }]}>Disease / Issue</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.diseaseScroll}>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Disease / Issue</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.chipScrollContent}
+              >
                 {commonDiseases.map((disease) => (
-                  <TouchableOpacity
+                  <SelectChip
                     key={disease}
-                    style={[
-                      styles.diseaseChip,
-                      {
-                        backgroundColor: formData.disease_or_issue === disease ? colors.primary : colors.card,
-                        borderColor: formData.disease_or_issue === disease ? colors.primary : colors.border,
-                      }
-                    ]}
+                    label={disease}
+                    selected={formData.disease_or_issue === disease}
                     onPress={() => setFormData({ ...formData, disease_or_issue: disease })}
-                  >
-                    <Text style={[
-                      styles.diseaseChipText,
-                      { color: formData.disease_or_issue === disease ? '#FFF' : colors.text }
-                    ]}>
-                      {disease}
-                    </Text>
-                  </TouchableOpacity>
+                    colors={colors}
+                  />
                 ))}
               </ScrollView>
 
               {formData.disease_or_issue === 'Other' && (
-                <View style={styles.customInputContainer}>
+                <>
+                  <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Disease / Issue</Text>
                   <TextInput
                     style={getInputStyle('custom_disease')}
-                    placeholder="Specify disease/issue name"
-                    placeholderTextColor={colors.textSecondary}
+                    placeholder="Disease or issue name"
+                    placeholderTextColor={colors.inputPlaceholderColor}
                     value={formData.custom_disease}
                     onChangeText={(text) => setFormData({ ...formData, custom_disease: text })}
                     onFocus={() => setFocusedField('custom_disease')}
                     onBlur={() => setFocusedField(null)}
                   />
-                </View>
+                </>
               )}
 
-              <Text style={[styles.label, { color: colors.text }]}>Symptoms to Watch</Text>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Symptoms to Watch</Text>
               <TextInput
                 style={getInputStyle('symptoms')}
                 placeholder="e.g., fever, vomiting, diarrhea..."
-                placeholderTextColor={colors.textSecondary}
+                placeholderTextColor={colors.inputPlaceholderColor}
                 value={formData.symptoms_to_watch}
                 onChangeText={(text) => setFormData({ ...formData, symptoms_to_watch: text })}
                 onFocus={() => setFocusedField('symptoms')}
@@ -459,87 +533,80 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
           )}
         </View>
 
-        {/* Location — unified: GPS + reverse geocode + district/state */}
-        <View style={styles.section}>
-          <LocationField
-            value={{
-              latitude: null,
-              longitude: null,
-              locationName: formData.location_name,
-              district: formData.district,
-              state: formData.state,
-              formattedAddress: '',
-            }}
-            onChange={(loc) =>
-              setFormData({
-                ...formData,
-                location_name: loc.locationName,
-                district: loc.district,
-                state: loc.state,
-              })
-            }
-            autoFetch={true}
+        {/* Location & Impact */}
+        <View style={styles.section} onLayout={onSectionLayout('location')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Affected Area</Text>
+
+          <View onLayout={onFieldLayout('location', 'location')}>
+            <LocationField
+              value={{
+                latitude: null,
+                longitude: null,
+                locationName: formData.location_name,
+                district: formData.district,
+                state: formData.state,
+                formattedAddress: '',
+              }}
+              onChange={(loc) => {
+                setFormData({
+                  ...formData,
+                  location_name: loc.locationName,
+                  district: loc.district,
+                  state: loc.state,
+                });
+                if (loc.locationName && loc.district && loc.state) clearError('location');
+              }}
+              autoFetch={true}
+            />
+            <FieldError message={errors.location} colors={colors} />
+          </View>
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Population Affected</Text>
+          <TextInput
+            style={getInputStyle('population')}
+            placeholder="Approx. number"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.affected_population}
+            onChangeText={(text) => setFormData({ ...formData, affected_population: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('population')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="numeric"
           />
 
-          <View style={styles.row}>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Population Affected</Text>
-              <TextInput
-                style={getInputStyle('population')}
-                placeholder="Approx. number"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.affected_population}
-                onChangeText={(text) => setFormData({ ...formData, affected_population: text.replace(/[^0-9]/g, '') })}
-                onFocus={() => setFocusedField('population')}
-                onBlur={() => setFocusedField(null)}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Cases Reported</Text>
+          <TextInput
+            style={getInputStyle('cases')}
+            placeholder="Number of cases"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.cases_reported}
+            onChangeText={(text) => setFormData({ ...formData, cases_reported: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('cases')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="numeric"
+          />
 
-          {/* Cases Count */}
-          <View style={styles.row}>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Cases Reported</Text>
-              <TextInput
-                style={getInputStyle('cases')}
-                placeholder="Number of cases"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.cases_reported}
-                onChangeText={(text) => setFormData({ ...formData, cases_reported: text.replace(/[^0-9]/g, '') })}
-                onFocus={() => setFocusedField('cases')}
-                onBlur={() => setFocusedField(null)}
-                keyboardType="numeric"
-              />
-            </View>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Deaths (if any)</Text>
-              <TextInput
-                style={getInputStyle('deaths')}
-                placeholder="0"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.deaths_reported}
-                onChangeText={(text) => setFormData({ ...formData, deaths_reported: text.replace(/[^0-9]/g, '') })}
-                onFocus={() => setFocusedField('deaths')}
-                onBlur={() => setFocusedField(null)}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Deaths (If Any)</Text>
+          <TextInput
+            style={getInputStyle('deaths')}
+            placeholder="0"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.deaths_reported}
+            onChangeText={(text) => setFormData({ ...formData, deaths_reported: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('deaths')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="numeric"
+          />
         </View>
 
         {/* Actions & Precautions */}
         <View style={styles.section}>
-          <View style={styles.sectionTitleRow}>
-            <Ionicons name="flash" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Actions & Precautions</Text>
-          </View>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Actions & Precautions</Text>
 
-          <Text style={[styles.label, { color: colors.text }]}>Immediate Actions Recommended</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Immediate Actions Recommended</Text>
           <TextInput
             style={getTextAreaStyle('actions')}
             placeholder="What immediate steps should be taken?"
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.immediate_actions}
             onChangeText={(text) => setFormData({ ...formData, immediate_actions: text })}
             onFocus={() => setFocusedField('actions')}
@@ -548,11 +615,11 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
             numberOfLines={3}
           />
 
-          <Text style={[styles.label, { color: colors.text }]}>Precautionary Measures for Public</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Precautionary Measures for Public</Text>
           <TextInput
             style={getTextAreaStyle('precautions')}
             placeholder="What precautions should people take?"
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.precautionary_measures}
             onChangeText={(text) => setFormData({ ...formData, precautionary_measures: text })}
             onFocus={() => setFocusedField('precautions')}
@@ -564,152 +631,185 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
         {/* Contact Information */}
         <View style={styles.section}>
-          <View style={styles.sectionTitleRow}>
-            <Ionicons name="call" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Contact Information</Text>
-          </View>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Contact Information</Text>
 
-          <View style={styles.row}>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Contact Person</Text>
-              <TextInput
-                style={getInputStyle('contact_person')}
-                placeholder="Your name"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.contact_person}
-                onChangeText={(text) => setFormData({ ...formData, contact_person: text })}
-                onFocus={() => setFocusedField('contact_person')}
-                onBlur={() => setFocusedField(null)}
-              />
-            </View>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: colors.text }]}>Phone Number</Text>
-              <TextInput
-                style={getInputStyle('contact_phone')}
-                placeholder="Contact number"
-                placeholderTextColor={colors.textSecondary}
-                value={formData.contact_phone}
-                onChangeText={(text) => setFormData({ ...formData, contact_phone: text.replace(/[^0-9]/g, '') })}
-                onFocus={() => setFocusedField('contact_phone')}
-                onBlur={() => setFocusedField(null)}
-                keyboardType="phone-pad"
-                maxLength={10}
-              />
-            </View>
-          </View>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Contact Person</Text>
+          <TextInput
+            style={getInputStyle('contact_person')}
+            placeholder="Your name"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.contact_person}
+            onChangeText={(text) => setFormData({ ...formData, contact_person: text })}
+            onFocus={() => setFocusedField('contact_person')}
+            onBlur={() => setFocusedField(null)}
+          />
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Phone Number</Text>
+          <TextInput
+            style={getInputStyle('contact_phone')}
+            placeholder="Contact number"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.contact_phone}
+            onChangeText={(text) => setFormData({ ...formData, contact_phone: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('contact_phone')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="phone-pad"
+            maxLength={10}
+          />
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Emergency Helpline</Text>
+          <TextInput
+            style={getInputStyle('emergency_helpline')}
+            placeholder="e.g., 108"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.emergency_helpline}
+            onChangeText={(text) => setFormData({ ...formData, emergency_helpline: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('emergency_helpline')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="phone-pad"
+            maxLength={15}
+          />
         </View>
 
         {/* Notification Options */}
         <View style={styles.section}>
-          <View style={styles.sectionTitleRow}>
-            <Ionicons name="notifications" size={20} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Notification Options</Text>
-          </View>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Notification Options</Text>
           <Text style={[styles.sectionDesc, { color: colors.textSecondary }]}>
             Who should receive push notifications for this alert?
           </Text>
 
-          {/* Option 1 */}
-          <TouchableOpacity
-            style={[
+          {/* Option 1 — officials */}
+          <Pressable
+            onPress={() => setFormData({ ...formData, notify_scope: 'officials' })}
+            accessibilityRole="button"
+            accessibilityState={{ selected: formData.notify_scope === 'officials' }}
+            style={({ pressed }) => [
               styles.notifyCard,
               {
-                backgroundColor: formData.notify_scope === 'officials' ? colors.primary + '12' : colors.card,
+                backgroundColor: pressed ? colors.cardHover : colors.card,
                 borderColor: formData.notify_scope === 'officials' ? colors.primary : colors.border,
                 borderWidth: formData.notify_scope === 'officials' ? 2 : 1,
               },
             ]}
-            onPress={() => setFormData({ ...formData, notify_scope: 'officials' })}
-            activeOpacity={0.8}
           >
-            <View style={[styles.notifyIconWrap, { backgroundColor: '#818CF8' + '22' }]}>
-              <Ionicons name="shield-checkmark" size={24} color="#818CF8" />
+            <View style={[styles.notifyIconWrap, { backgroundColor: colors.primary + '14' }]}>
+              <Ionicons name="shield-checkmark-outline" size={24} color={colors.primary} />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.notifyTitle, { color: colors.text }]}>District Officials, Clinics & ASHA Workers</Text>
+            <View style={styles.notifyBody}>
+              <Text style={[styles.notifyTitle, { color: colors.text }]}>
+                District Officials, Clinics & ASHA Workers
+              </Text>
               <Text style={[styles.notifyDesc, { color: colors.textSecondary }]}>
                 Targeted notification to health professionals in the district
               </Text>
             </View>
-            <View style={[styles.radioOuter, { borderColor: formData.notify_scope === 'officials' ? colors.primary : colors.border }]}>
-              {formData.notify_scope === 'officials' && <View style={[styles.radioInner, { backgroundColor: colors.primary }]} />}
+            <View
+              style={[
+                styles.radioOuter,
+                { borderColor: formData.notify_scope === 'officials' ? colors.primary : colors.border },
+              ]}
+            >
+              {formData.notify_scope === 'officials' && (
+                <View style={[styles.radioInner, { backgroundColor: colors.primary }]} />
+              )}
             </View>
-          </TouchableOpacity>
+          </Pressable>
 
-          {/* Option 2 */}
-          <TouchableOpacity
-            style={[
+          {/* Option 2 — everyone */}
+          <Pressable
+            onPress={() => setFormData({ ...formData, notify_scope: 'all' })}
+            accessibilityRole="button"
+            accessibilityState={{ selected: formData.notify_scope === 'all' }}
+            style={({ pressed }) => [
               styles.notifyCard,
+              styles.notifyCardSpacing,
               {
-                backgroundColor: formData.notify_scope === 'all' ? '#EF4444' + '12' : colors.card,
-                borderColor: formData.notify_scope === 'all' ? '#EF4444' : colors.border,
+                backgroundColor: pressed ? colors.cardHover : colors.card,
+                borderColor: formData.notify_scope === 'all' ? colors.danger : colors.border,
                 borderWidth: formData.notify_scope === 'all' ? 2 : 1,
-                marginTop: 10,
               },
             ]}
-            onPress={() => setFormData({ ...formData, notify_scope: 'all' })}
-            activeOpacity={0.8}
           >
-            <View style={[styles.notifyIconWrap, { backgroundColor: '#EF4444' + '22' }]}>
-              <Ionicons name="megaphone" size={24} color="#EF4444" />
+            <View style={[styles.notifyIconWrap, { backgroundColor: colors.danger + '14' }]}>
+              <Ionicons name="megaphone-outline" size={24} color={colors.danger} />
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={styles.notifyBody}>
               <Text style={[styles.notifyTitle, { color: colors.text }]}>All App Users</Text>
               <Text style={[styles.notifyDesc, { color: colors.textSecondary }]}>
                 Broadcast to everyone on the HealthDrop platform
               </Text>
             </View>
-            <View style={[styles.radioOuter, { borderColor: formData.notify_scope === 'all' ? '#EF4444' : colors.border }]}>
-              {formData.notify_scope === 'all' && <View style={[styles.radioInner, { backgroundColor: '#EF4444' }]} />}
+            <View
+              style={[
+                styles.radioOuter,
+                { borderColor: formData.notify_scope === 'all' ? colors.danger : colors.border },
+              ]}
+            >
+              {formData.notify_scope === 'all' && (
+                <View style={[styles.radioInner, { backgroundColor: colors.danger }]} />
+              )}
             </View>
-          </TouchableOpacity>
+          </Pressable>
         </View>
 
         {/* Summary Preview */}
-        <View style={[styles.summaryCard, { backgroundColor: selectedAlertType?.color + '10', borderColor: selectedAlertType?.color }]}>
-          <View style={styles.summaryTitleRow}>
-            <Ionicons name="alert-circle" size={20} color={selectedAlertType?.color} />
-            <Text style={[styles.summaryTitle, { color: selectedAlertType?.color }]}>Alert Preview</Text>
-          </View>
+        <View
+          style={[
+            styles.summaryCard,
+            {
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              borderLeftColor: urgencyColorFor(formData.urgency_level),
+            },
+          ]}
+        >
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Alert Preview</Text>
           <Text style={[styles.summaryText, { color: colors.text }]}>
             Type: {selectedAlertType?.label || '-'}{'\n'}
             Urgency: {selectedUrgency?.label || '-'}{'\n'}
             Title: {formData.title || '-'}{'\n'}
             Location: {formData.location_name}, {formData.district}, {formData.state}
             {formData.cases_reported ? `\nCases: ${formData.cases_reported}` : ''}
+            {formData.deaths_reported ? `\nDeaths: ${formData.deaths_reported}` : ''}
           </Text>
         </View>
-
-        <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* Footer Buttons */}
-      <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.cancelBtn, { borderColor: colors.border }]}
+      {/* One-Hand Action Bar */}
+      <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+        <Pressable
           onPress={onCancel}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.cancelLink,
+            { backgroundColor: pressed ? colors.surfaceVariant : colors.surface },
+          ]}
         >
-          <Text style={[styles.footerBtnText, { color: colors.text }]}>Cancel</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.submitBtn, { backgroundColor: selectedAlertType?.color || colors.danger }]}
+          <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+        </Pressable>
+        <Pressable
           onPress={handleSubmit}
           disabled={loading}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.submitBtn,
+            {
+              backgroundColor: pressed ? colors.primaryDark : colors.primary,
+              opacity: loading ? 0.4 : 1,
+            },
+          ]}
         >
-          <View style={styles.submitBtnContent}>
-            <Ionicons name="alert-circle" size={18} color="#FFF" />
-            <Text style={[styles.footerBtnText, { color: '#FFF' }]}>
-              {loading ? 'Sending...' : 'Send Alert'}
-            </Text>
-          </View>
-        </TouchableOpacity>
+          <Text style={[styles.submitText, { color: colors.onPrimary }]}>
+            {loading ? 'Sending…' : 'Send Alert'}
+          </Text>
+        </Pressable>
       </View>
 
       {/* Submission Modal */}
       <SubmissionModal
         visible={modalVisible}
         type={modalType}
-        title={modalType === 'success' ? 'Alert Sent!' : 'Alert Failed'}
+        title={modalType === 'success' ? (isAsha ? 'Alert Submitted' : 'Alert Sent') : 'Alert Failed'}
         message={modalMessage}
         onClose={handleModalClose}
         onRetry={modalType === 'error' ? handleSubmit : undefined}
@@ -720,56 +820,59 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
-  backBtn: { marginBottom: 10 },
-  backRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  backText: { color: '#FFF', fontSize: 16 },
-  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle: { color: '#FFF', fontSize: 24, fontWeight: '700' },
-  headerSubtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 4 },
-  content: { flex: 1, paddingHorizontal: 20 },
+  // Header — flat band, no radius, no gradient
+  header: { paddingTop: 50, paddingBottom: 16, paddingHorizontal: 16 },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: 12 },
+  backText: { fontSize: 16, fontWeight: '500' },
+  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerSubtitle: { fontSize: 15, lineHeight: 22, fontWeight: '500', marginTop: 2 },
+  content: { flex: 1 },
+  contentContainer: { paddingHorizontal: 16, paddingBottom: 24 },
   section: { marginTop: 24 },
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  sectionTitle: { fontSize: 18, fontWeight: '700' },
-  sectionDesc: { fontSize: 13, marginBottom: 12 },
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 6, marginTop: 12 },
-  input: { borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 15 },
-  textArea: { borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 15, minHeight: 100, textAlignVertical: 'top' },
-  alertTypesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  alertTypeCard: { width: '47%', padding: 12, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', gap: 4 },
-  alertTypeLabel: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
-  alertTypeDesc: { fontSize: 10, textAlign: 'center' },
-  urgencyRow: { flexDirection: 'row', gap: 8 },
-  urgencyBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 2, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
-  urgencyDot: { width: 10, height: 10, borderRadius: 5 },
-  urgencyLabel: { fontSize: 12, fontWeight: '600' },
-  urgencyHint: { fontSize: 12, textAlign: 'center', marginTop: 8, fontStyle: 'italic' },
-  row: { flexDirection: 'row', gap: 12 },
-  halfField: { flex: 1 },
-  diseaseScroll: { maxHeight: 45 },
-  diseaseChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, marginRight: 8 },
-  diseaseChipText: { fontSize: 13 },
-  customInputContainer: { marginTop: 12 },
-  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderRadius: 12, borderWidth: 1, marginTop: 10 },
-  switchLabel: { fontSize: 15, fontWeight: '600' },
-  switchDesc: { fontSize: 12, marginTop: 2 },
-  summaryCard: { padding: 16, borderRadius: 12, borderWidth: 1, marginTop: 24 },
-  summaryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  summaryTitle: { fontSize: 16, fontWeight: '700' },
-  summaryText: { fontSize: 14, lineHeight: 22 },
-  footer: { flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1 },
-  footerBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  cancelBtn: { borderWidth: 1.5 },
-  submitBtn: {},
-  submitBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  footerBtnText: { fontSize: 16, fontWeight: '600' },
+  sectionLabel: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6,
+    textTransform: 'uppercase', marginBottom: 12,
+  },
+  sectionDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: 12, marginTop: -4 },
+  label: {
+    fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.5,
+    textTransform: 'uppercase', marginBottom: 6, marginTop: 16,
+  },
+  input: { minHeight: 52, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15 },
+  textArea: { minHeight: 100, textAlignVertical: 'top' },
+  // Selection chips — 44dp, pill, solid fill + checkmark when selected
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chipScrollContent: { gap: 8, paddingVertical: 4 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: 44, borderRadius: 999, borderWidth: 1.5, paddingHorizontal: 16, paddingVertical: 8,
+  },
+  chipLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  hintText: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 8 },
+  // Inline field errors
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
   // Notification radio cards
-  notifyCard: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, gap: 12 },
-  notifyIconWrap: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  notifyTitle: { fontSize: 14, fontWeight: '700', marginBottom: 3 },
-  notifyDesc: { fontSize: 12 },
-  radioOuter: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  radioInner: { width: 12, height: 12, borderRadius: 6 },
+  notifyCard: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, gap: 12 },
+  notifyCardSpacing: { marginTop: 12 },
+  notifyIconWrap: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  notifyBody: { flex: 1 },
+  notifyTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', marginBottom: 2 },
+  notifyDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  radioOuter: { width: 22, height: 22, borderRadius: 999, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  radioInner: { width: 12, height: 12, borderRadius: 999 },
+  // Summary preview — card with 3px severity left edge
+  summaryCard: { padding: 16, borderRadius: 12, borderWidth: 1, borderLeftWidth: 3, marginTop: 24 },
+  summaryText: { fontSize: 15, lineHeight: 22, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  // One-Hand Action Bar
+  actionBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1,
+  },
+  cancelLink: { minWidth: 88, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  cancelText: { fontSize: 16, fontWeight: '700' },
+  submitBtn: { flex: 1, minHeight: 56, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  submitText: { fontSize: 16, fontWeight: '700' },
 });
 
 export default AlertForm;

@@ -1,21 +1,22 @@
 // =====================================================
-// USER MANAGEMENT SCREEN
-// Extracted from AdminManagementScreen — Users tab only
-// Header color matches role dashboard gradient / accent
+// USER MANAGEMENT SCREEN ("Prakash" design)
+// Users admin table — flat headerBg band + Role Ribbon,
+// flat data rows with hairline dividers, 4-state data
+// region, One-Hand Action Bar on the detail modal.
+// Delete semantics: soft-delete only (is_active=false),
+// surfaced as "Deactivate".
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
-  ScrollView, Platform
+  TextInput, Modal, Pressable, RefreshControl, ScrollView,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
-import { ROLE_GRADIENTS, ROLE_ACCENT } from '../dashboards/DashboardShared';
+import { ROLE_ACCENT, SkeletonBlock, ErrorCard, EmptyState } from '../dashboards/DashboardShared';
 
 interface Props { profile: Profile; onBack: () => void }
 
@@ -27,13 +28,9 @@ interface User {
 
 const ROLES = ['super_admin','health_admin','district_officer','clinic','asha_worker','volunteer'];
 
-const ROLE_COLOR: Record<string,string> = {
-  super_admin: '#42A5F5', health_admin: '#26A69A', district_officer: '#818CF8',
-  clinic: '#A78BFA', asha_worker: '#FB923C', volunteer: '#4ADE80',
-};
-const ROLE_ICON: Record<string,string> = {
-  super_admin: 'shield-checkmark', health_admin: 'medkit', district_officer: 'business',
-  clinic: 'medical', asha_worker: 'heart', volunteer: 'hand-left',
+const ROLE_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
+  super_admin: 'shield-checkmark-outline', health_admin: 'medkit-outline', district_officer: 'business-outline',
+  clinic: 'medical-outline', asha_worker: 'heart-outline', volunteer: 'hand-left-outline',
 };
 const ROLE_DISPLAY: Record<string,string> = {
   super_admin: 'Super Admin', health_admin: 'Health Admin',
@@ -41,23 +38,36 @@ const ROLE_DISPLAY: Record<string,string> = {
   asha_worker: 'ASHA Worker', volunteer: 'Volunteer',
 };
 
+interface ConfirmAction {
+  title: string;
+  message: string;
+  type: 'danger' | 'warning';
+  /** Notice-style dialog: single OK button, no destructive confirm */
+  notice?: boolean;
+  onConfirm: () => Promise<void>;
+}
+
 export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
-  const { colors, isDark } = useTheme();
-  const accent   = ROLE_ACCENT[profile.role] ?? '#42A5F5';
-  const gradient = ROLE_GRADIENTS[profile.role] ?? ['#0F172A','#1E3A5F','#1976D2'];
+  const { colors, isDark, reduceMotion } = useTheme();
+  const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
 
   const [users, setUsers]           = useState<User[]>([]);
   const [search, setSearch]         = useState('');
   const [loading, setLoading]       = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showModal, setShowModal]   = useState(false);
   const [roleFilter, setRoleFilter] = useState<string>('all');
 
   const [confirmModal, setConfirmModal] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{
-    title: string; message: string; type: 'danger'|'warning'; onConfirm: () => Promise<void>;
-  } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  const showNotice = (title: string, message: string, type: 'danger' | 'warning' = 'warning') => {
+    setConfirmAction({ title, message, type, notice: true, onConfirm: async () => setConfirmModal(false) });
+    setConfirmModal(true);
+  };
 
   const load = async () => {
     try {
@@ -65,8 +75,10 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
         .from('profiles').select('*').order('created_at', { ascending: false });
       if (error) throw error;
       setUsers(data ?? []);
-    } catch (e: any) { Alert.alert('Error', e.message); }
-    finally { setLoading(false); setRefreshing(false); }
+      setFetchError(null);
+    } catch (e: any) {
+      setFetchError("Couldn't load users — check connection");
+    } finally { setLoading(false); setRefreshing(false); }
   };
 
   useEffect(() => { load(); }, []);
@@ -74,16 +86,16 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
   // ── Actions ──────────────────────────────────────────────────────────────
   const changeRole = (userId: string, newRole: string) => {
     if (profile.role !== 'super_admin') {
-      Alert.alert('Permission Denied', 'Only Super Administrators can change roles.');
+      showNotice('Permission Denied', 'Only Super Administrators can change roles.');
       return;
     }
     if (userId === profile.id && newRole !== 'super_admin') {
-      Alert.alert('Warning', 'Cannot change your own role away from super_admin.');
+      showNotice('Not Allowed', 'Cannot change your own role away from super_admin.');
       return;
     }
     setConfirmAction({
       title: 'Change Role',
-      message: `Change role to ${newRole}?`,
+      message: `Change role to ${ROLE_DISPLAY[newRole] ?? newRole}?`,
       type: 'warning',
       onConfirm: async () => {
         const { error } = await supabase.from('profiles')
@@ -98,12 +110,18 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
     setConfirmModal(true);
   };
 
+  // Single soft-delete path: is_active=false, always reversible.
   const toggleStatus = (u: User) => {
-    if (u.id === profile.id) { Alert.alert('Warning', 'Cannot deactivate your own account.'); return; }
+    if (u.id === profile.id) {
+      showNotice('Not Allowed', 'Cannot deactivate your own account.');
+      return;
+    }
     const next = !u.is_active;
     setConfirmAction({
       title: next ? 'Activate User' : 'Deactivate User',
-      message: `${next ? 'Activate' : 'Deactivate'} ${u.full_name}?`,
+      message: next
+        ? `Activate ${u.full_name}? They will regain access to the system.`
+        : `Deactivate ${u.full_name}? The account will be marked inactive and can be reactivated later.`,
       type: next ? 'warning' : 'danger',
       onConfirm: async () => {
         const { error } = await supabase.from('profiles')
@@ -118,23 +136,16 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
     setConfirmModal(true);
   };
 
-  const deleteUser = (u: User) => {
-    if (u.id === profile.id) { Alert.alert('Warning', 'Cannot delete your own account.'); return; }
-    setConfirmAction({
-      title: 'Soft Delete User',
-      message: `Soft-delete ${u.full_name}? The account will be marked inactive and can be reactivated later.`,
-      type: 'danger',
-      onConfirm: async () => {
-        const { error } = await supabase.from('profiles')
-          .update({ is_active: false, updated_at: new Date().toISOString() })
-          .eq('id', u.id);
-        if (error) throw error;
-        setConfirmModal(false);
-        setShowModal(false);
-        load();
-      },
-    });
-    setConfirmModal(true);
+  const runConfirm = async () => {
+    if (!confirmAction) return;
+    setConfirmBusy(true);
+    try {
+      await confirmAction.onConfirm();
+    } catch (e: any) {
+      showNotice('Error', e?.message ?? 'Action failed — check connection', 'danger');
+    } finally {
+      setConfirmBusy(false);
+    }
   };
 
   // ── Filtered list ─────────────────────────────────────────────────────────
@@ -148,89 +159,137 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
     return matchesSearch && matchesRole;
   });
 
-  // ── UserCard ──────────────────────────────────────────────────────────────
+  // ── Flat data row — surface bg, hairline divider ──────────────────────────
   const renderUser = ({ item: u }: { item: User }) => {
-    const rc = ROLE_COLOR[u.role] ?? colors.textSecondary;
-    const ri = ROLE_ICON[u.role]  ?? 'person';
+    const rc = ROLE_ACCENT[u.role] ?? colors.textSecondary;
+    const ri = ROLE_ICON[u.role] ?? 'person-outline';
     return (
-      <TouchableOpacity
-        style={[s.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+      <Pressable
+        style={({ pressed }) => [
+          s.row,
+          {
+            backgroundColor: pressed ? colors.cardHover : colors.surface,
+            borderBottomColor: colors.borderLight,
+          },
+        ]}
         onPress={() => { setSelectedUser(u); setShowModal(true); }}
-        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={`${u.full_name || 'Unnamed user'}, role ${ROLE_DISPLAY[u.role] ?? u.role}${u.is_active === false ? ', inactive' : ''}`}
       >
-        <View style={s.cardRow}>
-          <View style={[s.avatar, { backgroundColor: rc + '22' }]}>
-            <Ionicons name={ri as any} size={20} color={rc} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={s.nameRow}>
-              <Text style={[s.name, { color: colors.text }]} numberOfLines={1}>
-                {u.full_name || 'No Name'}
-              </Text>
-              {u.is_active === false && (
-                <View style={[s.inactivePill, { backgroundColor: '#EF444420' }]}>
-                  <Text style={[s.inactivePillText, { color: '#EF4444' }]}>Inactive</Text>
-                </View>
-              )}
-            </View>
-            <Text style={[s.email, { color: colors.textSecondary }]} numberOfLines={1}>{u.email}</Text>
-            <Text style={[s.loc, { color: colors.textSecondary }]} numberOfLines={1}>
-              {u.district ? `${u.district}, ${u.state}` : 'No location'}
+        <View style={[s.avatar, { backgroundColor: rc + '14' }]}>
+          <Ionicons name={ri} size={20} color={rc} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[s.name, { color: colors.text }]} numberOfLines={1}>
+            {u.full_name || 'No Name'}
+          </Text>
+          <Text style={[s.email, { color: colors.textSecondary }]} numberOfLines={1}>{u.email}</Text>
+          <Text style={[s.loc, { color: colors.textSecondary }]} numberOfLines={1}>
+            {u.district ? `${u.district}, ${u.state}` : 'No location'}
+          </Text>
+        </View>
+        <View style={s.rowRight}>
+          <View style={[s.rolePill, { backgroundColor: colors.surfaceVariant }]}>
+            <View style={[s.pillDot, { backgroundColor: rc }]} />
+            <Text style={[s.rolePillText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+              {(ROLE_DISPLAY[u.role] ?? u.role)?.toUpperCase()}
             </Text>
           </View>
-          <View style={[s.rolePill, { backgroundColor: rc + '22' }]}>
-            <Text style={[s.rolePillText, { color: rc }]}>{(ROLE_DISPLAY[u.role] ?? u.role)?.toUpperCase()}</Text>
-          </View>
+          {u.is_active === false && (
+            <View style={[s.rolePill, { backgroundColor: colors.dangerBg }]}>
+              <View style={[s.pillDot, { backgroundColor: colors.danger }]} />
+              <Text style={[s.rolePillText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+                INACTIVE
+              </Text>
+            </View>
+          )}
         </View>
-      </TouchableOpacity>
+      </Pressable>
     );
   };
 
+  // Header text: navy band in light mode → white; surface band in dark → ink.
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
+  const selectedActive = selectedUser?.is_active !== false;
+
   return (
     <View style={[s.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <LinearGradient colors={gradient as any} style={s.header}>
-        <TouchableOpacity onPress={onBack} style={s.back}>
-          <Ionicons name="arrow-back" size={22} color="#FFF" />
+      {/* Header — flat headerBg band */}
+      <View
+        style={[
+          s.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={onBack}
+          style={s.back}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="arrow-back" size={22} color={headerText} />
         </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={s.headerTitle}>User Management</Text>
-          <Text style={s.headerSub}>{users.length} registered users</Text>
+        <View style={{ flex: 1, marginLeft: spacing.md }}>
+          <Text style={[s.headerTitle, { color: headerText }]}>User Management</Text>
+          <Text style={[s.headerSub, { color: headerSub }]} maxFontSizeMultiplier={1.3}>
+            {users.length} registered user{users.length !== 1 ? 's' : ''}
+          </Text>
         </View>
-        <View style={[s.badge, { backgroundColor: accent + '30' }]}>
-          <Ionicons name="people" size={18} color={accent} />
-        </View>
-      </LinearGradient>
+      </View>
+      {/* Role Ribbon */}
+      <View style={[s.roleRibbon, { backgroundColor: accent }]} />
 
       {/* Search */}
-      <View style={[s.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[s.searchRow, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
         <Ionicons name="search-outline" size={16} color={colors.textSecondary} />
         <TextInput
           style={[s.searchInput, { color: colors.text }]}
           placeholder="Search users..."
-          placeholderTextColor={colors.textSecondary}
+          placeholderTextColor={colors.placeholder}
           value={search}
           onChangeText={setSearch}
         />
         {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
+          <TouchableOpacity
+            onPress={() => setSearch('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             <Ionicons name="close-circle" size={16} color={colors.textSecondary} />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Role filter chips */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={{ paddingHorizontal: 12, gap: 8, alignItems: 'center' }}>
+      {/* Role filter chips — selected = solid fill + check, never tint alone */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={s.filterRow}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, alignItems: 'center' }}
+      >
         {['all', ...ROLES].map(r => {
           const active = roleFilter === r;
-          const chipColor = r === 'all' ? accent : (ROLE_COLOR[r] ?? accent);
           return (
             <TouchableOpacity
               key={r}
-              style={[s.chip, { backgroundColor: active ? chipColor : colors.card, borderColor: active ? chipColor : colors.border }]}
+              style={[
+                s.chip,
+                active
+                  ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                  : { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
               onPress={() => setRoleFilter(r)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={r === 'all' ? 'All roles' : `Role ${ROLE_DISPLAY[r] ?? r}`}
             >
-              <Text style={[s.chipText, { color: active ? '#FFF' : colors.textSecondary }]}>
+              {active && <Ionicons name="checkmark" size={14} color={colors.onPrimary} />}
+              <Text style={[s.chipText, { color: active ? colors.onPrimary : colors.text }]} maxFontSizeMultiplier={1.3}>
                 {r === 'all' ? 'All' : (ROLE_DISPLAY[r] ?? r)}
               </Text>
             </TouchableOpacity>
@@ -238,91 +297,135 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
         })}
       </ScrollView>
 
-      {/* List */}
-      {loading
-        ? <ActivityIndicator size="large" color={accent} style={{ marginTop: 40 }} />
-        : (
-          <FlatList
-            data={filtered}
-            renderItem={renderUser}
-            keyExtractor={u => u.id}
-            contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={accent} />}
-            ListEmptyComponent={
-              <View style={s.empty}>
-                <Ionicons name="people-outline" size={48} color={colors.textSecondary} />
-                <Text style={[s.emptyText, { color: colors.textSecondary }]}>No users found</Text>
-              </View>
-            }
-          />
-        )
-      }
+      {/* Column-header eyebrow row */}
+      <View style={[s.tableHead, { backgroundColor: colors.surfaceVariant, borderBottomColor: colors.border }]}>
+        <Text style={[s.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+          USERS
+          <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${filtered.length}`}</Text>
+        </Text>
+      </View>
 
-      {/* ── User Detail Modal ── */}
-      <Modal visible={showModal} animationType="slide" transparent>
-        <View style={s.modalOverlay}>
+      {/* Data region — skeleton / error / quiet-zero / content */}
+      {fetchError && !loading && (
+        <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+          <ErrorCard message={fetchError} onRetry={() => { setLoading(true); load(); }} />
+        </View>
+      )}
+      {loading ? (
+        <View style={s.skeletonWrap} accessibilityElementsHidden>
+          <SkeletonBlock height={64} radius={radii.sm} />
+          <SkeletonBlock height={64} radius={radii.sm} />
+          <SkeletonBlock height={64} radius={radii.sm} />
+          <SkeletonBlock height={64} radius={radii.sm} />
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          renderItem={renderUser}
+          keyExtractor={u => u.id}
+          contentContainerStyle={{ paddingBottom: 120 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
+          ListEmptyComponent={
+            fetchError ? null : (
+              <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
+                <EmptyState
+                  icon={search || roleFilter !== 'all' ? 'search-outline' : 'checkmark-circle-outline'}
+                  color={search || roleFilter !== 'all' ? colors.textSecondary : colors.success}
+                  title={search || roleFilter !== 'all'
+                    ? 'No users match — try a different search or filter.'
+                    : 'No users registered yet.'}
+                />
+              </View>
+            )
+          }
+        />
+      )}
+
+      {/* ── User Detail Modal — One-Hand Action Bar ── */}
+      <Modal
+        visible={showModal}
+        animationType={reduceMotion ? 'none' : 'slide'}
+        transparent
+        onRequestClose={() => setShowModal(false)}
+      >
+        <View style={[s.modalOverlay, { backgroundColor: colors.overlay }]}>
           {selectedUser && (
-            <View style={[
-              s.modalSheet, 
-              { backgroundColor: colors.card },
-              Platform.OS === 'web'
-                ? {
-                    backdropFilter: 'blur(16px)',
-                    WebkitBackdropFilter: 'blur(16px)',
-                    backgroundColor: isDark ? 'rgba(15,23,42,0.82)' : 'rgba(255,255,255,0.82)',
-                  } as any
-                : {}
-            ]}>
-              {/* Modal Header */}
-              <View style={[s.modalHeader, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
-                <View style={[s.modalAvatar, { backgroundColor: (ROLE_COLOR[selectedUser.role] ?? '#888') + '30' }]}>
-                  <Ionicons name={(ROLE_ICON[selectedUser.role] ?? 'person') as any} size={32} color={ROLE_COLOR[selectedUser.role] ?? '#888'} />
+            <View style={[s.modalSheet, { backgroundColor: colors.card }]}>
+              {/* Modal Header — avatar ring in role accent */}
+              <View style={[s.modalHeader, { borderBottomColor: colors.borderLight }]}>
+                <View style={[s.modalAvatar, { borderColor: ROLE_ACCENT[selectedUser.role] ?? colors.border, backgroundColor: colors.surface }]}>
+                  <Ionicons
+                    name={ROLE_ICON[selectedUser.role] ?? 'person-outline'}
+                    size={28}
+                    color={ROLE_ACCENT[selectedUser.role] ?? colors.textSecondary}
+                  />
                 </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={[s.modalName, { color: colors.text }]}>{selectedUser.full_name || 'No Name'}</Text>
-                  <Text style={[s.modalEmail, { color: colors.textSecondary }]}>{selectedUser.email}</Text>
+                <View style={{ flex: 1, marginLeft: spacing.md }}>
+                  <Text style={[s.modalName, { color: colors.text }]} numberOfLines={1}>{selectedUser.full_name || 'No Name'}</Text>
+                  <Text style={[s.modalEmail, { color: colors.textSecondary }]} numberOfLines={1}>{selectedUser.email}</Text>
                 </View>
-                <TouchableOpacity onPress={() => setShowModal(false)}>
+                <TouchableOpacity
+                  onPress={() => setShowModal(false)}
+                  style={[s.closeBtn, { backgroundColor: colors.surfaceVariant }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close user details"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
                   <Ionicons name="close" size={22} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={{ padding: 16 }}>
+              <ScrollView style={{ paddingHorizontal: spacing.lg }}>
+                {/* Status pill — dot + label, never color alone */}
+                <View style={s.statusRow}>
+                  <View style={[s.rolePill, { backgroundColor: selectedActive ? colors.successBg : colors.dangerBg }]}>
+                    <View style={[s.pillDot, { backgroundColor: selectedActive ? colors.success : colors.danger }]} />
+                    <Text style={[s.rolePillText, { color: selectedActive ? colors.success : colors.danger }]} maxFontSizeMultiplier={1.3}>
+                      {selectedActive ? 'ACTIVE' : 'INACTIVE'}
+                    </Text>
+                  </View>
+                </View>
+
                 {/* Info rows */}
                 {[
-                  { icon: 'location-outline', label: `${selectedUser.district ?? '-'}, ${selectedUser.state ?? '-'}` },
-                  { icon: 'call-outline', label: selectedUser.phone || 'No phone' },
-                  { icon: 'time-outline', label: selectedUser.created_at ? format(new Date(selectedUser.created_at),'MMM d, yyyy') : 'Unknown' },
+                  { icon: 'location-outline' as const, label: `${selectedUser.district ?? '-'}, ${selectedUser.state ?? '-'}` },
+                  { icon: 'call-outline' as const, label: selectedUser.phone || 'No phone' },
+                  { icon: 'time-outline' as const, label: selectedUser.created_at ? `Joined ${format(new Date(selectedUser.created_at),'d MMM yyyy')}` : 'Joined date unknown' },
                 ].map((row, i) => (
-                  <View key={i} style={[s.infoRow, { borderBottomColor: colors.border }]}>
-                    <Ionicons name={row.icon as any} size={16} color={colors.textSecondary} />
+                  <View key={i} style={[s.infoRow, { borderBottomColor: colors.borderLight }]}>
+                    <Ionicons name={row.icon} size={16} color={colors.textSecondary} />
                     <Text style={[s.infoText, { color: colors.text }]}>{row.label}</Text>
                   </View>
                 ))}
 
-                {/* Status */}
-                <View style={[s.infoRow, { borderBottomColor: colors.border }]}>
-                  <Ionicons name="checkmark-circle-outline" size={16} color={selectedUser.is_active !== false ? '#10B981' : '#EF4444'} />
-                  <Text style={{ color: selectedUser.is_active !== false ? '#10B981' : '#EF4444', marginLeft: 8, fontWeight: '600' }}>
-                    {selectedUser.is_active !== false ? 'Active' : 'Inactive'}
-                  </Text>
-                </View>
-
                 {/* Role change — super_admin only */}
                 {profile.role === 'super_admin' && (
-                  <View style={{ marginTop: 16 }}>
+                  <View style={{ marginTop: spacing.lg }}>
                     <Text style={[s.sectionLabel, { color: colors.textSecondary }]}>CHANGE ROLE</Text>
                     <View style={s.roleGrid}>
                       {ROLES.map(r => {
                         const active = selectedUser.role === r;
-                        const rc = ROLE_COLOR[r] ?? '#888';
+                        const rc = ROLE_ACCENT[r] ?? colors.primary;
                         return (
                           <TouchableOpacity
                             key={r}
-                            style={[s.roleBtn, { backgroundColor: active ? rc : colors.surface, borderColor: active ? rc : colors.border }]}
+                            style={[
+                              s.roleBtn,
+                              active
+                                ? { backgroundColor: rc, borderColor: rc }
+                                : { backgroundColor: colors.card, borderColor: colors.border },
+                            ]}
                             onPress={() => changeRole(selectedUser.id, r)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: active }}
+                            accessibilityLabel={`Set role ${ROLE_DISPLAY[r] ?? r}`}
                           >
-                            <Text style={[s.roleBtnText, { color: active ? '#FFF' : colors.textSecondary }]} numberOfLines={1}>
+                            {active && <Ionicons name="checkmark" size={14} color={colors.textInverse} />}
+                            <Text
+                              style={[s.roleBtnText, { color: active ? colors.textInverse : colors.text }]}
+                              numberOfLines={1}
+                              maxFontSizeMultiplier={1.3}
+                            >
                               {ROLE_DISPLAY[r] ?? r.replace(/_/g, ' ')}
                             </Text>
                           </TouchableOpacity>
@@ -331,60 +434,110 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
                     </View>
                   </View>
                 )}
-
-                {/* Actions */}
-                <View style={s.actionRow}>
-                  <TouchableOpacity
-                    style={[s.actionBtn, { backgroundColor: selectedUser.is_active !== false ? '#EF4444' : '#10B981' }]}
-                    onPress={() => toggleStatus(selectedUser)}
-                  >
-                    <Ionicons name={selectedUser.is_active !== false ? 'person-remove' : 'person-add'} size={16} color="#FFF" />
-                    <Text style={s.actionBtnText}>{selectedUser.is_active !== false ? 'Deactivate' : 'Activate'}</Text>
-                  </TouchableOpacity>
-                  {profile.role === 'super_admin' && (
-                    <TouchableOpacity
-                      style={[s.actionBtn, { backgroundColor: '#7F1D1D' }]}
-                      onPress={() => deleteUser(selectedUser)}
-                    >
-                      <Ionicons name="trash" size={16} color="#FFF" />
-                      <Text style={s.actionBtnText}>Soft Delete User</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+                <View style={{ height: spacing.xl }} />
               </ScrollView>
+
+              {/* One-Hand Action Bar — soft-delete only, labeled Deactivate */}
+              <View style={[s.actionBar, { borderTopColor: colors.borderLight, backgroundColor: colors.card }]}>
+                <Pressable
+                  style={({ pressed }) => [
+                    s.actionBtn,
+                    selectedActive
+                      ? {
+                          backgroundColor: pressed ? colors.cardHover : colors.card,
+                          borderWidth: 1.5,
+                          borderColor: colors.danger,
+                        }
+                      : { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                  ]}
+                  onPress={() => toggleStatus(selectedUser)}
+                  accessibilityRole="button"
+                  accessibilityLabel={selectedActive ? 'Deactivate user' : 'Activate user'}
+                >
+                  <Ionicons
+                    name={selectedActive ? 'person-remove-outline' : 'person-add-outline'}
+                    size={18}
+                    color={selectedActive ? colors.danger : colors.onPrimary}
+                  />
+                  <Text style={[s.actionBtnText, { color: selectedActive ? colors.danger : colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                    {selectedActive ? 'Deactivate' : 'Activate'}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
           )}
         </View>
       </Modal>
 
-      {/* ── Confirm Modal ── */}
-      <Modal visible={confirmModal} animationType="fade" transparent>
-        <View style={s.confirmOverlay}>
+      {/* ── Confirm / Notice Modal ── */}
+      <Modal
+        visible={confirmModal}
+        animationType={reduceMotion ? 'none' : 'fade'}
+        transparent
+        onRequestClose={() => setConfirmModal(false)}
+      >
+        <View style={[s.confirmOverlay, { backgroundColor: colors.overlay }]}>
           {confirmAction && (
-            <View style={[
-              s.confirmSheet, 
-              { backgroundColor: colors.card },
-              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' } as any : {}
-            ]}>
-              <Ionicons
-                name={confirmAction.type === 'danger' ? 'warning' : 'alert-circle'}
-                size={36}
-                color={confirmAction.type === 'danger' ? '#EF4444' : '#F59E0B'}
-                style={{ alignSelf: 'center', marginBottom: 12 }}
-              />
+            <View style={[s.confirmSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[s.confirmIconWrap, { backgroundColor: confirmAction.type === 'danger' ? colors.dangerBg : colors.warningBg }]}>
+                <Ionicons
+                  name={confirmAction.type === 'danger' ? 'warning-outline' : 'alert-circle-outline'}
+                  size={28}
+                  color={confirmAction.type === 'danger' ? colors.danger : colors.warning}
+                />
+              </View>
               <Text style={[s.confirmTitle, { color: colors.text }]}>{confirmAction.title}</Text>
               <Text style={[s.confirmMsg, { color: colors.textSecondary }]}>{confirmAction.message}</Text>
-              <View style={s.confirmBtns}>
-                <TouchableOpacity style={[s.cBtn, { borderColor: colors.border }]} onPress={() => setConfirmModal(false)}>
-                  <Text style={[s.cBtnText, { color: colors.text }]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[s.cBtn, { backgroundColor: confirmAction.type === 'danger' ? '#EF4444' : '#F59E0B' }]}
-                  onPress={() => confirmAction.onConfirm().catch(e => Alert.alert('Error', e.message))}
+              {confirmAction.notice ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    s.cBtn,
+                    { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                  ]}
+                  onPress={() => setConfirmModal(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="OK"
                 >
-                  <Text style={[s.cBtnText, { color: '#FFF' }]}>Confirm</Text>
-                </TouchableOpacity>
-              </View>
+                  <Text style={[s.cBtnText, { color: colors.onPrimary }]}>OK</Text>
+                </Pressable>
+              ) : (
+                <View style={s.confirmBtns}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      s.cBtn,
+                      {
+                        backgroundColor: pressed ? colors.cardHover : colors.card,
+                        borderWidth: 1.5,
+                        borderColor: colors.inputBorder,
+                      },
+                    ]}
+                    onPress={() => setConfirmModal(false)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel"
+                  >
+                    <Text style={[s.cBtnText, { color: colors.text }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      s.cBtn,
+                      {
+                        backgroundColor: confirmAction.type === 'danger'
+                          ? colors.danger
+                          : pressed ? colors.primaryDark : colors.primary,
+                      },
+                      confirmBusy && { opacity: 0.4 },
+                    ]}
+                    onPress={runConfirm}
+                    disabled={confirmBusy}
+                    accessibilityRole="button"
+                    accessibilityLabel="Confirm"
+                  >
+                    <Text style={[s.cBtnText, { color: confirmAction.type === 'danger' ? colors.textInverse : colors.onPrimary }]}>
+                      {confirmBusy ? 'Working…' : 'Confirm'}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -395,58 +548,96 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
 
 const s = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 20, paddingTop: 36 },
-  back: { padding: 4 },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: '#FFF' },
-  headerSub: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  badge: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  searchRow: { flexDirection: 'row', alignItems: 'center', margin: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1, gap: 8 },
-  searchInput: { flex: 1, fontSize: 14 },
-  filterRow: { maxHeight: 44, marginBottom: 4 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  chipText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
-  card: { borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 10 },
-  cardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  name: { fontSize: 15, fontWeight: '600', flex: 1 },
-  email: { fontSize: 12, marginTop: 2 },
-  loc: { fontSize: 12, marginTop: 1 },
-  rolePill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  rolePillText: { fontSize: 10, fontWeight: '700' },
-  inactivePill: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  inactivePillText: { fontSize: 10, fontWeight: '700' },
-  empty: { paddingTop: 60, alignItems: 'center', gap: 12 },
-  emptyText: { fontSize: 15 },
-  // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', padding: 20, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  modalAvatar: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
-  modalName: { fontSize: 18, fontWeight: '700' },
-  modalEmail: { fontSize: 13, marginTop: 2 },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1 },
-  infoText: { fontSize: 14 },
-  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 10 },
-  roleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  roleBtn: {
-    borderWidth: 1.5, borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 10,
-    alignItems: 'center', justifyContent: 'center',
-    width: '46%',
+  /* Header */
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.xl, paddingTop: 42 },
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
+  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2, fontVariant: ['tabular-nums'] },
+  roleRibbon: { height: 4, width: '100%' },
+  /* Search */
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: spacing.lg, marginTop: spacing.lg, marginBottom: spacing.md,
+    paddingHorizontal: spacing.md, minHeight: 48,
+    borderRadius: radii.md, borderWidth: 1.5, gap: spacing.sm,
   },
-  roleBtnText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
-  actionRow: { flexDirection: 'row', gap: 10, marginTop: 20, marginBottom: 40 },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 12 },
-  actionBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
-  // Confirm
-  confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 24 },
-  confirmSheet: { borderRadius: 20, padding: 24 },
-  confirmTitle: { fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 8 },
-  confirmMsg: { fontSize: 14, textAlign: 'center', marginBottom: 20 },
-  confirmBtns: { flexDirection: 'row', gap: 12 },
-  cBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1 },
-  cBtnText: { fontWeight: '700', fontSize: 14 },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: spacing.sm },
+  /* Filter chips */
+  filterRow: { maxHeight: 52, marginBottom: spacing.sm, flexGrow: 0 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    minHeight: 44, paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill, borderWidth: 1.5,
+  },
+  chipText: { fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  /* Table head */
+  tableHead: {
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  tableHeadText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6 },
+  /* Flat data rows */
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    minHeight: 64, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  avatar: { width: 44, height: 44, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
+  name: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  email: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  loc: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  rowRight: { alignItems: 'flex-end', gap: spacing.xs },
+  rolePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  pillDot: { width: 6, height: 6, borderRadius: 3 },
+  rolePillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
+  /* Skeleton */
+  skeletonWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.md },
+  /* Detail modal */
+  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  modalSheet: { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, maxHeight: '88%', overflow: 'hidden' },
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: spacing.lg, borderBottomWidth: 1,
+  },
+  modalAvatar: { width: 56, height: 56, borderRadius: radii.pill, borderWidth: 3, alignItems: 'center', justifyContent: 'center' },
+  modalName: { fontSize: 16, lineHeight: 22, fontWeight: '800' },
+  modalEmail: { fontSize: 13, lineHeight: 18, marginTop: 2 },
+  closeBtn: { width: 44, height: 44, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginLeft: spacing.sm },
+  statusRow: { flexDirection: 'row', marginTop: spacing.lg, marginBottom: spacing.xs },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 48, borderBottomWidth: 1 },
+  infoText: { fontSize: 15, lineHeight: 22, fontWeight: '500', flexShrink: 1 },
+  sectionLabel: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: spacing.md },
+  roleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  roleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,
+    borderWidth: 1.5, borderRadius: radii.pill,
+    paddingHorizontal: spacing.lg, minHeight: 44,
+    width: '47%',
+  },
+  roleBtnText: { fontSize: 13, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
+  /* One-Hand Action Bar */
+  actionBar: {
+    padding: spacing.lg, paddingBottom: spacing.xl,
+    borderTopWidth: 1,
+  },
+  actionBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    minHeight: 56, borderRadius: radii.md,
+  },
+  actionBtnText: { fontSize: 16, fontWeight: '700' },
+  /* Confirm modal */
+  confirmOverlay: { flex: 1, justifyContent: 'center', padding: spacing.xl },
+  confirmSheet: { borderRadius: radii.lg, borderWidth: 1, padding: spacing.xl, alignItems: 'center' },
+  confirmIconWrap: { width: 56, height: 56, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md },
+  confirmTitle: { fontSize: 16, lineHeight: 22, fontWeight: '800', textAlign: 'center', marginBottom: spacing.sm },
+  confirmMsg: { fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: spacing.xl },
+  confirmBtns: { flexDirection: 'row', gap: spacing.md, alignSelf: 'stretch' },
+  cBtn: { flex: 1, minHeight: 56, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' },
+  cBtnText: { fontWeight: '700', fontSize: 15 },
 });
 
 export default UserManagementScreen;

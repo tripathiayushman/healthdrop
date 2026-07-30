@@ -5,6 +5,9 @@
 //  2. Reverse-geocodes to show address, district, state
 //  3. Lets user edit district/state/location_name manually
 //  4. Passes coords + address data back to parent via onChange
+//
+// "Prakash" restyle: token-driven, Ionicons only, inline
+// validation messages (no Alert.alert), labels above fields.
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -14,10 +17,10 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
-  Alert,
 } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
-import { useLocation, LocationCoords, GeocodedAddress } from '../hooks/useLocation';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, Theme } from '../../lib/ThemeContext';
+import { useLocation } from '../hooks/useLocation';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -46,12 +49,16 @@ export function LocationField({
   onChange,
   autoFetch = true,
 }: LocationFieldProps) {
+  const { colors } = useTheme();
   const { coords, address, status, errorMsg, requestLocation, setManual, clearLocation, skip } =
     useLocation(autoFetch);
 
   const [isManualCoords, setIsManualCoords] = useState(false);
   const [manualLat, setManualLat] = useState('');
   const [manualLng, setManualLng] = useState('');
+  const [latError, setLatError] = useState<string | null>(null);
+  const [lngError, setLngError] = useState<string | null>(null);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
 
   // Sync GPS + geocoded result back to parent
   useEffect(() => {
@@ -76,14 +83,20 @@ export function LocationField({
   const handleManualCoordsApply = () => {
     const lat = parseFloat(manualLat);
     const lng = parseFloat(manualLng);
+    let hasError = false;
     if (isNaN(lat) || lat < -90 || lat > 90) {
-      Alert.alert('Invalid Latitude', 'Enter a number between -90 and 90.');
-      return;
+      setLatError('Enter a number between -90 and 90.');
+      hasError = true;
+    } else {
+      setLatError(null);
     }
     if (isNaN(lng) || lng < -180 || lng > 180) {
-      Alert.alert('Invalid Longitude', 'Enter a number between -180 and 180.');
-      return;
+      setLngError('Enter a number between -180 and 180.');
+      hasError = true;
+    } else {
+      setLngError(null);
     }
+    if (hasError) return;
     setManual(lat, lng);
     setIsManualCoords(false);
   };
@@ -97,166 +110,227 @@ export function LocationField({
     onChange({ ...value, [field]: val });
   };
 
+  const inputStyle = (fieldKey: string, error?: string | null) => ([
+    styles.fieldInput,
+    {
+      backgroundColor: colors.inputBackground,
+      borderColor: colors.inputBorder,
+      color: colors.text,
+    },
+    focusedField === fieldKey && { borderColor: colors.inputFocusBorder, borderWidth: 2 },
+    !!error && { borderColor: colors.inputErrorBorder, borderWidth: 2 },
+  ]);
+
   // ── Status badge ────────────────────────────────────────────────────────
 
   const renderStatusBadge = () => {
-    const badges: Record<string, { icon: string; text: string; color: string; loading?: boolean }> = {
-      requesting: { icon: 'lock-outline', text: 'Requesting permission…', color: '#888', loading: true },
-      fetching:   { icon: 'gps-fixed', text: 'Getting GPS location…', color: '#2196F3', loading: true },
-      geocoding:  { icon: 'location-searching', text: 'Resolving address…', color: '#FF9800', loading: true },
-      denied:     { icon: 'location-off', text: 'Permission denied', color: '#F44336' },
-      error:      { icon: 'signal-wifi-off', text: 'No GPS signal', color: '#F44336' },
-      skipped:    { icon: 'location-off', text: 'Location skipped', color: '#888' },
+    const badges: Record<string, { icon: keyof typeof Ionicons.glyphMap; text: string; fg: string; bg: string; loading?: boolean }> = {
+      requesting: { icon: 'lock-closed-outline',   text: 'Requesting permission…', fg: colors.textSecondary, bg: colors.surfaceVariant, loading: true },
+      fetching:   { icon: 'locate-outline',        text: 'Getting GPS location…',  fg: colors.info,          bg: colors.infoBg,         loading: true },
+      geocoding:  { icon: 'search-outline',        text: 'Resolving address…',     fg: colors.info,          bg: colors.infoBg,         loading: true },
+      denied:     { icon: 'lock-closed-outline',   text: 'Permission denied',      fg: colors.danger,        bg: colors.dangerBg },
+      error:      { icon: 'cloud-offline-outline', text: 'No GPS signal',          fg: colors.danger,        bg: colors.dangerBg },
+      skipped:    { icon: 'remove-circle-outline', text: 'Location skipped',       fg: colors.textSecondary, bg: colors.surfaceVariant },
     };
 
     if (status === 'success' || status === 'manual') {
       const prefix = status === 'manual' ? 'Manual' : 'GPS';
+      const fg = status === 'manual' ? colors.warning : colors.success;
+      const bg = status === 'manual' ? colors.warningBg : colors.successBg;
       return (
         <StatusBadge
-          icon={status === 'manual' ? 'edit-location' : 'gps-fixed'}
+          icon={status === 'manual' ? 'create-outline' : 'locate-outline'}
           text={`${prefix}: ${coords!.latitude.toFixed(5)}, ${coords!.longitude.toFixed(5)}${
             coords!.accuracy ? ` (±${Math.round(coords!.accuracy)}m)` : ''
           }`}
-          color={status === 'manual' ? '#FF9800' : '#4CAF50'}
+          fg={fg}
+          bg={bg}
         />
       );
     }
 
     const b = badges[status];
     if (!b) return null;
-    return <StatusBadge icon={b.icon as any} text={b.text} color={b.color} loading={b.loading} />;
+    return <StatusBadge icon={b.icon} text={b.text} fg={b.fg} bg={b.bg} loading={b.loading} />;
   };
 
   // ── Render ──────────────────────────────────────────────────────────────
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>📍 Location</Text>
+      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>LOCATION</Text>
 
       {/* GPS Status */}
       {renderStatusBadge()}
-      {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
+      {errorMsg ? (
+        <View style={styles.inlineErrorRow}>
+          <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+          <Text style={[styles.inlineErrorText, { color: colors.danger }]}>{errorMsg}</Text>
+        </View>
+      ) : null}
 
       {/* Address Card — shown after geocoding */}
       {address && (status === 'success' || status === 'manual') && (
-        <View style={styles.addressCard}>
-          <MaterialIcons name="place" size={18} color="#4CAF50" />
-          <Text style={styles.addressText}>{address.formattedAddress}</Text>
+        <View style={[styles.addressCard, { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.success }]}>
+          <Ionicons name="location-outline" size={18} color={colors.success} />
+          <Text style={[styles.addressText, { color: colors.text }]}>{address.formattedAddress}</Text>
         </View>
       )}
 
       {/* Action buttons */}
       <View style={styles.actionRow}>
         {(status === 'idle' || status === 'error' || status === 'denied') && (
-          <TouchableOpacity style={styles.btnPrimary} onPress={handleRetry}>
-            <MaterialIcons name="my-location" size={16} color="#fff" />
-            <Text style={styles.btnText}>
+          <TouchableOpacity
+            style={[styles.btnPrimary, { backgroundColor: colors.primary }]}
+            onPress={handleRetry}
+            accessibilityRole="button"
+            accessibilityLabel={status === 'idle' ? 'Get location' : 'Retry GPS'}
+          >
+            <Ionicons name="locate-outline" size={16} color={colors.onPrimary} />
+            <Text style={[styles.btnText, { color: colors.onPrimary }]}>
               {status === 'idle' ? 'Get Location' : 'Retry GPS'}
             </Text>
           </TouchableOpacity>
         )}
         {(status === 'success' || status === 'manual') && (
-          <TouchableOpacity style={styles.btnOutline} onPress={handleRetry}>
-            <MaterialIcons name="refresh" size={16} color="#2196F3" />
-            <Text style={[styles.btnText, { color: '#2196F3' }]}>Re-fetch</Text>
+          <TouchableOpacity
+            style={[styles.btnOutline, { borderColor: colors.inputBorder }]}
+            onPress={handleRetry}
+            accessibilityRole="button"
+            accessibilityLabel="Re-fetch location"
+          >
+            <Ionicons name="refresh-outline" size={16} color={colors.textSecondary} />
+            <Text style={[styles.btnText, { color: colors.text }]}>Re-fetch</Text>
           </TouchableOpacity>
         )}
         {status !== 'skipped' && (
           <TouchableOpacity
-            style={styles.btnOutline}
+            style={[styles.btnOutline, { borderColor: colors.inputBorder }]}
             onPress={() => setIsManualCoords((m) => !m)}
+            accessibilityRole="button"
+            accessibilityLabel={isManualCoords ? 'Cancel manual coordinates' : 'Enter coordinates manually'}
           >
-            <MaterialIcons name="edit" size={16} color="#2196F3" />
-            <Text style={[styles.btnText, { color: '#2196F3' }]}>
+            <Ionicons name="create-outline" size={16} color={colors.textSecondary} />
+            <Text style={[styles.btnText, { color: colors.text }]}>
               {isManualCoords ? 'Cancel' : 'Enter Coords'}
             </Text>
           </TouchableOpacity>
         )}
         {status !== 'skipped' && (
-          <TouchableOpacity style={styles.btnSkip} onPress={() => { skip(); clearLocation(); onChange({ ...value, latitude: null, longitude: null }); }}>
-            <Text style={[styles.btnText, { color: '#888' }]}>Skip GPS</Text>
+          <TouchableOpacity
+            style={styles.btnSkip}
+            onPress={() => { skip(); clearLocation(); onChange({ ...value, latitude: null, longitude: null }); }}
+            accessibilityRole="button"
+            accessibilityLabel="Skip GPS"
+          >
+            <Text style={[styles.btnText, { color: colors.textSecondary }]}>Skip GPS</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Manual coordinate entry */}
+      {/* Manual coordinate entry — one field per row */}
       {isManualCoords && (
-        <View style={styles.manualBox}>
-          <View style={styles.manualRow}>
-            <View style={styles.manualCol}>
-              <Text style={styles.fieldLabel}>Latitude</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={manualLat}
-                onChangeText={setManualLat}
-                keyboardType="numeric"
-                placeholder="e.g. 25.5941"
-                placeholderTextColor="#999"
-              />
-            </View>
-            <View style={[styles.manualCol, { marginLeft: 8 }]}>
-              <Text style={styles.fieldLabel}>Longitude</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={manualLng}
-                onChangeText={setManualLng}
-                keyboardType="numeric"
-                placeholder="e.g. 85.1376"
-                placeholderTextColor="#999"
-              />
-            </View>
+        <View style={[styles.manualBox, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>LATITUDE</Text>
+            <TextInput
+              style={inputStyle('manualLat', latError)}
+              value={manualLat}
+              onChangeText={(t) => { setManualLat(t); if (latError) setLatError(null); }}
+              onFocus={() => setFocusedField('manualLat')}
+              onBlur={() => setFocusedField(null)}
+              keyboardType="numeric"
+              placeholder="e.g. 25.5941"
+              placeholderTextColor={colors.placeholder}
+            />
+            {latError && (
+              <View style={styles.inlineErrorRow}>
+                <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+                <Text style={[styles.inlineErrorText, { color: colors.danger }]}>{latError}</Text>
+              </View>
+            )}
           </View>
-          <TouchableOpacity style={styles.btnApply} onPress={handleManualCoordsApply}>
-            <Text style={styles.btnText}>Apply & Lookup Address</Text>
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>LONGITUDE</Text>
+            <TextInput
+              style={inputStyle('manualLng', lngError)}
+              value={manualLng}
+              onChangeText={(t) => { setManualLng(t); if (lngError) setLngError(null); }}
+              onFocus={() => setFocusedField('manualLng')}
+              onBlur={() => setFocusedField(null)}
+              keyboardType="numeric"
+              placeholder="e.g. 85.1376"
+              placeholderTextColor={colors.placeholder}
+            />
+            {lngError && (
+              <View style={styles.inlineErrorRow}>
+                <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+                <Text style={[styles.inlineErrorText, { color: colors.danger }]}>{lngError}</Text>
+              </View>
+            )}
+          </View>
+          <TouchableOpacity
+            style={[styles.btnApply, { backgroundColor: colors.primary }]}
+            onPress={handleManualCoordsApply}
+            accessibilityRole="button"
+            accessibilityLabel="Apply coordinates and look up address"
+          >
+            <Text style={[styles.btnText, { color: colors.onPrimary }]}>Apply &amp; Lookup Address</Text>
           </TouchableOpacity>
         </View>
       )}
 
       {/* Location name field */}
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>Location Name *</Text>
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>LOCATION NAME *</Text>
         <TextInput
-          style={styles.fieldInput}
+          style={inputStyle('locationName')}
           value={value.locationName}
           onChangeText={(t) => handleFieldChange('locationName', t)}
+          onFocus={() => setFocusedField('locationName')}
+          onBlur={() => setFocusedField(null)}
           placeholder="Village, ward, or area name"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
         />
       </View>
 
       {/* District — auto-filled from GPS, editable */}
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>
-          District *{' '}
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+          DISTRICT *{' '}
           {address?.district ? (
-            <Text style={styles.autoFillHint}>(auto-filled)</Text>
+            <Text style={[styles.autoFillHint, { color: colors.success }]}>(auto-filled)</Text>
           ) : null}
         </Text>
         <TextInput
-          style={styles.fieldInput}
+          style={inputStyle('district')}
           value={value.district}
           onChangeText={(t) => handleFieldChange('district', t)}
+          onFocus={() => setFocusedField('district')}
+          onBlur={() => setFocusedField(null)}
           placeholder="District name"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
         />
       </View>
 
       {/* State — auto-filled from GPS, editable */}
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>
-          State *{' '}
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+          STATE *{' '}
           {address?.state ? (
-            <Text style={styles.autoFillHint}>(auto-filled)</Text>
+            <Text style={[styles.autoFillHint, { color: colors.success }]}>(auto-filled)</Text>
           ) : null}
         </Text>
         <TextInput
-          style={styles.fieldInput}
+          style={inputStyle('state')}
           value={value.state}
           onChangeText={(t) => handleFieldChange('state', t)}
+          onFocus={() => setFocusedField('state')}
+          onBlur={() => setFocusedField(null)}
           placeholder="State name"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
         />
       </View>
@@ -269,22 +343,24 @@ export function LocationField({
 function StatusBadge({
   icon,
   text,
-  color,
+  fg,
+  bg,
   loading = false,
 }: {
-  icon: keyof typeof MaterialIcons.glyphMap;
+  icon: keyof typeof Ionicons.glyphMap;
   text: string;
-  color: string;
+  fg: string;
+  bg: string;
   loading?: boolean;
 }) {
   return (
-    <View style={[styles.badge, { borderColor: color }]}>
+    <View style={[styles.badge, { backgroundColor: bg }]} accessibilityLiveRegion="polite">
       {loading ? (
-        <ActivityIndicator size="small" color={color} style={{ marginRight: 6 }} />
+        <ActivityIndicator size="small" color={fg} style={{ marginRight: 6 }} />
       ) : (
-        <MaterialIcons name={icon} size={16} color={color} style={{ marginRight: 6 }} />
+        <Ionicons name={icon} size={16} color={fg} style={{ marginRight: 6 }} />
       )}
-      <Text style={[styles.badgeText, { color }]}>{text}</Text>
+      <Text style={[styles.badgeText, { color: fg }]} maxFontSizeMultiplier={1.3}>{text}</Text>
     </View>
   );
 }
@@ -293,46 +369,54 @@ function StatusBadge({
 
 const styles = StyleSheet.create({
   container: { marginVertical: 8 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 10 },
+  sectionTitle: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700',
+    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 12,
+  },
   badge: {
-    flexDirection: 'row', alignItems: 'center', borderWidth: 1,
-    borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6,
-    alignSelf: 'flex-start', marginBottom: 8,
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6,
+    alignSelf: 'flex-start', marginBottom: 8, minHeight: 28,
   },
-  badgeText: { fontSize: 13, flexShrink: 1 },
-  errorText: { color: '#F44336', fontSize: 12, marginBottom: 8, lineHeight: 18 },
+  badgeText: { fontSize: 13, lineHeight: 18, fontWeight: '700', flexShrink: 1, fontVariant: ['tabular-nums'] },
+  inlineErrorRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 6, marginBottom: 8,
+  },
+  inlineErrorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
   addressCard: {
-    flexDirection: 'row', alignItems: 'flex-start', backgroundColor: 'rgba(76,175,80,0.1)',
-    borderRadius: 8, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(76,175,80,0.3)',
+    flexDirection: 'row', alignItems: 'flex-start',
+    borderRadius: 12, padding: 12, marginBottom: 12,
+    borderWidth: 1, borderLeftWidth: 3, gap: 8,
   },
-  addressText: { fontSize: 13, color: '#E0E0E0', marginLeft: 8, flex: 1, lineHeight: 18 },
+  addressText: { fontSize: 13, lineHeight: 18, fontWeight: '500', flex: 1 },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   btnPrimary: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#2196F3',
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, gap: 4,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 16, minHeight: 48, borderRadius: 12, gap: 6,
   },
   btnOutline: {
-    flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#2196F3',
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, gap: 4,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, paddingHorizontal: 16, minHeight: 48, borderRadius: 12, gap: 6,
   },
-  btnSkip: { paddingHorizontal: 12, paddingVertical: 8 },
+  btnSkip: { paddingHorizontal: 12, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   btnApply: {
-    backgroundColor: '#4CAF50', paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 6, alignSelf: 'flex-start', marginTop: 8,
+    paddingHorizontal: 16, minHeight: 48, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start', marginTop: 4,
   },
-  btnText: { color: '#fff', fontSize: 13, fontWeight: '500' },
+  btnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
   manualBox: {
-    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 12,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', marginBottom: 12,
+    borderRadius: 12, padding: 12,
+    borderWidth: 1, marginBottom: 12,
   },
-  manualRow: { flexDirection: 'row' },
-  manualCol: { flex: 1 },
-  fieldGroup: { marginBottom: 12 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: '#ccc', marginBottom: 6 },
-  autoFillHint: { fontSize: 11, fontWeight: '400', color: '#4CAF50', fontStyle: 'italic' },
+  fieldGroup: { marginBottom: 16 },
+  fieldLabel: {
+    fontSize: 13, lineHeight: 18, fontWeight: '700',
+    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 6,
+  },
+  autoFillHint: { fontSize: 12, lineHeight: 16, fontWeight: '600', textTransform: 'none', letterSpacing: 0 },
   fieldInput: {
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
-    color: '#fff', backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.5, borderRadius: 12, minHeight: 52,
+    paddingHorizontal: 14, paddingVertical: 12, fontSize: 15,
   },
 });

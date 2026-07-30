@@ -3,30 +3,7 @@
 // =====================================================
 import { supabase } from '../supabase';
 import { Profile, ApiResponse } from '../../types';
-import { logAuditEvent } from './mongoService';
-
-const resolveActorId = async (): Promise<string | null> => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    return user?.id ?? null;
-  } catch {
-    return null;
-  }
-};
-
-const fireAuditLog = (payload: {
-  user_id?: string | null;
-  action_type: string;
-  table_name: string;
-  record_id?: string | null;
-  old_value?: unknown;
-  new_value?: unknown;
-}): void => {
-  void logAuditEvent({
-    ...payload,
-    created_at: new Date(),
-  });
-};
+import { sanitizeSearchTerm } from './searchSanitize';
 
 export const usersService = {
   // Get all users (Admin only)
@@ -52,7 +29,10 @@ export const usersService = {
       if (district) query = query.eq('district', district);
       if (isActive !== undefined) query = query.eq('is_active', isActive);
       if (searchQuery) {
-        query = query.or(`full_name.ilike.%${searchQuery}%,email.ilike.%${searchQuery}%`);
+        const term = sanitizeSearchTerm(searchQuery);
+        if (term) {
+          query = query.or(`full_name.ilike.%${term}%,email.ilike.%${term}%`);
+        }
       }
 
       const { data, error, count } = await query;
@@ -100,13 +80,6 @@ export const usersService = {
   // Update user profile
   async update(id: string, updates: Partial<Profile>): Promise<ApiResponse<Profile>> {
     try {
-      const actorId = await resolveActorId();
-      const { data: oldValue } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', id)
-        .single();
-
       const { data, error } = await supabase
         .from('profiles')
         .update(updates)
@@ -115,15 +88,6 @@ export const usersService = {
         .single();
 
       if (error) throw error;
-
-      fireAuditLog({
-        user_id: actorId,
-        action_type: 'update',
-        table_name: 'profiles',
-        record_id: id,
-        old_value: oldValue ?? null,
-        new_value: data,
-      });
 
       return { data: data as Profile, error: null };
     } catch (error: any) {
@@ -148,7 +112,6 @@ export const usersService = {
   // Toggle user active status (Admin only)
   async toggleActive(id: string): Promise<ApiResponse<Profile>> {
     try {
-      const actorId = await resolveActorId();
       const { data: user, error: fetchError } = await supabase
         .from('profiles')
         .select('is_active')
@@ -166,15 +129,6 @@ export const usersService = {
 
       if (error) throw error;
 
-      fireAuditLog({
-        user_id: actorId,
-        action_type: 'update',
-        table_name: 'profiles',
-        record_id: id,
-        old_value: user ?? null,
-        new_value: data,
-      });
-
       return { data: data as Profile, error: null };
     } catch (error: any) {
       console.error('Error toggling user status:', error);
@@ -185,13 +139,6 @@ export const usersService = {
   // Change user role (Admin only)
   async changeRole(id: string, role: Profile['role']): Promise<ApiResponse<Profile>> {
     try {
-      const actorId = await resolveActorId();
-      const { data: oldValue } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', id)
-        .single();
-
       const { data, error } = await supabase
         .from('profiles')
         .update({ role })
@@ -200,15 +147,6 @@ export const usersService = {
         .single();
 
       if (error) throw error;
-
-      fireAuditLog({
-        user_id: actorId,
-        action_type: 'update',
-        table_name: 'profiles',
-        record_id: id,
-        old_value: oldValue ?? null,
-        new_value: data,
-      });
 
       return { data: data as Profile, error: null };
     } catch (error: any) {
@@ -314,10 +252,15 @@ export const usersService = {
   // Search users
   async search(query: string): Promise<ApiResponse<Profile[]>> {
     try {
+      const term = sanitizeSearchTerm(query);
+      if (!term) {
+        return { data: [], error: null };
+      }
+
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+        .or(`full_name.ilike.%${term}%,email.ilike.%${term}%`)
         .limit(20);
 
       if (error) throw error;

@@ -1,11 +1,12 @@
 // =====================================================
-// HEALTH MAP COMPONENT  v2
+// HEALTH MAP COMPONENT  v3 — "Prakash" design system
 // - Uses actual lat/lon from DB (NOT district name lookup)
 // - GPS session cache (persists until page reload / logout)
 // - Side-by-side layout via MapAndAlertsSection export
 // - Leaflet perf: preferCanvas, optimised tile settings
-// - Centers on user GPS when expanding
-// - Location permission prompt on first mount
+// - Token-driven marker colors + per-layer legend labels
+// - Severity markers carry a text count badge
+// - Honest offline notice (Leaflet CDN cannot work offline)
 // =====================================================
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -13,11 +14,11 @@ import {
   Platform, ActivityIndicator, ScrollView, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useNetInfo } from '@react-native-community/netinfo';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
-import { useTheme } from '../../lib/ThemeContext';
-import { AlertCard, EmptyState } from '../dashboards/DashboardShared';
+import { useTheme, Theme } from '../../lib/ThemeContext';
+import { AlertCard, EmptyState, getSeverityColor } from '../dashboards/DashboardShared';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 
 // Import WebView for native map rendering
@@ -249,14 +250,51 @@ interface MapMarker {
   color: string; count: number; label: string;
 }
 
-// ── Colors ────────────────────────────────────────────
-const URGENCY_COLOR: Record<string, string> = {
-  critical:'#DC2626', high:'#EA580C', medium:'#F59E0B', low:'#10B981',
+// ── Colors — all token-driven (zero hex literals) ─────
+// Campaigns get their own distinct teal (colors.secondary)
+// so they can never collide with low-urgency green.
+const layerColor = (layer: Layer, t: Theme): string => {
+  switch (layer) {
+    case 'alerts':    return t.accent;
+    case 'disease':   return t.danger;
+    case 'water':     return t.info;
+    case 'campaigns': return t.secondary;
+  }
 };
-const MULTI_COLOR = '#7C3AED';
-const LAYER_COLOR: Record<Layer, string> = {
-  alerts:'#F59E0B', disease:'#EF4444', water:'#3B82F6', campaigns:'#10B981',
+
+/** Marker color when a district mixes several severities/types. */
+const mixedColor = (t: Theme): string => t.primary;
+
+/** Soft background tone for a severity level (solid fill is CRITICAL's privilege). */
+const severityBgTone = (level: string, t: Theme): string => {
+  switch (level?.toLowerCase()) {
+    case 'critical': return t.dangerBg;
+    case 'high':     return t.offlineBg;   // saffron family
+    case 'medium':   return t.warningBg;
+    case 'low':      return t.successBg;
+    default:         return t.surfaceVariant;
+  }
 };
+
+/** Per-layer legend: color → label, computed from theme tokens.
+ *  Fixes the old duplicate-key bug where low-urgency green was
+ *  overwritten by the campaign label. */
+function legendLabelsFor(layer: Layer, t: Theme): Record<string, string> {
+  const base: Record<string, string> = { [mixedColor(t)]: 'Mixed' };
+  switch (layer) {
+    case 'alerts':
+      return {
+        [t.severityCritical]: 'Critical',
+        [t.severityHigh]:     'High',
+        [t.severityMedium]:   'Medium',
+        [t.severityLow]:      'Low',
+        ...base,
+      };
+    case 'disease':   return { [t.danger]: 'Disease reports', ...base };
+    case 'water':     return { [t.info]: 'Water reports', ...base };
+    case 'campaigns': return { [t.secondary]: 'Campaign', ...base };
+  }
+}
 
 // ── Build markers — GROUP BY DISTRICT, use avg GPS if available ──
 function groupByDistrict<T extends HealthMapRow>(
@@ -264,6 +302,7 @@ function groupByDistrict<T extends HealthMapRow>(
   getDistrict: (r: T) => string | null | undefined,
   getColor:    (r: T) => string,
   getLabel:    (r: T) => string,
+  multi:       string,
   getState?:   (r: T) => string | null | undefined,
   getLocationName?: (r: T) => string | null | undefined,
   hasCoords = true,
@@ -312,7 +351,7 @@ function groupByDistrict<T extends HealthMapRow>(
       : fallbackCoords(info.district, info.state, info.locationName)[1];
 
     const colorArr = Array.from(info.colors);
-    const color = colorArr.length > 1 ? MULTI_COLOR : colorArr[0];
+    const color = colorArr.length > 1 ? multi : colorArr[0];
     const uniqueLabels = [...new Set(info.labels)].slice(0, 3).join(', ') || info.district;
     const distPretty = info.district.replace(/\b\w/g, c => c.toUpperCase());
 
@@ -322,44 +361,48 @@ function groupByDistrict<T extends HealthMapRow>(
 
 type AlertLike = AlertRow | AlertLayerRow;
 
-function buildAlertMarkers(alerts: AlertLike[]): MapMarker[] {
+function buildAlertMarkers(alerts: AlertLike[], t: Theme): MapMarker[] {
   return groupByDistrict(
     alerts,
     r => r.district,
-    r => URGENCY_COLOR[r.urgency_level ?? ''] ?? '#F59E0B',
+    r => getSeverityColor(r.urgency_level ?? '', t),
     r => `${(r.urgency_level ?? '').charAt(0).toUpperCase() + (r.urgency_level ?? '').slice(1)} Alert`,
+    mixedColor(t),
     r => r.state,
     r => r.location_name,
   );
 }
 
-function buildDiseaseMarkers(data: DiseaseRow[]): MapMarker[] {
+function buildDiseaseMarkers(data: DiseaseRow[], t: Theme): MapMarker[] {
   return groupByDistrict(
     data,
     r => r.district,
-    _r => LAYER_COLOR.disease,
+    _r => layerColor('disease', t),
     r => r.disease_name ?? '',
+    mixedColor(t),
     r => r.state,
   );
 }
 
-function buildWaterMarkers(data: WaterRow[]): MapMarker[] {
+function buildWaterMarkers(data: WaterRow[], t: Theme): MapMarker[] {
   return groupByDistrict(
     data,
     r => r.district,
-    _r => LAYER_COLOR.water,
+    _r => layerColor('water', t),
     r => r.overall_quality ?? 'Water Report',
+    mixedColor(t),
     r => r.state,
   );
 }
 
-function buildCampaignMarkers(data: CampaignRow[]): MapMarker[] {
+function buildCampaignMarkers(data: CampaignRow[], t: Theme): MapMarker[] {
   // campaigns table has no lat/lon columns — use district centroid only
   return groupByDistrict(
     data,
     r => r.district,
-    _r => LAYER_COLOR.campaigns,
+    _r => layerColor('campaigns', t),
     r => (r.campaign_type ?? '').replace(/_/g, ' '),
+    mixedColor(t),
     r => r.state,
     r => r.location_name,
     false,  // hasCoords = false
@@ -375,15 +418,37 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-// ── Leaflet HTML ──────────────────────────────────────
-function buildLeafletHtml(markers: MapMarker[], activeLayer: Layer, userLat?: number, userLon?: number): string {
+// ── Leaflet HTML — colors interpolated from theme tokens ──
+interface MapHtmlTheme {
+  isDark: boolean;
+  pageBg: string;       // colors.background
+  legendBg: string;     // colors.card
+  legendText: string;   // colors.text
+  legendBorder: string; // colors.border
+  legendMuted: string;  // colors.textSecondary
+  badgeText: string;    // colors.textInverse — count numeral on marker
+  badgeRing: string;    // colors.card — ring around count badge
+  userColor: string;    // colors.primary — "you are here"
+  legendLabels: Record<string, string>;
+}
+
+function buildLeafletHtml(
+  markers: MapMarker[],
+  activeLayer: Layer,
+  mapTheme: MapHtmlTheme,
+  userLat?: number,
+  userLon?: number,
+): string {
   const markersJs = JSON.stringify(markers);
   const activeLayerJs = JSON.stringify(activeLayer);
+  const legendLabelsJs = JSON.stringify(mapTheme.legendLabels);
   const hasUserCoords = Number.isFinite(userLat) && Number.isFinite(userLon);
   const userJs = hasUserCoords ? `[${userLat},${userLon}]` : 'null';
   const initView = hasUserCoords
     ? `[${userLat},${userLon}],9`
     : '[20.5937,78.9629],5';
+  const tileBase = mapTheme.isDark ? 'dark_nolabels' : 'light_nolabels';
+  const tileLabels = mapTheme.isDark ? 'dark_only_labels' : 'light_only_labels';
 
   return `<!DOCTYPE html>
 <html>
@@ -394,11 +459,12 @@ function buildLeafletHtml(markers: MapMarker[], activeLayer: Layer, userLat?: nu
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:#0a0a0a;}
+  body{background:${mapTheme.pageBg};}
   #map{width:100%;height:100vh;}
-  .legend{background:rgba(15,15,15,0.9);border-radius:8px;padding:8px 12px;font-size:11px;color:#e5e7eb;border:1px solid #374151;max-width:160px;}
+  .legend{background:${mapTheme.legendBg};border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;color:${mapTheme.legendText};border:1px solid ${mapTheme.legendBorder};max-width:170px;}
   .li{display:flex;align-items:center;gap:6px;margin:3px 0;}
   .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .count-badge{min-width:26px;height:26px;border-radius:13px;border:2px solid ${mapTheme.badgeRing};color:${mapTheme.badgeText};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;font-family:system-ui,sans-serif;padding:0 5px;}
 </style>
 </head>
 <body>
@@ -413,7 +479,7 @@ var map = L.map('map', {
   zoomControl: true
 }).setView(${initView});
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileBase}/{z}/{x}/{y}{r}.png', {
   maxZoom: 13,
   maxNativeZoom: 12,
   subdomains: 'abcd',
@@ -423,7 +489,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
 }).addTo(map);
 
 // City labels only (lightweight second layer)
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileLabels}/{z}/{x}/{y}{r}.png', {
   maxZoom: 13, maxNativeZoom: 12, subdomains: 'abcd',
   updateWhenIdle: true, updateWhenZooming: false
 }).addTo(map);
@@ -431,6 +497,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.p
 var markers = ${markersJs};
 var activeLayer = ${activeLayerJs};
 var userPos = ${userJs};
+var legendLabels = ${legendLabelsJs};
 function escapeHtml(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;')
@@ -447,10 +514,6 @@ var layerStyle = {
   water: { baseRadius: 30000, perCountRadius: 9000,  maxRadius: 130000, fillOpacity: 0.16, strokeOpacity: 0.72, strokeWeight: 1.2 },
   campaigns: { baseRadius: 36000, perCountRadius: 11000, maxRadius: 160000, fillOpacity: 0.24, strokeOpacity: 0.88, strokeWeight: 1.8 }
 }[activeLayer] || { baseRadius: 30000, perCountRadius: 9000, maxRadius: 130000, fillOpacity: 0.16, strokeOpacity: 0.72, strokeWeight: 1.2 };
-var colorLabels = {
-  '#DC2626':'Critical','#EA580C':'High','#F59E0B':'Medium','#10B981':'Low',
-  '#EF4444':'Disease','#3B82F6':'Water','#10B981':'Campaign','#7C3AED':'Multi-type'
-};
 
 markers.forEach(function(m) {
   var areaRadiusMeters = Math.min(layerStyle.maxRadius, layerStyle.baseRadius + (m.count * layerStyle.perCountRadius));
@@ -469,30 +532,33 @@ markers.forEach(function(m) {
   var safeDistrict = escapeHtml(m.district);
   var safeLabel = escapeHtml(m.label);
   var safeCount = escapeHtml(m.count);
-  L.circleMarker([m.lat, m.lon], {
-    radius: 10 + Math.min(m.count * 2, 14),
-    color: m.color, fillColor: m.color,
-    fillOpacity: 0.72, opacity: 0.98, weight: 2.4
-  }).addTo(map).bindPopup(
+  // Severity marker with a text count badge — never color alone.
+  var badgeIcon = L.divIcon({
+    html: '<div class="count-badge" style="background:' + m.color + '">' + safeCount + '</div>',
+    className: '',
+    iconSize: null,
+    iconAnchor: [13, 13]
+  });
+  L.marker([m.lat, m.lon], { icon: badgeIcon }).addTo(map).bindPopup(
     '<b style="font-size:13px">' + safeDistrict + '</b><br/>' +
     '<span style="font-size:12px">' + safeLabel + '</span><br/>' +
-    '<span style="font-size:11px;color:#666">' + safeCount + ' record' + (m.count>1?'s':'') + '</span>'
+    '<span style="font-size:12px">' + safeCount + ' record' + (m.count>1?'s':'') + '</span>'
   );
-  seenColors[m.color] = colorLabels[m.color] || 'Data';
+  seenColors[m.color] = legendLabels[m.color] || 'Data';
 });
 
 if (userPos) {
   boundsPoints.push(userPos);
   L.circle(userPos, {
     radius: 9000,
-    color: '#3B82F6',
+    color: '${mapTheme.userColor}',
     weight: 1,
     opacity: 0.85,
-    fillColor: '#3B82F6',
+    fillColor: '${mapTheme.userColor}',
     fillOpacity: 0.12,
   }).addTo(map);
   var icon = L.divIcon({
-    html: '<div style="width:18px;height:18px;border-radius:50%;background:#3B82F6;border:3px solid #fff;box-shadow:0 0 12px rgba(59,130,246,0.95)"></div>',
+    html: '<div style="width:18px;height:18px;border-radius:50%;background:${mapTheme.userColor};border:3px solid ${mapTheme.badgeRing}"></div>',
     className:'', iconAnchor:[9,9]
   });
   L.marker(userPos, {icon:icon}).addTo(map).bindPopup('<b>Your Location</b>');
@@ -507,7 +573,7 @@ var legendHtml = '<div class="legend">';
 Object.keys(seenColors).forEach(function(c){
   legendHtml += '<div class="li"><div class="dot" style="background:'+c+'"></div>'+seenColors[c]+'</div>';
 });
-if(!Object.keys(seenColors).length) legendHtml += '<span style="color:#9ca3af">No data</span>';
+if(!Object.keys(seenColors).length) legendHtml += '<span style="color:${mapTheme.legendMuted}">No data</span>';
 legendHtml += '</div>';
 var leg = L.control({position:'bottomright'});
 leg.onAdd = function(){ var d=L.DomUtil.create('div'); d.innerHTML=legendHtml; return d; };
@@ -551,10 +617,10 @@ function WebMap({ html, height }: { html: string; height: number | string }) {
 
 // ── Layer config ──────────────────────────────────────
 const LAYERS: { id: Layer; label: string; icon: string }[] = [
-  { id:'alerts',    label:'Alerts',    icon:'warning'   },
-  { id:'disease',   label:'Disease',   icon:'fitness'   },
-  { id:'water',     label:'Water',     icon:'water'     },
-  { id:'campaigns', label:'Campaigns', icon:'megaphone' },
+  { id:'alerts',    label:'Alerts',    icon:'warning-outline'   },
+  { id:'disease',   label:'Disease',   icon:'fitness-outline'   },
+  { id:'water',     label:'Water',     icon:'water-outline'     },
+  { id:'campaigns', label:'Campaigns', icon:'megaphone-outline' },
 ];
 
 // ══════════════════════════════════════════════════════
@@ -574,7 +640,10 @@ interface MapPanelProps {
 const MapPanel: React.FC<MapPanelProps> = ({
   profile, alerts, userLat, userLon, onRequestLocate, locating, isExpanded, onOpenReport,
 }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const netInfo = useNetInfo();
+  // NetInfo reports isInternetReachable === null before the first probe — treat as online.
+  const offline = netInfo.isConnected === false || netInfo.isInternetReachable === false;
   const [activeLayer, setActiveLayer] = useState<Layer>('alerts');
   const [diseaseData,  setDiseaseData]  = useState<DiseaseRow[]>([]);
   const [waterData,    setWaterData]    = useState<WaterRow[]>([]);
@@ -673,19 +742,34 @@ const MapPanel: React.FC<MapPanelProps> = ({
 
   const markers = React.useMemo((): MapMarker[] => {
     switch (activeLayer) {
-      case 'alerts':    return buildAlertMarkers(alertSource);
-      case 'disease':   return buildDiseaseMarkers(diseaseData);
-      case 'water':     return buildWaterMarkers(waterData);
-      case 'campaigns': return buildCampaignMarkers(campaignData);
+      case 'alerts':    return buildAlertMarkers(alertSource, colors);
+      case 'disease':   return buildDiseaseMarkers(diseaseData, colors);
+      case 'water':     return buildWaterMarkers(waterData, colors);
+      case 'campaigns': return buildCampaignMarkers(campaignData, colors);
     }
-  }, [activeLayer, alertSource, diseaseData, waterData, campaignData]);
+  }, [activeLayer, alertSource, diseaseData, waterData, campaignData, colors]);
 
   const html = React.useMemo(
-    () => buildLeafletHtml(markers, activeLayer, userLat, userLon),
-    [markers, activeLayer, userLat, userLon]
+    () => buildLeafletHtml(
+      markers,
+      activeLayer,
+      {
+        isDark,
+        pageBg: colors.background,
+        legendBg: colors.card,
+        legendText: colors.text,
+        legendBorder: colors.border,
+        legendMuted: colors.textSecondary,
+        badgeText: colors.textInverse,
+        badgeRing: colors.card,
+        userColor: colors.primary,
+        legendLabels: legendLabelsFor(activeLayer, colors),
+      },
+      userLat,
+      userLon,
+    ),
+    [markers, activeLayer, userLat, userLon, colors, isDark]
   );
-
-  const accentColor = LAYER_COLOR[activeLayer];
 
   const reportItems = React.useMemo(() => {
     if (activeLayer === 'disease') {
@@ -697,22 +781,43 @@ const MapPanel: React.FC<MapPanelProps> = ({
     return [];
   }, [activeLayer, diseaseData, waterData]);
 
-  const showReportOverlay = (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
-  const showAlertOverlay = !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
+  const showReportOverlay = !offline && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
+  const showAlertOverlay = !offline && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
   const alertItems = React.useMemo(() => alertSource.slice(0, 8), [alertSource]);
+  const mapHeight = isExpanded ? '100%' : (IS_MOBILE ? 250 : 195);
 
   return (
     <View style={{ flex: 1 }}>
       <View style={[mp.mapFrame, isExpanded && mp.mapFrameExpanded]}>
-        {/* Map — WebView on native, iframe on web */}
-        <WebMap html={html} height={isExpanded ? '100%' : (IS_MOBILE ? 250 : 195)} />
+        {offline ? (
+          /* The Leaflet CDN map cannot work offline — say so honestly. */
+          <View
+            style={[
+              mp.offlinePanel,
+              { backgroundColor: colors.offlineBg, borderColor: colors.offline },
+              typeof mapHeight === 'number' ? { height: mapHeight } : { flex: 1 },
+            ]}
+            accessibilityLiveRegion="polite"
+          >
+            <Ionicons name="cloud-offline-outline" size={24} color={colors.offline} />
+            <Text style={[mp.offlineTitle, { color: colors.text }]}>You're offline — map unavailable</Text>
+            <Text style={[mp.offlineBody, { color: colors.textSecondary }]}>
+              The live map needs a connection. It will come back when you're online; alerts saved on this phone still show here.
+            </Text>
+          </View>
+        ) : (
+          /* Map — WebView on native, iframe on web */
+          <WebMap html={html} height={mapHeight} />
+        )}
         {showAlertOverlay && (
-          <View style={[mp.alertOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-            <Text style={[mp.alertOverlayTitle, { color: colors.text }]}>Alerts</Text>
+          <View style={[mp.alertOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[mp.overlayTitle, { color: colors.textSecondary }]}>ALERTS</Text>
             <ScrollView style={mp.alertList} showsVerticalScrollIndicator={false}>
               {alertItems.map((item, index) => {
                 const urgency = (item.urgency_level ?? '').toLowerCase();
-                const badgeColor = URGENCY_COLOR[urgency] ?? '#F59E0B';
+                const isCritical = urgency === 'critical';
+                const badgeFg = isCritical ? colors.textInverse : getSeverityColor(urgency, colors);
+                const badgeBg = isCritical ? colors.danger : severityBgTone(urgency, colors);
                 const title = (item.title ?? 'Untitled alert').trim();
                 const meta = [
                   item.district?.trim(),
@@ -726,8 +831,8 @@ const MapPanel: React.FC<MapPanelProps> = ({
                       <Text style={[mp.alertTitleText, { color: colors.text }]} numberOfLines={1}>
                         {title}
                       </Text>
-                      <View style={[mp.alertBadge, { backgroundColor: badgeColor + '22' }]}> 
-                        <Text style={[mp.alertBadgeText, { color: badgeColor }]}> 
+                      <View style={[mp.alertBadge, { backgroundColor: badgeBg }]}>
+                        <Text style={[mp.alertBadgeText, { color: badgeFg }]} maxFontSizeMultiplier={1.3}>
                           {(urgency || 'medium').toUpperCase()}
                         </Text>
                       </View>
@@ -744,9 +849,9 @@ const MapPanel: React.FC<MapPanelProps> = ({
           </View>
         )}
         {showReportOverlay && (
-          <View style={[mp.reportOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-            <Text style={[mp.reportOverlayTitle, { color: colors.text }]}>
-              {activeLayer === 'disease' ? 'Disease reports' : 'Water reports'}
+          <View style={[mp.reportOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[mp.overlayTitle, { color: colors.textSecondary }]}>
+              {activeLayer === 'disease' ? 'DISEASE REPORTS' : 'WATER REPORTS'}
             </Text>
             <ScrollView style={mp.reportList} showsVerticalScrollIndicator={false}>
               {reportItems.map((item, index) => {
@@ -765,11 +870,12 @@ const MapPanel: React.FC<MapPanelProps> = ({
                     }}
                     disabled={!id || !onOpenReport}
                     accessibilityRole="link"
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Text style={[mp.reportLink, { color: LAYER_COLOR[activeLayer] }]} numberOfLines={1}>
+                    <Text style={[mp.reportLink, { color: isDark ? colors.primary : colors.primaryDark }]} numberOfLines={1}>
                       {label}
                     </Text>
-                    <Ionicons name="chevron-forward" size={12} color={LAYER_COLOR[activeLayer]} />
+                    <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
                   </TouchableOpacity>
                 );
               })}
@@ -778,43 +884,61 @@ const MapPanel: React.FC<MapPanelProps> = ({
         )}
       </View>
 
-      {/* Layer chips */}
+      {/* Layer chips — selection is never conveyed by tint alone */}
       <View style={[mp.filterBar, isExpanded ? mp.filterBarExpanded : mp.filterBarInline]}>
         <View style={mp.filterContent}>
-          {LAYERS.map(l => (
-            <TouchableOpacity
-              key={l.id}
-              style={[mp.chip, {
-                backgroundColor: activeLayer === l.id ? LAYER_COLOR[l.id] : colors.background,
-                borderColor: LAYER_COLOR[l.id],
-              }]}
-              onPress={() => { setActiveLayer(l.id); }}
-            >
-              <Ionicons name={l.icon as any} size={IS_MOBILE ? 14 : 11} color={activeLayer === l.id ? '#fff' : LAYER_COLOR[l.id]} />
-              <Text style={[mp.chipTxt, { color: activeLayer === l.id ? '#fff' : LAYER_COLOR[l.id] }]}>{l.label}</Text>
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={[mp.chip, { backgroundColor: colors.background, borderColor: '#3B82F6' }]} onPress={onRequestLocate} disabled={locating}>
+          {LAYERS.map(l => {
+            const selected = activeLayer === l.id;
+            const chipColor = layerColor(l.id, colors);
+            return (
+              <TouchableOpacity
+                key={l.id}
+                style={[mp.chip, {
+                  backgroundColor: selected ? chipColor : colors.card,
+                  borderColor: selected ? chipColor : colors.border,
+                }]}
+                onPress={() => { setActiveLayer(l.id); }}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                accessibilityLabel={`${l.label} layer${selected ? ', selected' : ''}`}
+              >
+                {selected
+                  ? <Ionicons name="checkmark" size={14} color={colors.textInverse} />
+                  : <Ionicons name={l.icon as any} size={14} color={colors.textSecondary} />
+                }
+                <Text style={[mp.chipTxt, { color: selected ? colors.textInverse : colors.text }]} maxFontSizeMultiplier={1.3}>
+                  {l.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+          <TouchableOpacity
+            style={[mp.chip, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={onRequestLocate}
+            disabled={locating}
+            accessibilityRole="button"
+            accessibilityLabel="Center map on my location"
+          >
             {locating
-              ? <ActivityIndicator size="small" color="#3B82F6" />
-              : <><Ionicons name="locate" size={IS_MOBILE ? 14 : 11} color="#3B82F6" /><Text style={[mp.chipTxt, { color:'#3B82F6' }]}>GPS</Text></>
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <><Ionicons name="locate-outline" size={14} color={colors.primary} /><Text style={[mp.chipTxt, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>GPS</Text></>
             }
           </TouchableOpacity>
         </View>
-        {loadingData && <ActivityIndicator size="small" color={accentColor} style={{ marginTop: 6, alignSelf: 'center' }} />}
+        {loadingData && <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 6, alignSelf: 'center' }} />}
       </View>
 
       {/* Native fallback if WebView unavailable */}
       {Platform.OS !== 'web' && !WebViewComponent && (
-        <View style={[mp.nativeFallback, { backgroundColor: colors.background, height: isExpanded ? 400 : 195 }]}>
-          <Ionicons name="map" size={28} color={colors.textSecondary} />
-          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 6, textAlign:'center' }}>
+        <View style={[mp.nativeFallback, { backgroundColor: colors.surface, borderColor: colors.borderLight, height: isExpanded ? 400 : 195 }]}>
+          <Ionicons name="map-outline" size={28} color={colors.textSecondary} />
+          <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 6, textAlign: 'center', fontVariant: ['tabular-nums'] }}>
             {markers.length} district{markers.length !== 1 ? 's' : ''} with {activeLayer} data
           </Text>
           {markers.slice(0, 4).map((m, i) => (
-            <View key={i} style={{ flexDirection:'row', alignItems:'center', gap:6, marginTop:4 }}>
-              <View style={{ width:8, height:8, borderRadius:4, backgroundColor:m.color }} />
-              <Text style={{ color:colors.text, fontSize:11 }}>{m.district} ({m.count})</Text>
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: m.color }} />
+              <Text style={{ color: colors.text, fontSize: 12, fontVariant: ['tabular-nums'] }}>{m.district} ({m.count})</Text>
             </View>
           ))}
         </View>
@@ -826,11 +950,21 @@ const MapPanel: React.FC<MapPanelProps> = ({
 const IS_MOBILE = Platform.OS !== 'web';
 
 const mp = StyleSheet.create({
-  mapFrame: { position: 'relative', overflow: 'hidden' },
+  mapFrame: { position: 'relative', overflow: 'hidden', borderRadius: 8 },
   mapFrameExpanded: { flex: 1, minHeight: 0 },
+  offlinePanel: {
+    borderWidth: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    gap: 6,
+  },
+  offlineTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', textAlign: 'center' },
+  offlineBody: { fontSize: 13, lineHeight: 18, fontWeight: '500', textAlign: 'center' },
   filterBar: { marginTop: 8, marginBottom: 2 },
-  filterBarInline: { minHeight: 42 },
-  filterBarExpanded: { minHeight: 52 },
+  filterBarInline: { minHeight: 48 },
+  filterBarExpanded: { minHeight: 56 },
   filterContent: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -840,65 +974,52 @@ const mp = StyleSheet.create({
     paddingHorizontal: 2,
   },
   chip: {
-    flexDirection:'row',
-    alignItems:'center',
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: IS_MOBILE ? 5 : 4,
-    minHeight: 34,
-    maxHeight: 34,
-    minWidth: IS_MOBILE ? 94 : 86,
-    paddingHorizontal: IS_MOBILE ? 10 : 9,
-    borderRadius: 17,
-    borderWidth:1.5,
+    gap: 5,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    borderWidth: 1.5,
   },
-  chipTxt:     { fontSize: IS_MOBILE ? 12 : 11, fontWeight:'700' },
-  nativeFallback: { alignItems:'center', justifyContent:'center', borderRadius:10 },
+  chipTxt:     { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  nativeFallback: { alignItems: 'center', justifyContent: 'center', borderRadius: 8, borderWidth: 1 },
   reportOverlay: {
     position: 'absolute',
     right: 8,
     bottom: 8,
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: 8,
     padding: 8,
-    maxWidth: IS_MOBILE ? 170 : 200,
+    maxWidth: IS_MOBILE ? 180 : 210,
     maxHeight: IS_MOBILE ? 140 : 160,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    elevation: 6,
   },
-  reportOverlayTitle: { fontSize: 11, fontWeight: '800', marginBottom: 6 },
+  overlayTitle: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
   reportList: { maxHeight: IS_MOBILE ? 110 : 130 },
-  reportItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, paddingVertical: 4 },
-  reportLink: { fontSize: 11, fontWeight: '700', textDecorationLine: 'underline', flex: 1 },
+  reportItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, paddingVertical: 6, minHeight: 32 },
+  reportLink: { fontSize: 12, lineHeight: 16, fontWeight: '700', textDecorationLine: 'underline', flex: 1 },
   alertOverlay: {
     position: 'absolute',
     left: 8,
     top: 8,
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: 8,
     padding: 8,
-    maxWidth: IS_MOBILE ? 190 : 220,
+    maxWidth: IS_MOBILE ? 200 : 230,
     maxHeight: IS_MOBILE ? 140 : 160,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    elevation: 6,
   },
-  alertOverlayTitle: { fontSize: 11, fontWeight: '800', marginBottom: 6 },
   alertList: { maxHeight: IS_MOBILE ? 110 : 130 },
   alertItem: { paddingVertical: 4 },
   alertTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  alertTitleText: { fontSize: 11, fontWeight: '700', flex: 1 },
-  alertMeta: { fontSize: 10, marginTop: 2 },
+  alertTitleText: { fontSize: 12, lineHeight: 16, fontWeight: '700', flex: 1 },
+  alertMeta: { fontSize: 12, lineHeight: 16, marginTop: 2 },
   alertBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 8,
+    borderRadius: 999,
   },
-  alertBadgeText: { fontSize: 9, fontWeight: '700' },
+  alertBadgeText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
 });
 
 // ══════════════════════════════════════════════════════
@@ -1021,8 +1142,6 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
     }
   }, [showLocationAlert]);
 
-  const accentColor = '#3B82F6';
-
   return (
     <>
       {/* ── Web-only fallback modal for location alerts ── */}
@@ -1032,28 +1151,24 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
         animationType="fade"
         onRequestClose={() => setWebLocationAlert(null)}
       >
-        <View style={s.popupOverlay}>
-          <View style={[s.popup, {
-            backgroundColor: isDark ? 'rgba(10,10,10,0.97)' : '#FFFFFF',
-            borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(59,130,246,0.3)',
-          }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
-            <View style={[s.popupIconWrap, { backgroundColor: '#3B82F618' }]}>
-              <Ionicons name="information-circle" size={32} color="#3B82F6" />
+        <View style={[s.popupOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[s.popup, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[s.popupIconWrap, { backgroundColor: colors.primary + '14' }]}>
+              <Ionicons name="information-circle-outline" size={32} color={colors.primary} />
             </View>
-            <Text style={[s.popupTitle, { color: isDark ? '#F1F5F9' : '#1E293B' }]}>
+            <Text style={[s.popupTitle, { color: colors.text }]}>
               {webLocationAlert?.title}
             </Text>
-            <Text style={[s.popupBody, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+            <Text style={[s.popupBody, { color: colors.textSecondary }]}>
               {webLocationAlert?.message}
             </Text>
-            <TouchableOpacity style={s.popupAllow} onPress={() => setWebLocationAlert(null)}>
-              <LinearGradient
-                colors={['#3B82F6', '#2563EB']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={s.popupAllowGrad}
-              >
-                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>OK</Text>
-              </LinearGradient>
+            <TouchableOpacity
+              style={[s.popupAllow, { backgroundColor: colors.primary }]}
+              onPress={() => setWebLocationAlert(null)}
+              accessibilityRole="button"
+              accessibilityLabel="OK"
+            >
+              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: '700' }}>OK</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1061,75 +1176,59 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
 
       {/* ── Location permission — MODAL POPUP on first load ── */}
       <Modal visible={showLocPrompt} transparent animationType="fade" onRequestClose={() => setShowLocPrompt(false)}>
-        <View style={s.popupOverlay}>
-          <View style={[s.popup, {
-            backgroundColor: isDark ? 'rgba(10,10,10,0.97)' : '#FFFFFF',
-            borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(59,130,246,0.3)',
-          }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
-            {isDark && (
-              <LinearGradient
-                colors={['rgba(59,130,246,0.08)', 'rgba(0,0,0,0)']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                style={StyleSheet.absoluteFill}
-                pointerEvents="none"
-              />
-            )}
-            <View style={[s.popupIconWrap, { backgroundColor: '#3B82F618' }]}>
-              <Ionicons name="location" size={32} color="#3B82F6" />
+        <View style={[s.popupOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[s.popup, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[s.popupIconWrap, { backgroundColor: colors.primary + '14' }]}>
+              <Ionicons name="location-outline" size={32} color={colors.primary} />
             </View>
-            <Text style={[s.popupTitle, { color: isDark ? '#F1F5F9' : '#1E293B' }]}>Enable Location</Text>
-            <Text style={[s.popupBody, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+            <Text style={[s.popupTitle, { color: colors.text }]}>Enable Location</Text>
+            <Text style={[s.popupBody, { color: colors.textSecondary }]}>
               Allow HealthDrop to center the map on your location so you see health alerts in your area first.
             </Text>
             <View style={s.popupActions}>
-              <TouchableOpacity style={[s.popupDismiss, { borderColor: isDark ? 'rgba(255,255,255,0.12)' : '#E2E8F0' }]} onPress={() => setShowLocPrompt(false)}>
-                <Text style={{ color: isDark ? '#94A3B8' : '#64748B', fontSize: 14, fontWeight: '600' }}>Not now</Text>
+              <TouchableOpacity
+                style={[s.popupDismiss, { borderColor: colors.inputBorder }]}
+                onPress={() => setShowLocPrompt(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Not now"
+              >
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>Not now</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.popupAllow} onPress={() => { setShowLocPrompt(false); requestGPS(); }}>
-                <LinearGradient
-                  colors={['#3B82F6', '#2563EB']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={s.popupAllowGrad}
-                >
-                  <Ionicons name="locate" size={16} color="#fff" />
-                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Allow Location</Text>
-                </LinearGradient>
+              <TouchableOpacity
+                style={[s.popupAllow, { backgroundColor: colors.primary, flexDirection: 'row', gap: 8 }]}
+                onPress={() => { setShowLocPrompt(false); requestGPS(); }}
+                accessibilityRole="button"
+                accessibilityLabel="Allow location"
+              >
+                <Ionicons name="locate-outline" size={16} color={colors.onPrimary} />
+                <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: '700' }}>Allow Location</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* ── Section heading — styled like QuickActions/Section in DashboardShared ── */}
+      {/* ── Section heading — eyebrow-and-count ── */}
       <View style={[s.sectionHeader, { marginHorizontal: 16, marginTop: 8, marginBottom: 6 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={[s.sectionIconWrap, { backgroundColor: '#F59E0B18' }]}>
-            <Ionicons name="alert-circle" size={15} color="#F59E0B" />
-          </View>
-          <Text style={[s.sectionTitle, { color: isDark ? '#F1F5F9' : '#1E293B' }]}>Alerts &amp; Map</Text>
+        <Text style={[s.sectionTitle, { color: colors.textSecondary }]} numberOfLines={1}>
+          ALERTS &amp; MAP
           {alerts.length > 0 && (
-            <View style={[s.alertCountBadge, { backgroundColor: '#F59E0B22' }]}>
-              <Text style={{ fontSize: 11, fontWeight: '800', color: '#F59E0B' }}>{alerts.length}</Text>
-            </View>
+            <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${alerts.length}`}</Text>
           )}
-        </View>
+        </Text>
       </View>
 
       {/* ── Side-by-side row ── */}
       <View style={s.row}>
         {/* ── Left: Map ── */}
-        <View style={[s.mapPanel, { backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden' }]}>
-          {isDark && (
-            <LinearGradient
-              colors={['rgba(59,130,246,0.06)', 'rgba(0,0,0,0)']}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            />
-          )}
+        <View style={[
+          s.mapPanel,
+          { backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden' },
+          !isDark && s.cardShadow,
+        ]}>
           <View style={s.panelHeader}>
-            <Ionicons name="map" size={13} color={accentColor} />
-            <Text style={[s.panelTitle, { color: colors.text }]}>Health Map</Text>
+            <Ionicons name="map-outline" size={14} color={colors.textSecondary} />
+            <Text style={[s.panelTitle, { color: colors.textSecondary }]}>HEALTH MAP</Text>
           </View>
           <View style={{ flex: 1, position: 'relative' }}>
             {!expanded ? (
@@ -1143,38 +1242,35 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
                 onOpenReport={onOpenReport}
               />
             ) : (
-              <View style={[s.inlineMapPaused, { backgroundColor: colors.background, borderColor: colors.border }]}> 
-                <Ionicons name="expand" size={18} color="#3B82F6" />
+              <View style={[s.inlineMapPaused, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Ionicons name="expand-outline" size={18} color={colors.textSecondary} />
                 <Text style={[s.inlineMapPausedText, { color: colors.textSecondary }]}>Map opened in full screen</Text>
               </View>
             )}
             <TouchableOpacity
-              style={[s.mapExpandFab, { backgroundColor: '#0B1220CC', borderColor: '#3B82F6' }]}
+              style={[s.mapExpandFab, { backgroundColor: colors.card, borderColor: colors.border }]}
               onPress={() => setExpanded(true)}
               accessibilityRole="button"
               accessibilityLabel="Expand map"
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             >
-              <Ionicons name="expand" size={18} color="#3B82F6" />
+              <Ionicons name="expand-outline" size={18} color={colors.primary} />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* ── Right: Alerts ── */}
-        <View style={[s.alertPanel, { backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden' }]}>
-          {isDark && (
-            <LinearGradient
-              colors={['rgba(245,158,11,0.05)', 'rgba(0,0,0,0)']}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            />
-          )}
+        <View style={[
+          s.alertPanel,
+          { backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden' },
+          !isDark && s.cardShadow,
+        ]}>
           <View style={s.panelHeader}>
-            <Ionicons name="warning" size={13} color="#F59E0B" />
-            <Text style={[s.panelTitle, { color: colors.text }]}>{alertSectionTitle}</Text>
-            <View style={[s.countBadge, { backgroundColor: alerts.length > 0 ? '#F59E0B22' : colors.background }]}>
-              <Text style={{ fontSize: 10, fontWeight: '700', color: alerts.length > 0 ? '#F59E0B' : colors.textSecondary }}>{alerts.length}</Text>
-            </View>
+            <Ionicons name="warning-outline" size={14} color={colors.textSecondary} />
+            <Text style={[s.panelTitle, { color: colors.textSecondary }]} numberOfLines={1}>
+              {alertSectionTitle.toUpperCase()}
+              <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${alerts.length}`}</Text>
+            </Text>
           </View>
           <ScrollView
             style={{ flex: 1 }}
@@ -1184,7 +1280,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             onContentSizeChange={(_, h) => setAlertsContentHeight(h)}
           >
             {alerts.length === 0
-              ? <EmptyState icon="checkmark-circle-outline" color="#10B981" title={emptyTitle} subtitle={emptySubtitle} />
+              ? <EmptyState icon="checkmark-circle-outline" color={colors.success} title={emptyTitle} subtitle={emptySubtitle} />
               : alerts.map(a => (
                   <AlertCard
                     key={a.id}
@@ -1195,9 +1291,14 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             }
           </ScrollView>
           {hasAlertsOverflow && onViewAllAlerts && (
-            <TouchableOpacity style={[s.readMoreBtn, { borderColor: colors.border, backgroundColor: colors.background }]} onPress={onViewAllAlerts}>
-              <Text style={[s.readMoreText, { color: '#F59E0B' }]}>Read more alerts</Text>
-              <Ionicons name="chevron-forward" size={14} color="#F59E0B" />
+            <TouchableOpacity
+              style={[s.readMoreBtn, { borderColor: colors.border, backgroundColor: colors.surface }]}
+              onPress={onViewAllAlerts}
+              accessibilityRole="button"
+              accessibilityLabel="Read more alerts"
+            >
+              <Text style={[s.readMoreText, { color: isDark ? colors.primary : colors.primaryDark }]}>Read more alerts</Text>
+              <Ionicons name="chevron-forward" size={14} color={isDark ? colors.primary : colors.primaryDark} />
             </TouchableOpacity>
           )}
         </View>
@@ -1212,19 +1313,26 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
           statusBarTranslucent={Platform.OS === 'android'}
           onRequestClose={() => setExpanded(false)}
         >
-          <View style={[
-            s.modal,
-            { backgroundColor: isDark ? '#0a0a0a' : '#f1f5f9' },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
-          ]}>
+          <View style={[s.modal, { backgroundColor: colors.background }]}>
             {/* Modal header */}
-            <View style={[s.modalHeader, { backgroundColor: isDark ? '#111' : '#fff', borderBottomColor: colors.border }]}> 
-              <TouchableOpacity onPress={() => setExpanded(false)} style={s.closeBtn}>
+            <View style={[s.modalHeader, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+              <TouchableOpacity
+                onPress={() => setExpanded(false)}
+                style={s.closeBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Close map"
+              >
                 <Ionicons name="close" size={22} color={colors.text} />
               </TouchableOpacity>
               <Text style={[s.modalTitle, { color: colors.text }]}>Health Map</Text>
-              <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#3B82F632' }]} onPress={requestGPS} disabled={locating}>
-                {locating ? <ActivityIndicator size="small" color="#3B82F6" /> : <Ionicons name="locate" size={16} color="#3B82F6" />}
+              <TouchableOpacity
+                style={[s.iconBtn, { backgroundColor: colors.primary + '14' }]}
+                onPress={requestGPS}
+                disabled={locating}
+                accessibilityRole="button"
+                accessibilityLabel="Center map on my location"
+              >
+                {locating ? <ActivityIndicator size="small" color={colors.primary} /> : <Ionicons name="locate-outline" size={18} color={colors.primary} />}
               </TouchableOpacity>
             </View>
 
@@ -1249,65 +1357,69 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
 };
 
 const s = StyleSheet.create({
-  // Section heading
-  sectionHeader:    { flexDirection:'row', alignItems:'center', justifyContent:'space-between' },
-  sectionIconWrap:  { width:28, height:28, borderRadius:8, alignItems:'center', justifyContent:'center' },
-  sectionTitle:     { fontSize:15, fontWeight:'800', letterSpacing:-0.2 },
-  alertCountBadge:  { paddingHorizontal:7, paddingVertical:2, borderRadius:8, minWidth:22, alignItems:'center' },
+  // Light-mode-only shadow (single recipe)
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  // Section heading — eyebrow-and-count
+  sectionHeader:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 20 },
+  sectionTitle:     { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', flexShrink: 1 },
   // Location permission popup (centered modal)
-  popupOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.70)', alignItems:'center', justifyContent:'center', padding:24 },
-  popup:        { borderRadius:20, borderWidth:1, padding:28, width:'100%', maxWidth:360, alignItems:'center', overflow:'hidden' },
-  popupIconWrap:{ width:64, height:64, borderRadius:20, alignItems:'center', justifyContent:'center', marginBottom:16 },
-  popupTitle:   { fontSize:19, fontWeight:'800', marginBottom:8, textAlign:'center' },
-  popupBody:    { fontSize:13, lineHeight:20, textAlign:'center', marginBottom:24 },
-  popupActions: { flexDirection:'row', gap:12, width:'100%' },
-  popupDismiss: { flex:1, borderWidth:1, borderRadius:12, paddingVertical:13, alignItems:'center', justifyContent:'center' },
-  popupAllow:   { flex:1.5, borderRadius:12, overflow:'hidden' },
-  popupAllowGrad:{ paddingVertical:13, paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:8 },
+  popupOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  popup:        { borderRadius: 16, borderWidth: 1, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', overflow: 'hidden' },
+  popupIconWrap:{ width: 64, height: 64, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  popupTitle:   { fontSize: 16, lineHeight: 22, fontWeight: '800', marginBottom: 8, textAlign: 'center' },
+  popupBody:    { fontSize: 13, lineHeight: 18, fontWeight: '500', textAlign: 'center', marginBottom: 24 },
+  popupActions: { flexDirection: 'row', gap: 12, width: '100%' },
+  popupDismiss: { flex: 1, borderWidth: 1.5, borderRadius: 12, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+  popupAllow:   { flex: 1.5, borderRadius: 12, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
 
   // Side-by-side row (stacks vertically on mobile)
-  row:        { flexDirection: IS_MOBILE ? 'column' : 'row', marginHorizontal:16, marginBottom:12, minHeight: IS_MOBILE ? undefined : 280 },
+  row:        { flexDirection: IS_MOBILE ? 'column' : 'row', marginHorizontal: 16, marginBottom: 12, minHeight: IS_MOBILE ? undefined : 280 },
   mapPanel:   {
     flex: IS_MOBILE ? undefined : 1.1,
     padding: IS_MOBILE ? 12 : 10,
-    minWidth:0,
+    minWidth: 0,
     minHeight: IS_MOBILE ? 320 : undefined,
     borderWidth: 1,
-    borderRadius: 16,
-    marginBottom: IS_MOBILE ? 10 : 0,
-    marginRight: IS_MOBILE ? 0 : 10,
+    borderRadius: 12,
+    marginBottom: IS_MOBILE ? 12 : 0,
+    marginRight: IS_MOBILE ? 0 : 12,
   },
   alertPanel: {
     flex: IS_MOBILE ? undefined : 1,
     padding: IS_MOBILE ? 12 : 10,
-    minWidth:0,
+    minWidth: 0,
     minHeight: IS_MOBILE ? 200 : undefined,
     maxHeight: IS_MOBILE ? 300 : undefined,
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 12,
   },
-  panelHeader:{ flexDirection:'row', alignItems:'center', gap:5, marginBottom:8 },
-  panelTitle: { fontSize:13, fontWeight:'700', flex:1 },
-  countBadge: { minWidth:20, height:20, borderRadius:10, alignItems:'center', justifyContent:'center', paddingHorizontal:4 },
+  panelHeader:{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
+  panelTitle: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', flex: 1 },
   inlineMapPaused: {
     flex: 1,
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
   },
   inlineMapPausedText: {
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '600',
   },
   mapExpandFab: {
     position: 'absolute',
     right: 10,
     top: 10,
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -1315,25 +1427,26 @@ const s = StyleSheet.create({
   readMoreBtn: {
     marginTop: 8,
     borderWidth: 1,
-    borderRadius: 10,
-    minHeight: 34,
-    paddingHorizontal: 10,
+    borderRadius: 12,
+    minHeight: 44,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
   },
   readMoreText: {
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '700',
   },
 
   // Full-screen modal
-  modal:       { flex:1 },
-  modalHeader: { flexDirection:'row', alignItems:'center', paddingHorizontal:12, paddingVertical:10, paddingTop:Platform.OS==='ios'?52:12, borderBottomWidth:1, gap:8 },
-  modalTitle:  { flex:1, fontSize:16, fontWeight:'700', textAlign:'center' },
-  closeBtn:    { width:36, height:36, borderRadius:18, alignItems:'center', justifyContent:'center' },
-  iconBtn:     { width:32, height:32, borderRadius:16, alignItems:'center', justifyContent:'center' },
+  modal:       { flex: 1 },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, paddingTop: Platform.OS === 'ios' ? 52 : 12, borderBottomWidth: 1, gap: 8 },
+  modalTitle:  { flex: 1, fontSize: 16, lineHeight: 22, fontWeight: '700', textAlign: 'center' },
+  closeBtn:    { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  iconBtn:     { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 });
 
 // Keep old default export for backward compat (unused now — dashboards use MapAndAlertsSection)

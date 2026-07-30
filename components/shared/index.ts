@@ -9,3 +9,4 @@ export { InputField } from './InputField';
 export { SelectDropdown } from './SelectDropdown';
 export { StateDropdown } from './StateDropdown';
 export { SubmissionModal } from './SubmissionModal';
+export { HealthMapComponent, MapAndAlertsSection } from './HealthMapComponent';

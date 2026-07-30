@@ -1,30 +1,26 @@
 // =====================================================
-// SHARED DASHBOARD COMPONENTS — POLISHED v2
-// Gradient headers, animated stat cards, alert cards,
-// tool cards, quick actions — used by all role dashboards
+// SHARED DASHBOARD COMPONENTS — "Prakash" design system
+// Flat headerBg header + Role Ribbon, Big Number stat
+// cards, eyebrow section headers, directive-first alert
+// cards, skeleton / error / quiet-zero states, Sync
+// Pebble — used by all role dashboards.
 // =====================================================
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Pressable,
-  Animated, ViewStyle, Modal, ScrollView, Platform,
+  Animated, ViewStyle, StyleProp, DimensionValue, Modal, ScrollView, Platform,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { useNetInfo } from '@react-native-community/netinfo';
+import { useTheme, Theme, themes, radii, spacing } from '../../lib/ThemeContext';
+import { usePendingSync } from '../../src/services/offlineSync';
 import { Profile } from '../../types';
 
 // ─────────────────────────────────────────────────────
 //  Role design tokens
+//  The role accent appears in exactly two places per
+//  screen: the 4px Role Ribbon and the avatar/badge ring.
 // ─────────────────────────────────────────────────────
-export const ROLE_GRADIENTS: Record<string, [string, string, string]> = {
-  super_admin:      ['#0F172A', '#1E3A5F', '#1976D2'],
-  health_admin:     ['#0D3B2E', '#0F5132', '#00897B'],
-  clinic:           ['#1A1033', '#2D1B69', '#6D28D9'],
-  asha_worker:      ['#2D1B0E', '#7C2D12', '#EA580C'],
-  volunteer:        ['#0A2E1A', '#14532D', '#16A34A'],
-  district_officer: ['#1E1B4B', '#312E81', '#4338CA'],
-};
-
 export const ROLE_ACCENT: Record<string, string> = {
   super_admin:      '#42A5F5',
   health_admin:     '#26A69A',
@@ -44,74 +40,130 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 const ROLE_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
-  super_admin:      'shield-checkmark',
-  health_admin:     'medkit',
-  clinic:           'medical',
-  asha_worker:      'heart',
-  volunteer:        'hand-left',
-  district_officer: 'business',
+  super_admin:      'shield-checkmark-outline',
+  health_admin:     'medkit-outline',
+  clinic:           'medical-outline',
+  asha_worker:      'heart-outline',
+  volunteer:        'hand-left-outline',
+  district_officer: 'business-outline',
 };
 
-const useGlassStyle = () => {
-  const { isDark } = useTheme();
-
-  return isDark && Platform.OS === 'web'
-    ? ({ backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' } as any)
-    : {};
-};
-
-  const WEB_NO_SELECT = Platform.OS === 'web' ? ({ userSelect: 'none' } as any) : null;
+const WEB_NO_SELECT = Platform.OS === 'web' ? ({ userSelect: 'none' } as any) : null;
 
 // ─────────────────────────────────────────────────────
-//  DashboardHeader — animated gradient with role badge
+//  Severity / water-quality helpers — token-driven.
+//  Water vocab: safe/moderate/unsafe/critical, plus
+//  legacy 'poor' → unsafe and 'contaminated' → critical.
+// ─────────────────────────────────────────────────────
+export function getSeverityColor(severity: string, themeColors?: Theme): string {
+  const t = themeColors ?? themes.light;
+  switch (severity?.toLowerCase()) {
+    case 'critical': return t.severityCritical;
+    case 'high':     return t.severityHigh;
+    case 'medium':   return t.severityMedium;
+    case 'low':      return t.severityLow;
+    default:         return t.textSecondary;
+  }
+}
+
+export function getWaterQualityColor(quality: string, themeColors?: Theme): string {
+  const t = themeColors ?? themes.light;
+  switch (quality?.toLowerCase()) {
+    case 'safe':         return t.waterSafe;
+    case 'moderate':     return t.waterModerate;
+    case 'poor':
+    case 'unsafe':       return t.waterUnsafe;
+    case 'contaminated':
+    case 'critical':     return t.waterCritical;
+    default:             return t.textSecondary;
+  }
+}
+
+/** Legacy alias kept for existing callers — reads theme tokens. */
+export const urgencyColor = (u: string, themeColors?: Theme): string =>
+  getSeverityColor(u, themeColors);
+
+/** Matching soft background for a severity level (solid fill is CRITICAL's privilege). */
+const severityBg = (level: string, t: Theme): string => {
+  switch (level?.toLowerCase()) {
+    case 'critical': return t.dangerBg;
+    case 'high':     return t.offlineBg;   // saffron family
+    case 'medium':   return t.warningBg;
+    case 'low':      return t.successBg;
+    default:         return t.surfaceVariant;
+  }
+};
+
+const formatShortDateTime = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const date = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${date} ${time}`;
+};
+
+// ─────────────────────────────────────────────────────
+//  DashboardHeader — flat headerBg band + 4px Role Ribbon
 // ─────────────────────────────────────────────────────
 interface HeaderProps { profile: Profile; subtitle?: string }
 
 export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) => {
+  const { colors, isDark, reduceMotion } = useTheme();
   const role   = profile.role ?? 'volunteer';
-  const gradient = ROLE_GRADIENTS[role] ?? ROLE_GRADIENTS.volunteer;
-  const accent   = ROLE_ACCENT[role]    ?? '#4ADE80';
+  const accent = ROLE_ACCENT[role] ?? ROLE_ACCENT.volunteer;
   const greeting = getGreeting();
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(10)).current;
+  const fadeAnim = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim,  { toValue: 1, duration: 500, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-    ]).start();
-  }, []);
+    if (reduceMotion) {
+      fadeAnim.setValue(1);
+      return;
+    }
+    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }, [reduceMotion]);
+
+  // Navy band in light mode → white text; surface band in dark mode → ink text.
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub  = isDark ? colors.textSecondary : colors.primaryLight;
 
   return (
-    <LinearGradient colors={gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
-      {/* Decorative blobs */}
-      <View style={[styles.blob1, { backgroundColor: accent + '20' }]} />
-      <View style={[styles.blob2, { backgroundColor: accent + '12' }]} />
-      <View style={[styles.blob3, { backgroundColor: accent + '08' }]} />
-
-      <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
-        {/* Role badge */}
-        <View style={[styles.rolePill, { backgroundColor: accent + '28', borderColor: accent + '55' }]}>
-          <Ionicons name={ROLE_ICON[role]} size={11} color={accent} />
-          <Text style={[styles.rolePillText, { color: accent }]}>{ROLE_LABEL[role]}</Text>
-        </View>
-
-        <Text style={styles.greeting}>{greeting}</Text>
-        <Text style={styles.userName} numberOfLines={1}>
-          {profile.full_name || 'User'}
-        </Text>
-
-        {(subtitle || profile.district) && (
-          <View style={styles.locationRow}>
-            <Ionicons name="location-outline" size={12} color="rgba(255,255,255,0.6)" />
-            <Text style={styles.locationText}>
-              {subtitle ?? `${profile.district}${profile.state ? `, ${profile.state}` : ''}`}
+    <View>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <Animated.View style={{ opacity: fadeAnim }}>
+          {/* Role pill — Eyebrow type */}
+          <View style={[styles.rolePill, { borderColor: accent }]}>
+            <Ionicons name={ROLE_ICON[role]} size={12} color={accent} />
+            <Text style={[styles.rolePillText, { color: accent }]} maxFontSizeMultiplier={1.3}>
+              {ROLE_LABEL[role]}
             </Text>
           </View>
-        )}
-      </Animated.View>
-    </LinearGradient>
+
+          <Text style={[styles.greeting, { color: headerSub }]}>{greeting}</Text>
+          <Text style={[styles.userName, { color: headerText }]} numberOfLines={1}>
+            {profile.full_name || 'User'}
+          </Text>
+
+          {(subtitle || profile.district) && (
+            <View style={styles.locationRow}>
+              <Ionicons name="location-outline" size={16} color={headerSub} />
+              <Text style={[styles.locationText, { color: headerSub }]} numberOfLines={1}>
+                {subtitle ?? `${profile.district}${profile.state ? `, ${profile.state}` : ''}`}
+              </Text>
+            </View>
+          )}
+        </Animated.View>
+      </View>
+
+      {/* Role Ribbon — the one surviving trace of the role identity */}
+      <View style={[styles.roleRibbon, { backgroundColor: accent }]} />
+    </View>
   );
 };
 
@@ -120,25 +172,38 @@ function getGreeting(): string {
 }
 
 // ─────────────────────────────────────────────────────
-//  Section wrapper
+//  Section wrapper — eyebrow-and-count header
 // ─────────────────────────────────────────────────────
 interface SectionProps {
   title?: string;
+  count?: number;
   action?: { label: string; onPress: () => void };
   children: React.ReactNode;
   style?: ViewStyle;
 }
 
-export const Section: React.FC<SectionProps> = ({ title, action, children, style }) => {
-  const { colors } = useTheme();
+export const Section: React.FC<SectionProps> = ({ title, count, action, children, style }) => {
+  const { colors, isDark } = useTheme();
   return (
     <View style={[styles.section, style]}>
       {title && (
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>{title}</Text>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]} numberOfLines={1}>
+            {title}
+            {typeof count === 'number' && (
+              <Text style={styles.sectionCount}>{` · ${count}`}</Text>
+            )}
+          </Text>
           {action && (
-            <TouchableOpacity onPress={action.onPress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={[styles.sectionAction, { color: colors.primary }]}>{action.label}</Text>
+            <TouchableOpacity
+              onPress={action.onPress}
+              hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+            >
+              <Text style={[styles.sectionAction, { color: isDark ? colors.primary : colors.primaryDark }]}>
+                {action.label}
+              </Text>
             </TouchableOpacity>
           )}
         </View>
@@ -149,7 +214,9 @@ export const Section: React.FC<SectionProps> = ({ title, action, children, style
 };
 
 // ─────────────────────────────────────────────────────
-//  StatCard — animated count-up feel
+//  StatCard — Big Number Protocol
+//  Tabular-nums ink value over a 13/700 label with a
+//  3px semantic top rule. Two per row on phones.
 // ─────────────────────────────────────────────────────
 interface StatCardProps {
   label: string;
@@ -162,58 +229,46 @@ interface StatCardProps {
 
 export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, iconFamily = 'ionicons', onPress }) => {
   const { colors, isDark } = useTheme();
-  const scaleAnim = useRef(new Animated.Value(0.92)).current;
-  const glassStyle = useGlassStyle();
-
-  useEffect(() => {
-    Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 7 }).start();
-  }, []);
-
-  type StatCardWrapperProps = {
-    style?: any;
-    children?: React.ReactNode;
-    onPress?: () => void;
-    activeOpacity?: number;
-  };
-
-  const Wrapper: React.ComponentType<StatCardWrapperProps> = onPress ? TouchableOpacity : View;
-  const gradColors: readonly [string, string, ...string[]] = isDark
-    ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.03)']
-    : [color + '0A', color + '03'];
 
   return (
-    <Animated.View style={[{ flex: 1 }, { transform: [{ scale: scaleAnim }] }]}>
-      <Wrapper
-        style={[styles.statCard, glassStyle, WEB_NO_SELECT, {
-          backgroundColor: colors.card,
-          borderColor: isDark ? colors.border : color + '25',
-          borderTopWidth: 3, borderTopColor: color,
-          overflow: 'hidden',
-        }]}
-        onPress={onPress}
-        activeOpacity={0.75}
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={`${label}: ${value}`}
+      style={({ pressed }) => [
+        styles.statCard,
+        WEB_NO_SELECT,
+        {
+          backgroundColor: pressed && onPress ? colors.cardHover : colors.card,
+          borderColor: colors.border,
+          borderTopColor: color,
+        },
+        !isDark && styles.cardShadow,
+      ]}
+    >
+      <View style={[styles.statIconWrap, { backgroundColor: color + '14' }]}>
+        {iconFamily === 'material'
+          ? <MaterialCommunityIcons name={icon as any} size={24} color={color} />
+          : <Ionicons name={icon as any} size={24} color={color} />
+        }
+      </View>
+      <Text
+        style={[styles.statValue, { color: colors.text }]}
+        maxFontSizeMultiplier={1.3}
+        numberOfLines={1}
       >
-        <LinearGradient
-          colors={gradColors}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
-        <View style={[styles.statIconWrap, { backgroundColor: color + '22' }]}>
-          {iconFamily === 'material'
-            ? <MaterialCommunityIcons name={icon as any} size={20} color={color} />
-            : <Ionicons name={icon as any} size={20} color={color} />
-          }
-        </View>
-        <Text style={[styles.statValue, { color }]}>{value}</Text>
-        <Text style={[styles.statLabel, { color: colors.textSecondary }]} numberOfLines={2}>{label}</Text>
-      </Wrapper>
-    </Animated.View>
+        {value}
+      </Text>
+      <Text style={[styles.statLabel, { color: colors.textSecondary }]} numberOfLines={2}>
+        {label}
+      </Text>
+    </Pressable>
   );
 };
 
 // ─────────────────────────────────────────────────────
-//  QuickActionBtn
+//  QuickActionBtn — flat card, background-change press
 // ─────────────────────────────────────────────────────
 interface QuickActionProps {
   icon: string;
@@ -224,44 +279,56 @@ interface QuickActionProps {
 }
 
 export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color, iconFamily = 'ionicons', onPress }) => {
-  const { colors } = useTheme();
-  const pressAnim = useRef(new Animated.Value(1)).current;
-
-  const onPressIn  = () => Animated.spring(pressAnim, { toValue: 0.93, useNativeDriver: true, tension: 120 }).start();
-  const onPressOut = () => Animated.spring(pressAnim, { toValue: 1, useNativeDriver: true, tension: 80  }).start();
+  const { colors, isDark } = useTheme();
 
   return (
-    <Animated.View style={[{ flex: 1 }, { transform: [{ scale: pressAnim }] }]}>
-      <TouchableOpacity
-        style={[styles.qaBtn, WEB_NO_SELECT, { backgroundColor: colors.card, borderColor: colors.border }]}
-        onPress={onPress}
-        onPressIn={onPressIn}
-        onPressOut={onPressOut}
-        activeOpacity={1}
-      >
-        <View style={[styles.qaIcon, { backgroundColor: color + '18' }]}>
-          {iconFamily === 'material'
-            ? <MaterialCommunityIcons name={icon as any} size={24} color={color} />
-            : <Ionicons name={icon as any} size={24} color={color} />
-          }
-        </View>
-        <Text style={[styles.qaLabel, { color: colors.text }]} numberOfLines={2}>{label}</Text>
-      </TouchableOpacity>
-    </Animated.View>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [
+        styles.qaBtn,
+        WEB_NO_SELECT,
+        {
+          backgroundColor: pressed ? colors.cardHover : colors.card,
+          borderColor: colors.border,
+        },
+        !isDark && styles.cardShadow,
+      ]}
+    >
+      <View style={[styles.qaIcon, { backgroundColor: color + '14' }]}>
+        {iconFamily === 'material'
+          ? <MaterialCommunityIcons name={icon as any} size={24} color={color} />
+          : <Ionicons name={icon as any} size={24} color={color} />
+        }
+      </View>
+      <Text style={[styles.qaLabel, { color: colors.text }]} numberOfLines={2}>{label}</Text>
+    </Pressable>
   );
 };
 
 // ─────────────────────────────────────────────────────
-//  Urgency mapper
+//  Severity pill — dot + UPPERCASE label on *Bg token.
+//  Solid danger fill is CRITICAL's privilege alone.
 // ─────────────────────────────────────────────────────
-export const urgencyColor = (u: string): string => {
-  switch (u?.toLowerCase()) {
-    case 'critical': return '#DC2626';
-    case 'high':     return '#EA580C';
-    case 'medium':   return '#F59E0B';
-    case 'low':      return '#10B981';
-    default:         return '#6B7280';
-  }
+const SeverityPill: React.FC<{ level: string }> = ({ level }) => {
+  const { colors } = useTheme();
+  const key = level?.toLowerCase() ?? '';
+  const isCritical = key === 'critical';
+  const fg = isCritical ? colors.textInverse : getSeverityColor(key, colors);
+  const bg = isCritical ? colors.danger : severityBg(key, colors);
+
+  return (
+    <View
+      style={[styles.severityPill, { backgroundColor: bg }]}
+      accessibilityLabel={`Urgency: ${key || 'unknown'}`}
+    >
+      {!isCritical && <View style={[styles.severityDot, { backgroundColor: fg }]} />}
+      <Text style={[styles.severityPillText, { color: fg }]} maxFontSizeMultiplier={1.3}>
+        {(level ?? '').toUpperCase()}
+      </Text>
+    </View>
+  );
 };
 
 interface AlertCardProps {
@@ -284,119 +351,138 @@ interface AlertCardProps {
   onPress?: () => void;
 }
 
-const URGENCY_LABEL: Record<string, string> = {
-  critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', low: 'LOW',
-};
-
+// ─────────────────────────────────────────────────────
+//  AlertCard — Status Is a Sentence.
+//  Leads with the plain-language directive; 3px severity
+//  left edge is the only structural color.
+// ─────────────────────────────────────────────────────
 export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
-  const { colors, isDark } = useTheme();
-  const uc = urgencyColor(alert.urgency_level);
+  const { colors, isDark, reduceMotion } = useTheme();
+  const sev = getSeverityColor(alert.urgency_level, colors);
   const [showDetail, setShowDetail] = useState(false);
-  const glassStyle = useGlassStyle();
 
   const handlePress = () => {
     setShowDetail(true);
     onPress?.();
   };
 
-  const cardBg = isDark ? 'rgba(12,12,16,0.88)' : colors.card;
-
   return (
     <>
-      <TouchableOpacity
-        style={[styles.alertCard, glassStyle, WEB_NO_SELECT, {
-          backgroundColor: cardBg,
-          borderColor: colors.border,
-          borderLeftColor: uc,
-        }]}
+      <Pressable
         onPress={handlePress}
-        activeOpacity={0.78}
+        accessibilityRole="button"
+        accessibilityLabel={`Alert, urgency ${alert.urgency_level}: ${alert.title}`}
+        style={({ pressed }) => [
+          styles.alertCard,
+          WEB_NO_SELECT,
+          {
+            backgroundColor: pressed ? colors.cardHover : colors.card,
+            borderColor: colors.border,
+            borderLeftColor: sev,
+          },
+          !isDark && styles.cardShadow,
+        ]}
       >
-        {/* Urgency header row */}
+        {/* Severity + absolute-short timestamp */}
         <View style={styles.alertHeader}>
-          <View style={[styles.urgencyPill, { backgroundColor: uc + '20' }]}>
-            <View style={[styles.urgencyDot, { backgroundColor: uc }]} />
-            <Text style={[styles.urgencyText, { color: uc }]}>{URGENCY_LABEL[alert.urgency_level] ?? alert.urgency_level?.toUpperCase()}</Text>
-          </View>
-          <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
-            {new Date(alert.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+          <SeverityPill level={alert.urgency_level} />
+          <Text style={[styles.alertTime, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+            {formatShortDateTime(alert.created_at)}
           </Text>
         </View>
 
+        {/* Plain-language directive first */}
         <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={2}>{alert.title}</Text>
         <Text style={[styles.alertDesc, { color: colors.textSecondary }]} numberOfLines={2}>{alert.description}</Text>
 
         <View style={styles.alertFooter}>
-          <Ionicons name="location-outline" size={12} color={colors.textSecondary} />
+          <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
           <Text style={[styles.alertLocation, { color: colors.textSecondary }]} numberOfLines={1}>
             {alert.location_name ? `${alert.location_name}, ` : ''}{alert.district}
           </Text>
           <View style={{ flex: 1 }} />
-          <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+          <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
         </View>
-      </TouchableOpacity>
+      </Pressable>
 
-      {/* Detail Modal */}
-      <Modal visible={showDetail} transparent animationType="slide" onRequestClose={() => setShowDetail(false)}>
-        <View style={adStyles.overlay}>
-          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setShowDetail(false)} />
-          <View style={[
-            adStyles.sheet, 
-            { backgroundColor: colors.card },
-            Platform.OS === 'web' ? { backdropFilter: 'blur(18px)' } as any : {}
-          ]}>
-            {/* Handle bar */}
+      {/* Detail Modal — card-colored header, 3px severity top rule */}
+      <Modal
+        visible={showDetail}
+        transparent
+        animationType={reduceMotion ? 'none' : 'slide'}
+        onRequestClose={() => setShowDetail(false)}
+      >
+        <View style={[adStyles.overlay, { backgroundColor: colors.overlay }]}>
+          <Pressable
+            style={StyleSheet.absoluteFillObject}
+            onPress={() => setShowDetail(false)}
+            accessibilityLabel="Close alert details"
+          />
+          <View style={[adStyles.sheet, { backgroundColor: colors.card }]}>
+            {/* 3px severity top rule */}
+            <View style={[adStyles.topRule, { backgroundColor: sev }]} />
             <View style={[adStyles.handle, { backgroundColor: colors.border }]} />
 
-            {/* Header gradient strip */}
-            <View style={[adStyles.headerStrip, { backgroundColor: uc }]}>
+            {/* Header — card-colored, never flood-filled */}
+            <View style={[adStyles.headerBlock, { borderBottomColor: colors.borderLight }]}>
               <View style={adStyles.headerRow}>
-                <View style={adStyles.urgencyTag}>
-                  <Text style={adStyles.urgencyTagText}>{URGENCY_LABEL[alert.urgency_level] ?? alert.urgency_level?.toUpperCase()}</Text>
-                </View>
+                <SeverityPill level={alert.urgency_level} />
                 {alert.alert_type && (
-                  <Text style={adStyles.alertTypeText}>{alert.alert_type.replace(/_/g, ' ').toUpperCase()}</Text>
+                  <Text style={[adStyles.alertTypeText, { color: colors.textTertiary }]}>
+                    {alert.alert_type.replace(/_/g, ' ').toUpperCase()}
+                  </Text>
                 )}
               </View>
-              <Text style={adStyles.modalTitle} numberOfLines={3}>{alert.title}</Text>
-              <TouchableOpacity style={adStyles.closeBtn} onPress={() => setShowDetail(false)}>
-                <Ionicons name="close" size={20} color="rgba(255,255,255,0.85)" />
+              <Text style={[adStyles.modalTitle, { color: colors.text }]} numberOfLines={3}>
+                {alert.title}
+              </Text>
+              <TouchableOpacity
+                style={[adStyles.closeBtn, { backgroundColor: colors.surfaceVariant }]}
+                onPress={() => setShowDetail(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
             <ScrollView style={adStyles.body} showsVerticalScrollIndicator={false}>
-              {/* Description */}
               <Text style={[adStyles.sectionLabel, { color: colors.textSecondary }]}>Description</Text>
               <Text style={[adStyles.bodyText, { color: colors.text }]}>{alert.description}</Text>
 
-              {/* Key info grid */}
+              {/* Key info grid — plain surface boxes */}
               <View style={adStyles.infoGrid}>
-                <View style={[adStyles.infoBox, { backgroundColor: uc + '12', borderColor: uc + '30' }]}>
-                  <Ionicons name="location-outline" size={16} color={uc} />
+                <View style={[adStyles.infoBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
                   <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Location</Text>
                   <Text style={[adStyles.infoValue, { color: colors.text }]} numberOfLines={2}>
                     {[alert.location_name, alert.district, alert.state].filter(Boolean).join(', ')}
                   </Text>
                 </View>
-                <View style={[adStyles.infoBox, { backgroundColor: uc + '12', borderColor: uc + '30' }]}>
-                  <Ionicons name="calendar-outline" size={16} color={uc} />
+                <View style={[adStyles.infoBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
                   <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Date</Text>
-                  <Text style={[adStyles.infoValue, { color: colors.text }]}>
-                    {new Date(alert.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  <Text style={[adStyles.infoValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                    {formatShortDateTime(alert.created_at)}
                   </Text>
                 </View>
                 {alert.cases_reported !== null && alert.cases_reported !== undefined && (
-                  <View style={[adStyles.infoBox, { backgroundColor: '#EF444412', borderColor: '#EF444430' }]}>
-                    <Ionicons name="people-outline" size={16} color="#EF4444" />
+                  <View style={[adStyles.infoBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                    <Ionicons name="people-outline" size={16} color={colors.textSecondary} />
                     <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Cases</Text>
-                    <Text style={[adStyles.infoValue, { color: colors.text }]}>{alert.cases_reported}</Text>
+                    <Text style={[adStyles.infoValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {alert.cases_reported}
+                    </Text>
                   </View>
                 )}
                 {alert.affected_population !== null && alert.affected_population !== undefined && (
-                  <View style={[adStyles.infoBox, { backgroundColor: '#F59E0B12', borderColor: '#F59E0B30' }]}>
-                    <Ionicons name="stats-chart-outline" size={16} color="#F59E0B" />
+                  <View style={[adStyles.infoBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                    <Ionicons name="stats-chart-outline" size={16} color={colors.textSecondary} />
                     <Text style={[adStyles.infoLabel, { color: colors.textSecondary }]}>Affected</Text>
-                    <Text style={[adStyles.infoValue, { color: colors.text }]}>{alert.affected_population}</Text>
+                    <Text style={[adStyles.infoValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {alert.affected_population}
+                    </Text>
                   </View>
                 )}
               </View>
@@ -430,27 +516,26 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
 
 // ── AlertCard detail modal styles ────────────────
 const adStyles = StyleSheet.create({
-  overlay:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  sheet:         { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%', overflow: 'hidden' },
-  handle:        { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 4 },
-  headerStrip:   { padding: 20, paddingTop: 12, paddingRight: 48 },
-  headerRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  urgencyTag:    { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  urgencyTagText:{ color: '#FFF', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  alertTypeText: { color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '600', textTransform: 'uppercase' },
-  modalTitle:    { fontSize: 18, fontWeight: '800', color: '#FFF', lineHeight: 24 },
-  closeBtn:      { position: 'absolute', top: 12, right: 16, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
-  body:          { padding: 20 },
-  sectionLabel:  { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 16, marginBottom: 6 },
-  bodyText:      { fontSize: 14, lineHeight: 21 },
-  infoGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 16 },
-  infoBox:       { width: '47%', borderRadius: 12, borderWidth: 1, padding: 12, gap: 4 },
-  infoLabel:     { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
-  infoValue:     { fontSize: 13, fontWeight: '700' },
+  overlay:       { flex: 1, justifyContent: 'flex-end' },
+  sheet:         { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, maxHeight: '88%', overflow: 'hidden' },
+  topRule:       { height: 3, width: '100%' },
+  handle:        { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.md, marginBottom: spacing.xs },
+  headerBlock:   { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.lg, paddingRight: 64, borderBottomWidth: 1 },
+  headerRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm, flexWrap: 'wrap' },
+  alertTypeText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6 },
+  modalTitle:    { fontSize: 16, fontWeight: '800', lineHeight: 22 },
+  closeBtn:      { position: 'absolute', top: spacing.sm, right: spacing.lg, width: 44, height: 44, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center' },
+  body:          { paddingHorizontal: spacing.lg },
+  sectionLabel:  { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', marginTop: spacing.lg, marginBottom: spacing.xs },
+  bodyText:      { fontSize: 15, lineHeight: 22, fontWeight: '500' },
+  infoGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.lg },
+  infoBox:       { width: '47%', borderRadius: radii.md, borderWidth: 1, padding: spacing.md, gap: spacing.xs },
+  infoLabel:     { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 },
+  infoValue:     { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
 });
 
 // ─────────────────────────────────────────────────────
-//  ToolCard — icon + title + subtitle + chevron
+//  ToolCard — flat list row: icon + title + chevron
 // ─────────────────────────────────────────────────────
 interface ToolCardProps {
   icon: string;
@@ -463,19 +548,28 @@ interface ToolCardProps {
 
 export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subtitle, onPress, badge }) => {
   const { colors, isDark } = useTheme();
-  const glassStyle = useGlassStyle();
-  const cardBg = isDark ? 'rgba(12,12,16,0.85)' : colors.card;
   return (
-    <TouchableOpacity
-      style={[styles.toolCard, glassStyle, WEB_NO_SELECT, { backgroundColor: cardBg, borderColor: colors.border }]}
+    <Pressable
       onPress={onPress}
-      activeOpacity={0.75}
+      accessibilityRole="button"
+      accessibilityLabel={badge ? `${title}, ${badge} pending` : title}
+      style={({ pressed }) => [
+        styles.toolCard,
+        WEB_NO_SELECT,
+        {
+          backgroundColor: pressed ? colors.cardHover : colors.card,
+          borderColor: colors.border,
+        },
+        !isDark && styles.cardShadow,
+      ]}
     >
-      <View style={[styles.toolIcon, { backgroundColor: iconColor + '18' }]}>
-        <Ionicons name={icon as any} size={26} color={iconColor} />
+      <View style={[styles.toolIcon, { backgroundColor: iconColor + '14' }]}>
+        <Ionicons name={icon as any} size={24} color={iconColor} />
         {badge !== undefined && badge > 0 && (
-          <View style={styles.toolBadge}>
-            <Text style={styles.toolBadgeText}>{badge > 99 ? '99+' : badge}</Text>
+          <View style={[styles.toolBadge, { backgroundColor: colors.danger }]}>
+            <Text style={[styles.toolBadgeText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>
+              {badge > 99 ? '99+' : badge}
+            </Text>
           </View>
         )}
       </View>
@@ -483,22 +577,20 @@ export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subt
         <Text style={[styles.toolTitle, { color: colors.text }]}>{title}</Text>
         <Text style={[styles.toolSubtitle, { color: colors.textSecondary }]} numberOfLines={2}>{subtitle}</Text>
       </View>
-      <View style={[styles.chevronWrap, { backgroundColor: colors.border + '60' }]}>
-        <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-      </View>
-    </TouchableOpacity>
+      <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+    </Pressable>
   );
 };
 
 // ─────────────────────────────────────────────────────
-//  InfoBanner
+//  InfoBanner — flat card with a 3px semantic left edge
 // ─────────────────────────────────────────────────────
 interface BannerProps { icon: string; color: string; text: string }
 
 export const InfoBanner: React.FC<BannerProps> = ({ icon, color, text }) => {
   const { colors } = useTheme();
   return (
-    <View style={[styles.banner, { backgroundColor: color + '12', borderColor: color + '35' }]}>
+    <View style={[styles.banner, { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: color }]}>
       <Ionicons name={icon as any} size={16} color={color} />
       <Text style={[styles.bannerText, { color: colors.text }]}>{text}</Text>
     </View>
@@ -506,19 +598,175 @@ export const InfoBanner: React.FC<BannerProps> = ({ icon, color, text }) => {
 };
 
 // ─────────────────────────────────────────────────────
-//  EmptyState
+//  EmptyState — the quiet zero: words on plain surface
 // ─────────────────────────────────────────────────────
 interface EmptyProps { icon: string; color: string; title: string; subtitle?: string }
 
 export const EmptyState: React.FC<EmptyProps> = ({ icon, color, title, subtitle }) => {
   const { colors } = useTheme();
   return (
-    <View style={[styles.emptyWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={[styles.emptyIcon, { backgroundColor: color + '15' }]}>
-        <Ionicons name={icon as any} size={32} color={color} />
-      </View>
+    <View style={[styles.emptyWrap, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+      <Ionicons name={icon as any} size={24} color={color || colors.success} />
       <Text style={[styles.emptyTitle, { color: colors.text }]}>{title}</Text>
       {subtitle && <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>{subtitle}</Text>}
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
+//  SkeletonBlock — pulsing loading twin.
+//  Shape it like the real content; hidden from a11y.
+// ─────────────────────────────────────────────────────
+interface SkeletonBlockProps {
+  width?: DimensionValue;
+  height?: DimensionValue;
+  radius?: number;
+  style?: StyleProp<ViewStyle>;
+}
+
+export const SkeletonBlock: React.FC<SkeletonBlockProps> = ({
+  width = '100%',
+  height = 16,
+  radius = radii.sm,
+  style,
+}) => {
+  const { colors, reduceMotion } = useTheme();
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (reduceMotion) {
+      pulse.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.5, duration: 500, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 500, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [reduceMotion]);
+
+  return (
+    <Animated.View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[
+        { width, height, borderRadius: radius, backgroundColor: colors.skeleton, opacity: pulse },
+        style,
+      ]}
+    />
+  );
+};
+
+// ─────────────────────────────────────────────────────
+//  ErrorCard — inline failed-fetch state with Retry.
+//  Error ≠ empty; silent catch-and-show-zero is a bug.
+// ─────────────────────────────────────────────────────
+interface ErrorCardProps { message: string; onRetry: () => void }
+
+export const ErrorCard: React.FC<ErrorCardProps> = ({ message, onRetry }) => {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.errorCard, { backgroundColor: colors.dangerBg, borderColor: colors.danger }]}>
+      <View style={styles.errorRow}>
+        <Ionicons name="alert-circle-outline" size={24} color={colors.danger} />
+        <Text style={[styles.errorText, { color: colors.text }]}>{message}</Text>
+      </View>
+      <Pressable
+        onPress={onRetry}
+        accessibilityRole="button"
+        accessibilityLabel="Retry"
+        style={({ pressed }) => [
+          styles.errorRetry,
+          {
+            backgroundColor: pressed ? colors.cardHover : colors.card,
+            borderColor: colors.danger,
+          },
+        ]}
+      >
+        <Text style={[styles.errorRetryText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+          Retry
+        </Text>
+      </Pressable>
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
+//  SyncPebble — honest system state in the header.
+//  Synced / Saving… / Offline · n queued, with a 1.5s
+//  "All synced" flash when the queue drains.
+// ─────────────────────────────────────────────────────
+export const SyncPebble: React.FC = () => {
+  const { colors } = useTheme();
+  const netInfo = useNetInfo();
+  const pending = usePendingSync();
+  const [flash, setFlash] = useState(false);
+  const prevPending = useRef(pending);
+
+  const offline = netInfo.isConnected === false || netInfo.isInternetReachable === false;
+
+  useEffect(() => {
+    const prev = prevPending.current;
+    prevPending.current = pending;
+    if (prev > 0 && pending === 0 && !offline) {
+      setFlash(true);
+      const timer = setTimeout(() => setFlash(false), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [pending, offline]);
+
+  let bg: string;
+  let fg: string;
+  let icon: keyof typeof Ionicons.glyphMap;
+  let label: string;
+  let a11yLabel: string;
+
+  if (offline) {
+    bg = colors.offlineBg;
+    fg = colors.offline;
+    icon = 'cloud-offline-outline';
+    label = pending > 0 ? `Offline · ${pending} queued` : 'Offline';
+    a11yLabel = pending > 0
+      ? `Offline. ${pending} ${pending === 1 ? 'report' : 'reports'} saved on phone, will sync`
+      : 'Offline. Reports will be saved on phone';
+  } else if (pending > 0) {
+    bg = colors.warningBg;
+    fg = colors.warning;
+    icon = 'sync-outline';
+    label = 'Saving…';
+    a11yLabel = `Saving. ${pending} ${pending === 1 ? 'report' : 'reports'} waiting to sync`;
+  } else if (flash) {
+    bg = colors.successBg;
+    fg = colors.success;
+    icon = 'checkmark-circle-outline';
+    label = 'All synced';
+    a11yLabel = 'All reports synced';
+  } else {
+    bg = colors.successBg;
+    fg = colors.success;
+    icon = 'checkmark-circle-outline';
+    label = 'Synced';
+    a11yLabel = 'Synced';
+  }
+
+  return (
+    <View
+      style={[styles.pebble, { backgroundColor: bg }]}
+      accessible
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={a11yLabel}
+    >
+      <Ionicons name={icon} size={14} color={fg} />
+      <Text
+        style={[styles.pebbleText, { color: fg, fontVariant: ['tabular-nums'] }]}
+        numberOfLines={1}
+        maxFontSizeMultiplier={1.3}
+      >
+        {label}
+      </Text>
     </View>
   );
 };
@@ -535,108 +783,159 @@ export const SectionDivider: React.FC = () => {
 //  Styles
 // ─────────────────────────────────────────────────────
 const styles = StyleSheet.create({
+  /* ── Light-mode-only shadow (single recipe) ── */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+
   /* ── Header ── */
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: spacing.lg,
     paddingTop: 42,
-    paddingBottom: 24,
-    overflow: 'hidden',
+    paddingBottom: spacing.xl,
   },
-  blob1: { position: 'absolute', top: -50, right: -50, width: 180, height: 180, borderRadius: 90 },
-  blob2: { position: 'absolute', bottom: -30, right: 30, width: 120, height: 120, borderRadius: 60 },
-  blob3: { position: 'absolute', top: 20, right: 100, width: 60, height: 60, borderRadius: 30 },
+  roleRibbon: { height: 4, width: '100%' },
   rolePill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     alignSelf: 'flex-start',
-    paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: 20, borderWidth: 1,
-    marginBottom: 14,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radii.pill, borderWidth: 1,
+    marginBottom: spacing.lg,
   },
-  rolePillText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.4 },
-  greeting: { fontSize: 14, color: 'rgba(255,255,255,0.65)', marginBottom: 2 },
-  userName: { fontSize: 24, color: '#FFFFFF', fontWeight: '800', letterSpacing: -0.6, marginBottom: 7 },
-  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  locationText: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
+  rolePillText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
+  greeting: { fontSize: 13, lineHeight: 18, fontWeight: '600', marginBottom: 2 },
+  userName: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4, marginBottom: spacing.sm },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  locationText: { fontSize: 13, lineHeight: 18, fontWeight: '500', flexShrink: 1 },
 
   /* ── Section ── */
-  section: { paddingHorizontal: 16, marginBottom: 6 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, marginTop: 8 },
-  sectionTitle: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
-  sectionAction: { fontSize: 13, fontWeight: '600' },
-
-  /* ── Stat card ── */
-  statCard: {
-    borderRadius: 14, borderWidth: 1,
-    padding: 14, alignItems: 'center',
-    height: 122, justifyContent: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 3,
+  section: { paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
+  sectionHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: spacing.md, marginTop: spacing.sm, minHeight: 20,
   },
-  statIconWrap: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  statValue: { fontSize: 24, fontWeight: '800', marginBottom: 2 },
-  statLabel: { fontSize: 11, textAlign: 'center', fontWeight: '500', lineHeight: 15 },
+  sectionTitle: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700',
+    letterSpacing: 0.6, textTransform: 'uppercase', flexShrink: 1,
+  },
+  sectionCount: { fontVariant: ['tabular-nums'] },
+  sectionAction: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+
+  /* ── Stat card — Big Number Protocol ── */
+  statCard: {
+    flex: 1,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderTopWidth: 3,
+    padding: spacing.lg,
+    minHeight: 122,
+    justifyContent: 'flex-end',
+  },
+  statIconWrap: {
+    width: 44, height: 44, borderRadius: radii.md,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: spacing.md,
+  },
+  statValue: {
+    fontSize: 32, lineHeight: 38, fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+  },
+  statLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700', marginTop: 2 },
 
   /* ── Quick action ── */
   qaBtn: {
-    borderRadius: 14, borderWidth: 1,
-    paddingVertical: 12, paddingHorizontal: 8,
-    minHeight: 112, height: 112,
-    alignItems: 'center', justifyContent: 'center', gap: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 1,
+    flex: 1,
+    borderRadius: radii.md, borderWidth: 1,
+    paddingVertical: spacing.md, paddingHorizontal: spacing.sm,
+    minHeight: 104,
+    alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
   },
-  qaIcon: { width: 46, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
-  qaLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center', lineHeight: 15, minHeight: 30 },
+  qaIcon: { width: 44, height: 44, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
+  qaLabel: { fontSize: 13, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
+
+  /* ── Severity pill ── */
+  severityPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  severityDot: { width: 6, height: 6, borderRadius: 3 },
+  severityPillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
 
   /* ── Alert card ── */
   alertCard: {
-    borderRadius: 12, borderWidth: 1, borderLeftWidth: 4,
-    padding: 13, marginBottom: 9,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1,
+    borderRadius: radii.md, borderWidth: 1, borderLeftWidth: 3,
+    padding: spacing.lg, marginBottom: spacing.md,
+    minHeight: 64,
   },
-  alertHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
-  urgencyPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  urgencyDot: { width: 6, height: 6, borderRadius: 3 },
-  urgencyText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
-  alertTime: { fontSize: 11 },
-  alertTitle: { fontSize: 14, fontWeight: '700', lineHeight: 20, marginBottom: 4 },
-  alertDesc: { fontSize: 12, lineHeight: 17, marginBottom: 7 },
-  alertFooter: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  alertLocation: { fontSize: 11, flex: 1 },
+  alertHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
+  alertTime: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  alertTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', marginBottom: spacing.xs },
+  alertDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: spacing.sm },
+  alertFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  alertLocation: { fontSize: 13, lineHeight: 18, flexShrink: 1 },
 
   /* ── Tool card ── */
   toolCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    borderRadius: 14, borderWidth: 1,
-    padding: 14, marginBottom: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 5, elevation: 2,
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    borderRadius: radii.md, borderWidth: 1,
+    padding: spacing.lg, marginBottom: spacing.sm,
+    minHeight: 64,
   },
-  toolIcon: { width: 50, height: 50, borderRadius: 14, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  toolIcon: { width: 44, height: 44, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   toolBadge: {
-    position: 'absolute', top: -4, right: -4,
-    backgroundColor: '#DC2626', borderRadius: 8,
-    paddingHorizontal: 4, paddingVertical: 1, minWidth: 18, alignItems: 'center',
+    position: 'absolute', top: -6, right: -6,
+    borderRadius: radii.pill,
+    paddingHorizontal: 5, paddingVertical: 1, minWidth: 20, alignItems: 'center',
   },
-  toolBadgeText: { color: '#fff', fontSize: 9, fontWeight: '800' },
+  toolBadgeText: { fontSize: 12, lineHeight: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
   toolInfo: { flex: 1 },
-  toolTitle: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
-  toolSubtitle: { fontSize: 12, lineHeight: 17 },
-  chevronWrap: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  toolTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', marginBottom: 2 },
+  toolSubtitle: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
 
   /* ── Banner ── */
   banner: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderRadius: 10, borderWidth: 1, padding: 12, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    borderRadius: radii.md, borderWidth: 1, borderLeftWidth: 3,
+    padding: spacing.md, marginBottom: spacing.md,
   },
-  bannerText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  bannerText: { flex: 1, fontSize: 15, lineHeight: 22, fontWeight: '500' },
 
-  /* ── Empty ── */
+  /* ── Empty — the quiet zero ── */
   emptyWrap: {
-    alignItems: 'center', borderRadius: 14, borderWidth: 1,
-    padding: 24, marginBottom: 8,
+    alignItems: 'center', borderRadius: radii.md, borderWidth: 1,
+    padding: spacing.xl, marginBottom: spacing.sm, gap: spacing.sm,
+    maxHeight: 240,
   },
-  emptyIcon: { width: 64, height: 64, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  emptyTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4, textAlign: 'center' },
-  emptySubtitle: { fontSize: 13, textAlign: 'center', lineHeight: 18 },
+  emptyTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', textAlign: 'center' },
+  emptySubtitle: { fontSize: 13, lineHeight: 18, textAlign: 'center' },
+
+  /* ── Error card ── */
+  errorCard: {
+    borderRadius: radii.md, borderWidth: 1,
+    padding: spacing.lg, marginBottom: spacing.sm, gap: spacing.md,
+  },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  errorText: { flex: 1, fontSize: 15, lineHeight: 22, fontWeight: '500' },
+  errorRetry: {
+    minHeight: 48, borderRadius: radii.md, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg,
+  },
+  errorRetryText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+
+  /* ── Sync Pebble ── */
+  pebble: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radii.pill,
+    minHeight: 28, alignSelf: 'flex-start',
+  },
+  pebbleText: { fontSize: 12, lineHeight: 16, fontWeight: '700' },
 
   /* ── Divider ── */
-  divider: { height: 1, marginHorizontal: 16, marginVertical: 4 },
+  divider: { height: StyleSheet.hairlineWidth, marginHorizontal: spacing.lg, marginVertical: spacing.xs },
 });

@@ -1,9 +1,12 @@
 // =====================================================
-// SELECT DROPDOWN COMPONENT
+// SELECT DROPDOWN COMPONENT — "Prakash" design system
+// 52dp trigger styled like an input, label above,
+// inline error with icon, Ionicons only.
 // =====================================================
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Pressable } from 'react-native';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, radii } from '../../lib/ThemeContext';
 
 interface SelectOption {
   label: string;
@@ -37,15 +40,18 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
   const selectedOption = options.find(opt => opt.value === value);
 
   const getBorderColor = () => {
-    if (error) return colors.danger;
-    if (isOpen) return colors.inputFocus;
+    if (error) return colors.inputErrorBorder;
+    if (isOpen) return colors.inputFocusBorder;
+    if (selectedOption) return colors.inputFilledBorder;
     return colors.inputBorder;
   };
+
+  const borderWidth = error || isOpen ? 2 : 1.5;
 
   return (
     <View style={styles.container}>
       {label && (
-        <Text style={[styles.label, { color: colors.text }]}>
+        <Text style={[styles.label, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
           {label}
           {required && <Text style={{ color: colors.danger }}> *</Text>}
         </Text>
@@ -53,12 +59,16 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
 
       <TouchableOpacity
         onPress={() => !disabled && setIsOpen(true)}
-        activeOpacity={0.7}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={`${label || 'Select'}: ${selectedOption?.label || placeholder}`}
+        accessibilityState={{ disabled, expanded: isOpen }}
         style={[
           styles.selectButton,
           {
             backgroundColor: disabled ? colors.surfaceVariant : colors.inputBackground,
             borderColor: getBorderColor(),
+            borderWidth,
           },
         ]}
       >
@@ -67,14 +77,18 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
             styles.selectText,
             { color: selectedOption ? colors.text : colors.placeholder },
           ]}
+          numberOfLines={1}
         >
           {selectedOption?.label || placeholder}
         </Text>
-        <Text style={[styles.arrow, { color: colors.textSecondary }]}>▼</Text>
+        <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
       </TouchableOpacity>
 
       {error && (
-        <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>
+        <View style={styles.errorRow} accessibilityLiveRegion="polite">
+          <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+          <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>
+        </View>
       )}
 
       <Modal
@@ -87,13 +101,18 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
           style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}
           onPress={() => setIsOpen(false)}
         >
-          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>
                 {label || 'Select Option'}
               </Text>
-              <TouchableOpacity onPress={() => setIsOpen(false)}>
-                <Text style={[styles.closeButton, { color: colors.textSecondary }]}>✕</Text>
+              <TouchableOpacity
+                onPress={() => setIsOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -105,9 +124,11 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
                     onSelect(option.value);
                     setIsOpen(false);
                   }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: option.value === value }}
                   style={[
                     styles.optionItem,
-                    { borderBottomColor: colors.border },
+                    { borderBottomColor: colors.borderLight },
                     option.value === value && { backgroundColor: colors.primaryLight },
                   ]}
                 >
@@ -115,13 +136,13 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
                     style={[
                       styles.optionText,
                       { color: colors.text },
-                      option.value === value && { color: colors.primary, fontWeight: '600' },
+                      option.value === value && { color: colors.primary, fontWeight: '700' },
                     ]}
                   >
                     {option.label}
                   </Text>
                   {option.value === value && (
-                    <Text style={[styles.checkmark, { color: colors.primary }]}>✓</Text>
+                    <Ionicons name="checkmark" size={20} color={colors.primary} />
                   )}
                 </TouchableOpacity>
               ))}
@@ -138,30 +159,37 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
     marginBottom: 8,
   },
   selectButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderWidth: 1.5,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    minHeight: 52,
   },
   selectText: {
     fontSize: 16,
     flex: 1,
+    marginRight: 8,
   },
-  arrow: {
-    fontSize: 10,
-    marginLeft: 8,
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
   },
   error: {
-    fontSize: 12,
-    marginTop: 4,
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   modalOverlay: {
     flex: 1,
@@ -171,7 +199,8 @@ const styles = StyleSheet.create({
   modalContent: {
     width: '85%',
     maxHeight: '70%',
-    borderRadius: 16,
+    borderRadius: radii.lg,
+    borderWidth: 1,
     overflow: 'hidden',
   },
   modalHeader: {
@@ -182,12 +211,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  closeButton: {
-    fontSize: 20,
-    padding: 4,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
   },
   optionsList: {
     maxHeight: 400,
@@ -196,15 +222,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    borderBottomWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    minHeight: 48,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   optionText: {
-    fontSize: 16,
-  },
-  checkmark: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 15,
+    lineHeight: 22,
+    flex: 1,
+    marginRight: 8,
   },
 });
 

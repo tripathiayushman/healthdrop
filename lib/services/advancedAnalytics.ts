@@ -136,11 +136,39 @@ const reportTypeLabel = (table: string): string => {
   }
 };
 
+// ── Session probe cache ───────────────────────────────────────────────────────
+// Deployments differ in which analytics views/columns exist, so this module
+// probes candidate relation names and select clauses. Probes that fail because
+// the relation or column is missing will keep failing for the whole session,
+// so they are remembered here and skipped on subsequent dashboard loads.
+// Transient failures (network, timeouts) are NOT cached, so going offline
+// never permanently disables a working view.
+
+const deadProbeCache = new Set<string>();
+
+const probeKey = (table: string, selectClause: string): string => `${table}::${selectClause}`;
+
+const isMissingSchemaError = (error: unknown): boolean => {
+  const code = String((error as any)?.code ?? '');
+  // 42P01 undefined table, 42703 undefined column, PGRST2xx schema-cache misses.
+  if (code === '42P01' || code === '42703' || code.startsWith('PGRST2')) return true;
+
+  const message = String((error as any)?.message ?? error ?? '').toLowerCase();
+  return (
+    message.includes('does not exist') ||
+    message.includes('schema cache') ||
+    message.includes('could not find')
+  );
+};
+
 async function runSelect(
   table: string,
   selectClause: string,
   configure?: (query: any) => any
 ): Promise<GenericRow[] | null> {
+  const key = probeKey(table, selectClause);
+  if (deadProbeCache.has(key)) return null;
+
   try {
     let query = supabase.from(table).select(selectClause);
     if (configure) {
@@ -149,11 +177,17 @@ async function runSelect(
 
     const { data, error } = await query;
     if (error || !Array.isArray(data)) {
+      if (error && isMissingSchemaError(error)) {
+        deadProbeCache.add(key);
+      }
       return null;
     }
 
     return data as unknown as GenericRow[];
-  } catch {
+  } catch (error) {
+    if (isMissingSchemaError(error)) {
+      deadProbeCache.add(key);
+    }
     return null;
   }
 }

@@ -1,5 +1,6 @@
 // =====================================================
 // STATE DROPDOWN - Searchable State Selector
+// "Prakash" restyle: token-driven, 52dp field, quiet zero
 // =====================================================
 import React, { useState, useMemo } from 'react';
 import {
@@ -66,7 +67,7 @@ export const StateDropdown: React.FC<StateDropdownProps> = ({
   onSelect,
   placeholder = 'Select State',
 }) => {
-  const { colors } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const [modalVisible, setModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -88,15 +89,18 @@ export const StateDropdown: React.FC<StateDropdownProps> = ({
       <TouchableOpacity
         style={[
           styles.dropdown,
-          { backgroundColor: colors.card, borderColor: colors.border },
+          { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder },
         ]}
         onPress={() => setModalVisible(true)}
+        accessibilityRole="button"
+        accessibilityLabel={value ? `State: ${value}` : placeholder}
       >
         <Text
           style={[
             styles.dropdownText,
-            { color: value ? colors.text : colors.textSecondary },
+            { color: value ? colors.text : colors.placeholder },
           ]}
+          numberOfLines={1}
         >
           {value || placeholder}
         </Text>
@@ -105,34 +109,45 @@ export const StateDropdown: React.FC<StateDropdownProps> = ({
 
       <Modal
         visible={modalVisible}
-        animationType="slide"
+        animationType={reduceMotion ? 'none' : 'slide'}
         transparent={true}
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             {/* Header */}
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Select State</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <TouchableOpacity
+                onPress={() => setModalVisible(false)}
+                style={styles.closeBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
 
             {/* Search Input */}
-            <View style={[styles.searchContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
-              <Ionicons name="search" size={20} color={colors.textSecondary} />
+            <View style={[styles.searchContainer, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+              <Ionicons name="search-outline" size={20} color={colors.textSecondary} />
               <TextInput
                 style={[styles.searchInput, { color: colors.text }]}
                 placeholder="Search states..."
-                placeholderTextColor={colors.textSecondary}
+                placeholderTextColor={colors.placeholder}
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 autoFocus
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Ionicons name="close-circle-outline" size={20} color={colors.textSecondary} />
                 </TouchableOpacity>
               )}
             </View>
@@ -147,15 +162,19 @@ export const StateDropdown: React.FC<StateDropdownProps> = ({
                 <TouchableOpacity
                   style={[
                     styles.stateItem,
-                    { borderBottomColor: colors.border },
-                    value === item && { backgroundColor: colors.primary + '15' },
+                    { borderBottomColor: colors.borderLight },
+                    value === item && { backgroundColor: colors.primaryLight },
                   ]}
                   onPress={() => handleSelect(item)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: value === item }}
+                  accessibilityLabel={`${item}${value === item ? ', selected' : ''}`}
                 >
                   <Text
                     style={[
                       styles.stateText,
-                      { color: value === item ? colors.primary : colors.text },
+                      { color: colors.text },
+                      value === item && { fontWeight: '700' },
                     ]}
                   >
                     {item}
@@ -167,9 +186,9 @@ export const StateDropdown: React.FC<StateDropdownProps> = ({
               )}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
-                  <Ionicons name="search-outline" size={40} color={colors.textSecondary} />
+                  <Ionicons name="search-outline" size={24} color={colors.textSecondary} />
                   <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                    No states found
+                    No state matches that search — try a shorter name.
                   </Text>
                 </View>
               }
@@ -188,20 +207,24 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderWidth: 1.5,
     borderRadius: 12,
-    padding: 14,
+    minHeight: 52,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 8,
   },
   dropdownText: {
     fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
     flex: 1,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     maxHeight: '80%',
     paddingBottom: 30,
   },
@@ -209,21 +232,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
+    paddingLeft: 16,
+    paddingRight: 8,
+    paddingVertical: 8,
+    minHeight: 56,
     borderBottomWidth: 1,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '700',
+  },
+  closeBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     margin: 16,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderRadius: 10,
+    minHeight: 48,
+    borderWidth: 1.5,
+    borderRadius: 12,
     gap: 8,
   },
   searchInput: {
@@ -238,22 +272,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
+    minHeight: 48,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     marginHorizontal: 8,
     borderRadius: 8,
+    gap: 8,
   },
   stateText: {
     fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+    flex: 1,
   },
   emptyContainer: {
     alignItems: 'center',
     paddingVertical: 40,
+    paddingHorizontal: 24,
+    gap: 8,
   },
   emptyText: {
-    marginTop: 12,
-    fontSize: 15,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
 

@@ -5,6 +5,7 @@ import { supabase } from '../supabase';
 import { DiseaseReport, DiseaseReportInput, ReportStatus, ApiResponse } from '../../types';
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
+import { sanitizeSearchTerm } from './searchSanitize';
 
 const LEGACY_SCHEMA_FALLBACK_PATTERNS = [
   'client_idempotency_key',
@@ -63,7 +64,10 @@ export const diseaseReportsService = {
       if (district) query = query.eq('district', district);
       if (severity) query = query.eq('severity', severity);
       if (searchQuery) {
-        query = query.or(`disease_name.ilike.%${searchQuery}%,location_name.ilike.%${searchQuery}%`);
+        const term = sanitizeSearchTerm(searchQuery);
+        if (term) {
+          query = query.or(`disease_name.ilike.%${term}%,location_name.ilike.%${term}%`);
+        }
       }
       if (dateFrom) query = query.gte('created_at', dateFrom);
       if (dateTo) query = query.lte('created_at', dateTo + 'T23:59:59');

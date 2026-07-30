@@ -1,28 +1,30 @@
 // =====================================================
-// PROFILE SCREEN - User Profile & Settings
+// PROFILE SCREEN ("Prakash" design)
+// User profile & settings — flat headerBg band + Role
+// Ribbon, token-driven cards, inline validation (no
+// Alert.alert), One-Hand Action Bar modals.
 // =====================================================
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
+  Pressable,
   Switch,
   Modal,
   TextInput,
   ActivityIndicator,
-  Platform,
-  ViewStyle,
 } from 'react-native';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
+import { ROLE_ACCENT } from '../dashboards/DashboardShared';
 
 interface ProfileScreenProps {
   profile: Profile;
@@ -31,12 +33,31 @@ interface ProfileScreenProps {
   onNavigateToForm?: (formType: string) => void;
 }
 
-const WEB_BACKDROP_STYLE: ViewStyle | undefined = Platform.OS === 'web'
-  ? ({
-      backdropFilter: 'blur(16px)',
-      WebkitBackdropFilter: 'blur(16px)',
-    } as React.CSSProperties as unknown as ViewStyle)
-  : undefined;
+const NOTIFICATIONS_KEY = 'healthdrop:notificationsEnabled';
+
+const ROLE_LABEL: Record<string, string> = {
+  super_admin:      'Super Administrator',
+  health_admin:     'Health Administrator',
+  clinic:           'Clinic Staff',
+  asha_worker:      'ASHA Worker',
+  volunteer:        'Community Volunteer',
+  district_officer: 'District Officer',
+};
+
+const ROLE_ION_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
+  super_admin:      'shield-checkmark-outline',
+  health_admin:     'medkit-outline',
+  clinic:           'medical-outline',
+  asha_worker:      'heart-outline',
+  volunteer:        'hand-left-outline',
+  district_officer: 'business-outline',
+};
+
+const TERMS_TEXT =
+  'Health Drop Surveillance System\n\n1. This app is for health surveillance reporting only.\n\n2. Users must provide accurate information.\n\n3. All data is handled securely and confidentially.\n\n4. Users must not misuse the platform.\n\n5. The app is provided as-is without warranties.';
+
+const PRIVACY_TEXT =
+  'We are committed to protecting your privacy.\n\n• Your personal data is encrypted and stored securely.\n\n• We only collect necessary information for health surveillance.\n\n• Your data will not be shared with third parties without consent.\n\n• You can request data deletion at any time.\n\n• Location data is used only for report mapping.';
 
 const ProfileScreen: React.FC<ProfileScreenProps> = ({
   profile,
@@ -45,9 +66,8 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onNavigateToForm,
 }) => {
   const { colors, isDark, toggleTheme } = useTheme();
-  const modalSurfaceColor = isDark ? '#1A1A1A' : '#FFFFFF';
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  
+
   // Modal states
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -55,9 +75,18 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [showHelpFAQ, setShowHelpFAQ] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [showSignOutModal, setShowSignOutModal] = useState(false);
+  const [infoDoc, setInfoDoc] = useState<{ title: string; body: string } | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
+
+  // Inline validation / server errors — Alert.alert is banned for validation
+  const [editError, setEditError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [locationError, setLocationError] = useState('');
+  const [feedbackError, setFeedbackError] = useState('');
+  // GPS status message shown inline inside the location modal
+  const [gpsMessage, setGpsMessage] = useState('');
 
   // Form states
   const [editFormData, setEditFormData] = useState({
@@ -65,7 +94,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     phone: profile.phone || '',
   });
   const [passwordData, setPasswordData] = useState({
-    currentPassword: '',
     newPassword: '',
     confirmPassword: '',
   });
@@ -80,18 +108,30 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackCategory, setFeedbackCategory] = useState('general');
 
-  const getRoleInfo = (role: string) => {
-    const roles: Record<string, { label: string; icon: string; color: string; gradient: [string, string] }> = {
-      super_admin:      { label: 'Super Administrator', icon: 'shield-crown', color: '#42A5F5', gradient: ['#0F172A', '#1976D2'] },
-      health_admin:     { label: 'Health Administrator', icon: 'hospital-box', color: '#26A69A', gradient: ['#0D3B2E', '#00897B'] },
-      admin:            { label: 'Administrator', icon: 'shield-crown', color: '#F59E0B', gradient: ['#1C1400', '#B45309'] },
-      clinic:           { label: 'Clinic Staff', icon: 'hospital-building', color: '#A78BFA', gradient: ['#1A1033', '#6D28D9'] },
-      asha_worker:      { label: 'ASHA Worker', icon: 'account-heart', color: '#FB923C', gradient: ['#2D1B0E', '#EA580C'] },
-      volunteer:        { label: 'Community Volunteer', icon: 'hand-heart', color: '#4ADE80', gradient: ['#0A2E1A', '#16A34A'] },
-      district_officer: { label: 'District Officer', icon: 'account-tie', color: '#818CF8', gradient: ['#1E1B4B', '#4338CA'] },
-    };
-    return roles[role] || { label: role, icon: 'account', color: colors.primary, gradient: [colors.primary, colors.primary] as [string, string] };
+  // Load persisted Notifications preference
+  useEffect(() => {
+    AsyncStorage.getItem(NOTIFICATIONS_KEY)
+      .then(value => {
+        if (value !== null) setNotificationsEnabled(value === 'true');
+      })
+      .catch(() => {
+        /* storage unavailable — keep default */
+      });
+  }, []);
+
+  const toggleNotifications = () => {
+    setNotificationsEnabled(prev => {
+      const next = !prev;
+      AsyncStorage.setItem(NOTIFICATIONS_KEY, String(next)).catch(() => {
+        /* storage unavailable — in-memory toggle still applies */
+      });
+      return next;
+    });
   };
+
+  const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
+  const roleLabel = ROLE_LABEL[profile.role] ?? profile.role;
+  const roleIcon = ROLE_ION_ICON[profile.role] ?? 'person-outline';
 
   const handleSignOut = () => {
     setShowSignOutModal(true);
@@ -115,24 +155,32 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     }
   };
 
-  const roleInfo = getRoleInfo(profile.role);
-
-  // Helper functions for form input styling
+  // Input styling — 1.5px border at rest, 2px focus, no glow
   const getInputStyle = (fieldName: string) => [
     styles.modalInput,
     {
-      backgroundColor: colors.card,
-      borderColor: focusedField === fieldName ? colors.primary : colors.border,
+      backgroundColor: colors.inputBackground,
+      borderColor: focusedField === fieldName ? colors.inputFocusBorder : colors.inputBorder,
+      borderWidth: focusedField === fieldName ? 2 : 1.5,
       color: colors.text,
     },
   ];
 
+  const InlineError: React.FC<{ message: string }> = ({ message }) =>
+    message ? (
+      <View style={styles.inlineErrorRow}>
+        <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+        <Text style={[styles.inlineErrorText, { color: colors.danger }]}>{message}</Text>
+      </View>
+    ) : null;
+
   // Profile update handler
   const handleEditProfile = async () => {
     if (!editFormData.full_name.trim()) {
-      Alert.alert('Required', 'Please enter your full name');
+      setEditError('Please enter your full name');
       return;
     }
+    setEditError('');
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -148,11 +196,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
       if (error) throw error;
 
-      Alert.alert('Success', 'Profile updated successfully');
       setShowEditProfile(false);
       onProfileUpdate?.({ ...profile, ...editFormData });
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      setEditError(error.message || "Couldn't save — check connection");
     } finally {
       setLoading(false);
     }
@@ -161,17 +208,18 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   // Password change handler
   const handleChangePassword = async () => {
     if (!passwordData.newPassword || !passwordData.confirmPassword) {
-      Alert.alert('Required', 'Please fill in all password fields');
+      setPasswordError('Please fill in all password fields');
       return;
     }
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      Alert.alert('Error', 'New passwords do not match');
+      setPasswordError('New passwords do not match');
       return;
     }
     if (passwordData.newPassword.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters');
+      setPasswordError('Password must be at least 6 characters');
       return;
     }
+    setPasswordError('');
     setLoading(true);
     try {
       const { error } = await supabase.auth.updateUser({
@@ -180,11 +228,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
       if (error) throw error;
 
-      Alert.alert('Success', 'Password changed successfully');
       setShowChangePassword(false);
-      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPasswordData({ newPassword: '', confirmPassword: '' });
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      setPasswordError(error.message || "Couldn't change password — check connection");
     } finally {
       setLoading(false);
     }
@@ -193,9 +240,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   // Location update handler
   const handleUpdateLocation = async () => {
     if (!locationData.district.trim() || !locationData.state.trim()) {
-      Alert.alert('Required', 'Please enter at least district and state');
+      setLocationError('Please enter at least district and state');
       return;
     }
+    setLocationError('');
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -206,36 +254,35 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
         .update({
           district: locationData.district.trim(),
           state: locationData.state.trim(),
-          // Store village + pincode in a notes-like field if your schema supports it
-          // (optional — safe to ignore if column not present)
         })
         .eq('id', user.id);
 
       if (error) throw error;
 
-      Alert.alert('Success', 'Location updated successfully');
       setShowUpdateLocation(false);
+      setGpsMessage('');
       onProfileUpdate?.({ ...profile, district: locationData.district, state: locationData.state });
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      setLocationError(error.message || "Couldn't save — check connection");
     } finally {
       setLoading(false);
     }
   };
 
-  // GPS auto-fill handler
+  // GPS auto-fill handler — status is shown inline, never as a popup
   const handleGPSFetch = async () => {
     setGpsLoading(true);
+    setGpsMessage('');
     try {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
-        Alert.alert('Location Disabled', 'Please enable location services (GPS) on your device and try again.');
+        setGpsMessage('Location services (GPS) are off — enable them on your device and try again.');
         return;
       }
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required to auto-fill address.');
+        setGpsMessage('Location permission is required to auto-fill address.');
         return;
       }
 
@@ -254,7 +301,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       });
 
       if (!addr) {
-        Alert.alert('Location Found', 'GPS location was detected, but address lookup was unavailable. Please fill details manually.');
+        setGpsMessage('GPS location detected, but address lookup was unavailable. Please fill details manually.');
         return;
       }
 
@@ -265,31 +312,31 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
         state: addr.region || d.state,
         pincode: addr.postalCode || d.pincode,
       }));
-      Alert.alert('Location Detected', 'Address fields have been auto-filled. Please verify and save.');
+      setGpsMessage('Address auto-filled from GPS. Please verify and save.');
     } catch (error: any) {
       const message = String(error?.message || '').toLowerCase();
       if (message.includes('timeout')) {
-        Alert.alert('Location Timeout', 'GPS took too long to respond. Move to an open area and try again.');
+        setGpsMessage('GPS took too long to respond. Move to an open area and try again.');
       } else {
-        Alert.alert('Error', 'Could not determine location. Please enter manually.');
+        setGpsMessage('Could not determine location. Please enter manually.');
       }
     } finally {
       setGpsLoading(false);
     }
   };
 
-
   // Feedback submit handler - stores in database
   const handleSubmitFeedback = async () => {
     if (!feedbackText.trim()) {
-      Alert.alert('Required', 'Please enter your feedback');
+      setFeedbackError('Please enter your feedback');
       return;
     }
+    setFeedbackError('');
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        Alert.alert('Error', 'You must be logged in');
+        setFeedbackError('You must be logged in');
         return;
       }
 
@@ -304,46 +351,23 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
       if (error) throw error;
 
-      Alert.alert('Thank You!', 'Your feedback has been submitted successfully');
       setShowFeedback(false);
       setFeedbackText('');
       setFeedbackCategory('general');
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      setFeedbackError(error.message || "Couldn't send — check connection");
     } finally {
       setLoading(false);
     }
   };
 
-  // Open external links
-  const openTermsOfService = () => {
-    Alert.alert(
-      'Terms of Service',
-      'Health Drop Surveillance System\n\n1. This app is for health surveillance reporting only.\n\n2. Users must provide accurate information.\n\n3. All data is handled securely and confidentially.\n\n4. Users must not misuse the platform.\n\n5. The app is provided as-is without warranties.',
-      [{ text: 'OK' }]
-    );
-  };
-
-  const openPrivacyPolicy = () => {
-    Alert.alert(
-      'Privacy Policy',
-      'We are committed to protecting your privacy.\n\n• Your personal data is encrypted and stored securely.\n\n• We only collect necessary information for health surveillance.\n\n• Your data will not be shared with third parties without consent.\n\n• You can request data deletion at any time.\n\n• Location data is used only for report mapping.',
-      [{ text: 'OK' }]
-    );
-  };
-
   const handleOpenWidgetCustomization = () => {
-    if (!onNavigateToForm) {
-      Alert.alert('Unavailable', 'Widget customization is not available in this context.');
-      return;
-    }
-
+    if (!onNavigateToForm) return;
     onNavigateToForm('widget-customization');
   };
 
   interface MenuItem {
-    iconName: string;
-    iconFamily: 'ionicons' | 'material';
+    iconName: keyof typeof Ionicons.glyphMap;
     label: string;
     action: () => void;
     hasSwitch?: boolean;
@@ -359,33 +383,30 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     {
       section: 'Account',
       items: [
-        { iconName: 'person', iconFamily: 'ionicons', label: 'Edit Profile', action: () => setShowEditProfile(true) },
-        { iconName: 'lock-closed', iconFamily: 'ionicons', label: 'Change Password', action: () => setShowChangePassword(true) },
-        { iconName: 'location', iconFamily: 'ionicons', label: 'Update Location', action: () => setShowUpdateLocation(true) },
+        { iconName: 'person-outline', label: 'Edit Profile', action: () => setShowEditProfile(true) },
+        { iconName: 'lock-closed-outline', label: 'Change Password', action: () => setShowChangePassword(true) },
+        { iconName: 'location-outline', label: 'Update Location', action: () => setShowUpdateLocation(true) },
       ],
     },
     {
       section: 'Preferences',
       items: [
         {
-          iconName: 'grid',
-          iconFamily: 'ionicons',
+          iconName: 'grid-outline',
           label: 'Customize Widgets',
           action: handleOpenWidgetCustomization,
         },
-        { 
-          iconName: isDark ? 'moon' : 'sunny', 
-          iconFamily: 'ionicons',
-          label: 'Dark Mode', 
+        {
+          iconName: isDark ? 'moon-outline' : 'sunny-outline',
+          label: 'Dark Mode',
           action: toggleTheme,
           hasSwitch: true,
           switchValue: isDark,
         },
-        { 
-          iconName: 'notifications', 
-          iconFamily: 'ionicons',
-          label: 'Notifications', 
-          action: () => setNotificationsEnabled(!notificationsEnabled),
+        {
+          iconName: 'notifications-outline',
+          label: 'Notifications',
+          action: toggleNotifications,
           hasSwitch: true,
           switchValue: notificationsEnabled,
         },
@@ -394,10 +415,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     {
       section: 'Support',
       items: [
-        { iconName: 'help-circle', iconFamily: 'ionicons', label: 'Help & FAQ', action: () => setShowHelpFAQ(true) },
-        { iconName: 'chatbox-ellipses', iconFamily: 'ionicons', label: 'Send Feedback', action: () => setShowFeedback(true) },
-        { iconName: 'document-text', iconFamily: 'ionicons', label: 'Terms of Service', action: openTermsOfService },
-        { iconName: 'shield-checkmark', iconFamily: 'ionicons', label: 'Privacy Policy', action: openPrivacyPolicy },
+        { iconName: 'help-circle-outline', label: 'Help & FAQ', action: () => setShowHelpFAQ(true) },
+        { iconName: 'chatbox-ellipses-outline', label: 'Send Feedback', action: () => setShowFeedback(true) },
+        { iconName: 'document-text-outline', label: 'Terms of Service', action: () => setInfoDoc({ title: 'Terms of Service', body: TERMS_TEXT }) },
+        { iconName: 'shield-checkmark-outline', label: 'Privacy Policy', action: () => setInfoDoc({ title: 'Privacy Policy', body: PRIVACY_TEXT }) },
       ],
     },
   ];
@@ -409,78 +430,159 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     { label: 'Improvement', value: 'improvement' },
   ];
 
+  // Header text: navy band in light mode → white; surface band in dark → ink.
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
+  // One-Hand Action Bar for modals: 56dp primary at bottom, Cancel above as text link
+  const ActionBar: React.FC<{
+    label: string;
+    onPress: () => void;
+    onCancel: () => void;
+    busy?: boolean;
+    busyLabel?: string;
+    destructive?: boolean;
+  }> = ({ label, onPress, onCancel, busy, busyLabel, destructive }) => (
+    <View style={styles.actionBar}>
+      <TouchableOpacity
+        onPress={onCancel}
+        style={styles.cancelLink}
+        accessibilityRole="button"
+        accessibilityLabel="Cancel"
+        hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}
+      >
+        <Text style={[styles.cancelLinkText, { color: isDark ? colors.primary : colors.primaryDark }]}>Cancel</Text>
+      </TouchableOpacity>
+      <Pressable
+        onPress={onPress}
+        disabled={busy}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        style={({ pressed }) => [
+          styles.primaryBtn,
+          {
+            backgroundColor: destructive
+              ? colors.danger
+              : pressed
+              ? colors.primaryDark
+              : colors.primary,
+          },
+          busy && { opacity: 0.4 },
+        ]}
+      >
+        <Text style={[styles.primaryBtnText, { color: destructive ? colors.textInverse : colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+          {busy ? busyLabel ?? label : label}
+        </Text>
+      </Pressable>
+    </View>
+  );
+
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header — role gradient */}
-      <LinearGradient colors={roleInfo.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.header}>
-        <View style={styles.avatarContainer}>
-          <View style={[styles.avatar, { backgroundColor: 'rgba(255,255,255,0.2)', borderColor: 'rgba(255,255,255,0.4)' }]}>
-            <MaterialCommunityIcons name={roleInfo.icon as any} size={40} color="#FFF" />
-          </View>
-          <View style={styles.onlineIndicator} />
+      {/* Header — flat headerBg band, avatar ring in role accent */}
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <View style={[styles.avatar, { borderColor: accent, backgroundColor: colors.headerBg }]}>
+          <Ionicons name={roleIcon} size={36} color={accent} />
         </View>
-        <Text style={styles.userName}>{profile.full_name || 'User'}</Text>
-        <Text style={styles.userEmail}>{profile.district ? `${profile.district}${profile.state ? ', ' + profile.state : ''}` : (profile.phone || 'No location set')}</Text>
-        <View style={[styles.roleBadge, { backgroundColor: 'rgba(255,255,255,0.2)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' }]}>
-          <Text style={[styles.roleText, { color: '#FFFFFF' }]}>{roleInfo.label}</Text>
+        <Text style={[styles.userName, { color: headerText }]} numberOfLines={1}>
+          {profile.full_name || 'User'}
+        </Text>
+        <Text style={[styles.userLocation, { color: headerSub }]} numberOfLines={1}>
+          {profile.district
+            ? `${profile.district}${profile.state ? ', ' + profile.state : ''}`
+            : profile.phone || 'No location set'}
+        </Text>
+        <View style={[styles.rolePill, { borderColor: accent }]}>
+          <Ionicons name={roleIcon} size={12} color={accent} />
+          <Text style={[styles.rolePillText, { color: accent }]} maxFontSizeMultiplier={1.3}>
+            {roleLabel}
+          </Text>
         </View>
-      </LinearGradient>
+      </View>
+      {/* Role Ribbon */}
+      <View style={[styles.roleRibbon, { backgroundColor: accent }]} />
 
-      {/* Menu Sections */}
+      {/* Menu Sections — eyebrow headers, flat cards */}
       {menuItems.map((section, sectionIndex) => (
         <View key={sectionIndex} style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             {section.section}
           </Text>
-          <View style={[styles.menuCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View
+            style={[
+              styles.menuCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+              !isDark && styles.cardShadow,
+            ]}
+          >
             {section.items.map((item, itemIndex) => (
-              <TouchableOpacity
+              <Pressable
                 key={itemIndex}
-                style={[
+                style={({ pressed }) => [
                   styles.menuItem,
-                  itemIndex < section.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                  pressed && { backgroundColor: colors.cardHover },
+                  itemIndex < section.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight },
                 ]}
                 onPress={item.action}
-                activeOpacity={0.7}
+                accessibilityRole={item.hasSwitch ? 'switch' : 'button'}
+                accessibilityLabel={item.label}
+                accessibilityState={item.hasSwitch ? { checked: item.switchValue } : undefined}
               >
                 <View style={styles.menuItemLeft}>
-                  <Ionicons name={item.iconName as any} size={22} color={colors.primary} />
+                  <Ionicons name={item.iconName} size={22} color={colors.textSecondary} />
                   <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
                 </View>
                 {item.hasSwitch ? (
                   <Switch
                     value={item.switchValue}
                     onValueChange={item.action}
-                    trackColor={{ false: colors.border, true: colors.primary + '50' }}
-                    thumbColor={item.switchValue ? colors.primary : colors.textSecondary}
+                    trackColor={{ false: colors.surfaceVariant, true: colors.primary }}
+                    thumbColor={colors.card}
+                    ios_backgroundColor={colors.surfaceVariant}
                   />
                 ) : (
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                  <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
                 )}
-              </TouchableOpacity>
+              </Pressable>
             ))}
           </View>
         </View>
       ))}
 
-      {/* Sign Out Button */}
+      {/* Sign Out Button — secondary style, danger outline */}
       <View style={styles.section}>
-        <TouchableOpacity
-          style={[styles.signOutButton, { backgroundColor: colors.error + '15', borderColor: colors.error }]}
+        <Pressable
+          style={({ pressed }) => [
+            styles.signOutButton,
+            {
+              backgroundColor: pressed ? colors.cardHover : colors.card,
+              borderColor: colors.danger,
+            },
+          ]}
           onPress={handleSignOut}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
         >
-          <Ionicons name="log-out-outline" size={22} color={colors.error} />
-          <Text style={[styles.signOutText, { color: colors.error }]}>Sign Out</Text>
-        </TouchableOpacity>
+          <Ionicons name="log-out-outline" size={22} color={colors.danger} />
+          <Text style={[styles.signOutText, { color: colors.danger }]}>Sign Out</Text>
+        </Pressable>
       </View>
 
       {/* App Info */}
       <View style={styles.appInfo}>
         <Text style={[styles.appName, { color: colors.textSecondary }]}>Health Drop Surveillance</Text>
-        <Text style={[styles.appVersion, { color: colors.textSecondary }]}>Version 1.0.0</Text>
+        <Text style={[styles.appVersion, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+          Version 1.0.0
+        </Text>
       </View>
 
       <View style={styles.bottomSpacer} />
@@ -488,34 +590,30 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* ==================== MODALS ==================== */}
 
       {/* Edit Profile Modal */}
-      <Modal visible={showEditProfile} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[
-            styles.modalContent, 
-            { backgroundColor: colors.card },
-            WEB_BACKDROP_STYLE,
-          ]}>
+      <Modal visible={showEditProfile} animationType="slide" transparent onRequestClose={() => setShowEditProfile(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
-              <Ionicons name="person" size={24} color={colors.primary} />
+              <Ionicons name="person-outline" size={24} color={colors.textSecondary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Profile</Text>
             </View>
-            
-            <Text style={[styles.modalLabel, { color: colors.text }]}>Full Name</Text>
+
+            <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Full Name</Text>
             <TextInput
               style={getInputStyle('full_name')}
               placeholder="Enter your full name"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={colors.placeholder}
               value={editFormData.full_name}
               onChangeText={(text) => setEditFormData({ ...editFormData, full_name: text })}
               onFocus={() => setFocusedField('full_name')}
               onBlur={() => setFocusedField(null)}
             />
 
-            <Text style={[styles.modalLabel, { color: colors.text }]}>Phone Number</Text>
+            <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Phone Number</Text>
             <TextInput
               style={getInputStyle('phone')}
               placeholder="Enter phone number"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={colors.placeholder}
               value={editFormData.phone}
               onChangeText={(text) => setEditFormData({ ...editFormData, phone: text.replace(/[^0-9]/g, '') })}
               onFocus={() => setFocusedField('phone')}
@@ -524,43 +622,32 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               maxLength={10}
             />
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalCancelBtn, { borderColor: colors.border }]}
-                onPress={() => setShowEditProfile(false)}
-              >
-                <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalSaveBtn, { backgroundColor: colors.primary }]}
-                onPress={handleEditProfile}
-                disabled={loading}
-              >
-                <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{loading ? 'Saving...' : 'Save'}</Text>
-              </TouchableOpacity>
-            </View>
+            <InlineError message={editError} />
+            <ActionBar
+              label="Save"
+              busyLabel="Saving…"
+              busy={loading}
+              onPress={handleEditProfile}
+              onCancel={() => { setShowEditProfile(false); setEditError(''); }}
+            />
           </View>
         </View>
       </Modal>
 
       {/* Change Password Modal */}
-      <Modal visible={showChangePassword} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[
-            styles.modalContent, 
-            { backgroundColor: colors.card },
-            WEB_BACKDROP_STYLE,
-          ]}>
+      <Modal visible={showChangePassword} animationType="slide" transparent onRequestClose={() => setShowChangePassword(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
-              <Ionicons name="lock-closed" size={24} color={colors.primary} />
+              <Ionicons name="lock-closed-outline" size={24} color={colors.textSecondary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Change Password</Text>
             </View>
 
-            <Text style={[styles.modalLabel, { color: colors.text }]}>New Password</Text>
+            <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>New Password</Text>
             <TextInput
               style={getInputStyle('newPassword')}
               placeholder="Enter new password"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={colors.placeholder}
               value={passwordData.newPassword}
               onChangeText={(text) => setPasswordData({ ...passwordData, newPassword: text })}
               onFocus={() => setFocusedField('newPassword')}
@@ -568,11 +655,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               secureTextEntry
             />
 
-            <Text style={[styles.modalLabel, { color: colors.text }]}>Confirm Password</Text>
+            <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Confirm Password</Text>
             <TextInput
               style={getInputStyle('confirmPassword')}
               placeholder="Confirm new password"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={colors.placeholder}
               value={passwordData.confirmPassword}
               onChangeText={(text) => setPasswordData({ ...passwordData, confirmPassword: text })}
               onFocus={() => setFocusedField('confirmPassword')}
@@ -580,215 +667,229 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               secureTextEntry
             />
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalCancelBtn, { borderColor: colors.border }]}
-                onPress={() => {
-                  setShowChangePassword(false);
-                  setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                }}
-              >
-                <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalSaveBtn, { backgroundColor: colors.primary }]}
-                onPress={handleChangePassword}
-                disabled={loading}
-              >
-                <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{loading ? 'Changing...' : 'Change'}</Text>
-              </TouchableOpacity>
-            </View>
+            <InlineError message={passwordError} />
+            <ActionBar
+              label="Change Password"
+              busyLabel="Changing…"
+              busy={loading}
+              onPress={handleChangePassword}
+              onCancel={() => {
+                setShowChangePassword(false);
+                setPasswordError('');
+                setPasswordData({ newPassword: '', confirmPassword: '' });
+              }}
+            />
           </View>
         </View>
       </Modal>
 
       {/* Update Location Modal */}
-      <Modal visible={showUpdateLocation} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[
-            styles.modalContent, 
-            { backgroundColor: colors.card },
-            WEB_BACKDROP_STYLE,
-          ]}>
+      <Modal visible={showUpdateLocation} animationType="slide" transparent onRequestClose={() => setShowUpdateLocation(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
-              <Ionicons name="location" size={24} color={colors.primary} />
+              <Ionicons name="location-outline" size={24} color={colors.textSecondary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Update Location</Text>
             </View>
 
-            {/* GPS fetch button */}
-            <TouchableOpacity
-              style={[styles.gpsFetchBtn, { backgroundColor: colors.primary + '15', borderColor: colors.primary }]}
-              onPress={handleGPSFetch}
-              disabled={gpsLoading}
-            >
-              {gpsLoading
-                ? <ActivityIndicator size={16} color={colors.primary} />
-                : <Ionicons name="navigate" size={16} color={colors.primary} />
-              }
-              <Text style={[styles.gpsFetchText, { color: colors.primary }]}>
-                {gpsLoading ? 'Detecting location...' : 'Fetch GPS Location'}
-              </Text>
-            </TouchableOpacity>
-
-            <Text style={[styles.modalLabel, { color: colors.text }]}>Village / Town / Area</Text>
-            <TextInput
-              style={getInputStyle('village')}
-              placeholder="e.g. Sector 12, Rajajipuram"
-              placeholderTextColor={colors.textSecondary}
-              value={locationData.village}
-              onChangeText={(t) => setLocationData({ ...locationData, village: t })}
-              onFocus={() => setFocusedField('village')}
-              onBlur={() => setFocusedField(null)}
-            />
-
-            <Text style={[styles.modalLabel, { color: colors.text }]}>District *</Text>
-            <TextInput
-              style={getInputStyle('district')}
-              placeholder="e.g. Lucknow"
-              placeholderTextColor={colors.textSecondary}
-              value={locationData.district}
-              onChangeText={(t) => setLocationData({ ...locationData, district: t })}
-              onFocus={() => setFocusedField('district')}
-              onBlur={() => setFocusedField(null)}
-            />
-
-            <Text style={[styles.modalLabel, { color: colors.text }]}>State *</Text>
-            <TextInput
-              style={getInputStyle('state')}
-              placeholder="e.g. Uttar Pradesh"
-              placeholderTextColor={colors.textSecondary}
-              value={locationData.state}
-              onChangeText={(t) => setLocationData({ ...locationData, state: t })}
-              onFocus={() => setFocusedField('state')}
-              onBlur={() => setFocusedField(null)}
-            />
-
-            <Text style={[styles.modalLabel, { color: colors.text }]}>PIN Code</Text>
-            <TextInput
-              style={getInputStyle('pincode')}
-              placeholder="e.g. 226012"
-              placeholderTextColor={colors.textSecondary}
-              value={locationData.pincode}
-              onChangeText={(t) => setLocationData({ ...locationData, pincode: t.replace(/[^0-9]/g, '') })}
-              onFocus={() => setFocusedField('pincode')}
-              onBlur={() => setFocusedField(null)}
-              keyboardType="numeric"
-              maxLength={6}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalCancelBtn, { borderColor: colors.border }]}
-                onPress={() => setShowUpdateLocation(false)}
+            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              {/* GPS fetch button */}
+              <Pressable
+                style={({ pressed }) => [
+                  styles.gpsFetchBtn,
+                  {
+                    backgroundColor: pressed ? colors.cardHover : colors.primaryLight,
+                    borderColor: colors.primary,
+                  },
+                ]}
+                onPress={handleGPSFetch}
+                disabled={gpsLoading}
+                accessibilityRole="button"
+                accessibilityLabel="Fetch GPS location"
               >
-                <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalSaveBtn, { backgroundColor: colors.primary }]}
-                onPress={handleUpdateLocation}
-                disabled={loading}
-              >
-                <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{loading ? 'Updating...' : 'Update'}</Text>
-              </TouchableOpacity>
-            </View>
+                {gpsLoading
+                  ? <ActivityIndicator size={16} color={colors.primary} />
+                  : <Ionicons name="navigate-outline" size={16} color={colors.primary} />
+                }
+                <Text style={[styles.gpsFetchText, { color: isDark ? colors.primary : colors.primaryDark }]}>
+                  {gpsLoading ? 'Detecting location…' : 'Fetch GPS Location'}
+                </Text>
+              </Pressable>
+
+              {gpsMessage ? (
+                <View style={styles.gpsMessageRow}>
+                  <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                  <Text style={[styles.gpsMessageText, { color: colors.textSecondary }]}>{gpsMessage}</Text>
+                </View>
+              ) : null}
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Village / Town / Area</Text>
+              <TextInput
+                style={getInputStyle('village')}
+                placeholder="e.g. Sector 12, Rajajipuram"
+                placeholderTextColor={colors.placeholder}
+                value={locationData.village}
+                onChangeText={(t) => setLocationData({ ...locationData, village: t })}
+                onFocus={() => setFocusedField('village')}
+                onBlur={() => setFocusedField(null)}
+              />
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>District *</Text>
+              <TextInput
+                style={getInputStyle('district')}
+                placeholder="e.g. Lucknow"
+                placeholderTextColor={colors.placeholder}
+                value={locationData.district}
+                onChangeText={(t) => setLocationData({ ...locationData, district: t })}
+                onFocus={() => setFocusedField('district')}
+                onBlur={() => setFocusedField(null)}
+              />
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>State *</Text>
+              <TextInput
+                style={getInputStyle('state')}
+                placeholder="e.g. Uttar Pradesh"
+                placeholderTextColor={colors.placeholder}
+                value={locationData.state}
+                onChangeText={(t) => setLocationData({ ...locationData, state: t })}
+                onFocus={() => setFocusedField('state')}
+                onBlur={() => setFocusedField(null)}
+              />
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>PIN Code</Text>
+              <TextInput
+                style={getInputStyle('pincode')}
+                placeholder="e.g. 226012"
+                placeholderTextColor={colors.placeholder}
+                value={locationData.pincode}
+                onChangeText={(t) => setLocationData({ ...locationData, pincode: t.replace(/[^0-9]/g, '') })}
+                onFocus={() => setFocusedField('pincode')}
+                onBlur={() => setFocusedField(null)}
+                keyboardType="numeric"
+                maxLength={6}
+              />
+            </ScrollView>
+
+            <InlineError message={locationError} />
+            <ActionBar
+              label="Update Location"
+              busyLabel="Updating…"
+              busy={loading}
+              onPress={handleUpdateLocation}
+              onCancel={() => { setShowUpdateLocation(false); setLocationError(''); setGpsMessage(''); }}
+            />
           </View>
         </View>
       </Modal>
 
-
       {/* Help & FAQ Modal */}
-      <Modal visible={showHelpFAQ} animationType="slide" transparent>
-        <View style={[styles.modalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
-          <View style={[
-            styles.modalContent, 
-            { backgroundColor: modalSurfaceColor, borderColor: colors.border },
-            WEB_BACKDROP_STYLE,
-          ]}>
+      <Modal visible={showHelpFAQ} animationType="slide" transparent onRequestClose={() => setShowHelpFAQ(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
-              <Ionicons name="help-circle" size={24} color={colors.primary} />
+              <Ionicons name="help-circle-outline" size={24} color={colors.textSecondary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Help & FAQ</Text>
             </View>
-            
-            <ScrollView style={styles.faqScroll}>
-              <View style={[styles.faqItem, { borderBottomColor: colors.border }]}>
-                <Text style={[styles.faqQuestion, { color: colors.text }]}>How do I report a disease outbreak?</Text>
-                <Text style={[styles.faqAnswer, { color: colors.textSecondary }]}>Go to Reports tab → Select "Disease Report" → Fill in all required details → Submit</Text>
-              </View>
-              
-              <View style={[styles.faqItem, { borderBottomColor: colors.border }]}>
-                <Text style={[styles.faqQuestion, { color: colors.text }]}>How do I create a health campaign?</Text>
-                <Text style={[styles.faqAnswer, { color: colors.textSecondary }]}>Go to Reports tab → Select "Campaign" → Enter campaign details including dates, location and target audience</Text>
-              </View>
-              
-              <View style={[styles.faqItem, { borderBottomColor: colors.border }]}>
-                <Text style={[styles.faqQuestion, { color: colors.text }]}>What is an ASHA worker?</Text>
-                <Text style={[styles.faqAnswer, { color: colors.textSecondary }]}>Accredited Social Health Activists (ASHA) are community health workers who serve as a link between the healthcare system and rural communities.</Text>
-              </View>
-              
-              <View style={[styles.faqItem, { borderBottomColor: colors.border }]}>
-                <Text style={[styles.faqQuestion, { color: colors.text }]}>How do I report water quality issues?</Text>
-                <Text style={[styles.faqAnswer, { color: colors.textSecondary }]}>Go to Reports tab → Select "Water Quality" → Provide water source details and quality assessment</Text>
-              </View>
-              
-              <View style={styles.faqItem}>
-                <Text style={[styles.faqQuestion, { color: colors.text }]}>Who can see my reports?</Text>
-                <Text style={[styles.faqAnswer, { color: colors.textSecondary }]}>Reports are visible to health administrators and relevant authorities in your region. Personal data is kept confidential.</Text>
-              </View>
+
+            <ScrollView style={styles.faqScroll} showsVerticalScrollIndicator={false}>
+              {[
+                { q: 'How do I report a disease outbreak?', a: 'Go to Reports tab → Select "Disease Report" → Fill in all required details → Submit' },
+                { q: 'How do I create a health campaign?', a: 'Go to Reports tab → Select "Campaign" → Enter campaign details including dates, location and target audience' },
+                { q: 'What is an ASHA worker?', a: 'Accredited Social Health Activists (ASHA) are community health workers who serve as a link between the healthcare system and rural communities.' },
+                { q: 'How do I report water quality issues?', a: 'Go to Reports tab → Select "Water Quality" → Provide water source details and quality assessment' },
+                { q: 'Who can see my reports?', a: 'Reports are visible to health administrators and relevant authorities in your region. Personal data is kept confidential.' },
+              ].map((faq, i, arr) => (
+                <View key={i} style={[styles.faqItem, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
+                  <Text style={[styles.faqQuestion, { color: colors.text }]}>{faq.q}</Text>
+                  <Text style={[styles.faqAnswer, { color: colors.textSecondary }]}>{faq.a}</Text>
+                </View>
+              ))}
             </ScrollView>
 
-            <TouchableOpacity
-              style={[styles.modalBtn, styles.modalSaveBtn, { backgroundColor: colors.primary, marginTop: 16 }]}
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryBtn,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary, marginTop: spacing.lg },
+              ]}
               onPress={() => setShowHelpFAQ(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close help"
             >
-              <Text style={[styles.modalBtnText, { color: '#FFF' }]}>Close</Text>
-            </TouchableOpacity>
+              <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Terms / Privacy Info Modal */}
+      <Modal visible={!!infoDoc} animationType="slide" transparent onRequestClose={() => setInfoDoc(null)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="document-text-outline" size={24} color={colors.textSecondary} />
+              <Text style={[styles.modalTitle, { color: colors.text }]}>{infoDoc?.title}</Text>
+            </View>
+            <ScrollView style={styles.faqScroll} showsVerticalScrollIndicator={false}>
+              <Text style={[styles.infoBody, { color: colors.textSecondary }]}>{infoDoc?.body}</Text>
+            </ScrollView>
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryBtn,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary, marginTop: spacing.lg },
+              ]}
+              onPress={() => setInfoDoc(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            >
+              <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]}>Close</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
 
       {/* Send Feedback Modal */}
-      <Modal visible={showFeedback} animationType="slide" transparent>
-        <View style={[styles.modalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
-          <View style={[
-            styles.modalContent, 
-            { backgroundColor: modalSurfaceColor, borderColor: colors.border },
-            WEB_BACKDROP_STYLE,
-          ]}>
+      <Modal visible={showFeedback} animationType="slide" transparent onRequestClose={() => setShowFeedback(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.modalHeader}>
-              <Ionicons name="chatbox-ellipses" size={24} color={colors.primary} />
+              <Ionicons name="chatbox-ellipses-outline" size={24} color={colors.textSecondary} />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Send Feedback</Text>
             </View>
             <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>Help us improve the app!</Text>
 
-            <Text style={[styles.modalLabel, { color: colors.text }]}>Category</Text>
+            <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Category</Text>
             <View style={styles.categoryGrid}>
-              {feedbackCategories.map((cat) => (
-                <TouchableOpacity
-                  key={cat.value}
-                  style={[
-                    styles.categoryChip,
-                    {
-                      backgroundColor: feedbackCategory === cat.value ? colors.primary : colors.background,
-                      borderColor: feedbackCategory === cat.value ? colors.primary : colors.border,
-                    }
-                  ]}
-                  onPress={() => setFeedbackCategory(cat.value)}
-                >
-                  <Text style={[
-                    styles.categoryText,
-                    { color: feedbackCategory === cat.value ? '#FFF' : colors.text }
-                  ]}>
-                    {cat.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {feedbackCategories.map((cat) => {
+                const active = feedbackCategory === cat.value;
+                return (
+                  <TouchableOpacity
+                    key={cat.value}
+                    style={[
+                      styles.categoryChip,
+                      {
+                        backgroundColor: active ? colors.primary : colors.card,
+                        borderColor: active ? colors.primary : colors.border,
+                      },
+                    ]}
+                    onPress={() => setFeedbackCategory(cat.value)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={cat.label}
+                  >
+                    {active && <Ionicons name="checkmark" size={14} color={colors.onPrimary} />}
+                    <Text style={[styles.categoryText, { color: active ? colors.onPrimary : colors.text }]}>
+                      {cat.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
-            <Text style={[styles.modalLabel, { color: colors.text }]}>Your Feedback</Text>
+            <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>Your Feedback</Text>
             <TextInput
               style={[getInputStyle('feedback'), styles.feedbackInput]}
               placeholder="Tell us what you think, suggestions, or report issues..."
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={colors.placeholder}
               value={feedbackText}
               onChangeText={setFeedbackText}
               onFocus={() => setFocusedField('feedback')}
@@ -798,24 +899,18 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               textAlignVertical="top"
             />
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalCancelBtn, { borderColor: colors.border }]}
-                onPress={() => {
-                  setShowFeedback(false);
-                  setFeedbackText('');
-                }}
-              >
-                <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalSaveBtn, { backgroundColor: colors.primary }]}
-                onPress={handleSubmitFeedback}
-                disabled={loading}
-              >
-                <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{loading ? 'Sending...' : 'Submit'}</Text>
-              </TouchableOpacity>
-            </View>
+            <InlineError message={feedbackError} />
+            <ActionBar
+              label="Submit Feedback"
+              busyLabel="Sending…"
+              busy={loading}
+              onPress={handleSubmitFeedback}
+              onCancel={() => {
+                setShowFeedback(false);
+                setFeedbackError('');
+                setFeedbackText('');
+              }}
+            />
           </View>
         </View>
       </Modal>
@@ -829,10 +924,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
         statusBarTranslucent={true}
         onRequestClose={() => setShowSignOutModal(false)}
       >
-        <View style={styles.signOutModalOverlay}>
-          <View style={[styles.signOutModalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }, WEB_BACKDROP_STYLE]}>
-            <View style={[styles.signOutModalIcon, { backgroundColor: '#FEE2E2' }]}>
-              <Ionicons name="log-out-outline" size={32} color="#EF4444" />
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border, alignItems: 'center' }]}>
+            <View style={[styles.signOutModalIcon, { backgroundColor: colors.dangerBg }]}>
+              <Ionicons name="log-out-outline" size={32} color={colors.danger} />
             </View>
             <Text style={[styles.signOutModalTitle, { color: colors.text }]}>
               Sign Out?
@@ -840,27 +935,15 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <Text style={[styles.signOutModalMessage, { color: colors.textSecondary }]}>
               Are you sure you want to sign out of your account? You'll need to sign in again to access your data.
             </Text>
-            <View style={styles.signOutModalButtons}>
-              <TouchableOpacity
-                style={[styles.signOutModalButton, styles.signOutModalCancelButton, { borderColor: colors.border }]}
-                onPress={() => setShowSignOutModal(false)}
-              >
-                <Text style={[styles.signOutModalButtonText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.signOutModalButton, styles.signOutModalConfirmButton]}
+            <View style={{ alignSelf: 'stretch' }}>
+              <ActionBar
+                label="Sign Out"
+                busyLabel="Signing Out…"
+                busy={signingOut}
+                destructive
                 onPress={confirmSignOut}
-                disabled={signingOut}
-              >
-                {signingOut ? (
-                  <Text style={[styles.signOutModalButtonText, { color: '#FFFFFF' }]}>Signing Out...</Text>
-                ) : (
-                  <>
-                    <Ionicons name="log-out-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                    <Text style={[styles.signOutModalButtonText, { color: '#FFFFFF' }]}>Sign Out</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+                onCancel={() => setShowSignOutModal(false)}
+              />
             </View>
           </View>
         </View>
@@ -873,72 +956,74 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  /* Light-mode-only shadow — the single recipe */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  /* Header */
   header: {
-    paddingTop: 20,
-    paddingBottom: 22,
-    paddingHorizontal: 20,
+    paddingTop: 42,
+    paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg,
     alignItems: 'center',
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
   },
-  avatarContainer: {
-    position: 'relative',
-    marginBottom: 16,
-  },
+  roleRibbon: { height: 4, width: '100%' },
   avatar: {
     width: 84,
     height: 84,
-    borderRadius: 42,
+    borderRadius: radii.pill,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 4,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  onlineIndicator: {
-    position: 'absolute',
-    bottom: 4,
-    right: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
+    borderWidth: 3,
+    marginBottom: spacing.lg,
   },
   userName: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    marginBottom: 4,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+    marginBottom: spacing.xs,
   },
-  userEmail: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 12,
-  },
-  roleBadge: {
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  roleText: {
-    fontWeight: '600',
+  userLocation: {
     fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    marginBottom: spacing.md,
   },
+  rolePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+  },
+  rolePillText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  /* Sections */
   section: {
-    padding: 20,
-    paddingBottom: 0,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
   },
   sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 10,
-    marginLeft: 4,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    marginBottom: spacing.md,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   menuCard: {
-    borderRadius: 16,
+    borderRadius: radii.md,
     borderWidth: 1,
     overflow: 'hidden',
   },
@@ -946,108 +1031,140 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
   },
   menuItemLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: spacing.md,
+    flexShrink: 1,
   },
   menuLabel: {
     fontSize: 15,
+    lineHeight: 22,
     fontWeight: '500',
   },
   signOutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    gap: 10,
+    minHeight: 56,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    gap: spacing.sm,
   },
   signOutText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   appInfo: {
     alignItems: 'center',
-    paddingVertical: 24,
+    paddingVertical: spacing.xl,
   },
   appName: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    marginBottom: spacing.xs,
   },
   appVersion: {
     fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   bottomSpacer: {
-    height: 20,
+    height: spacing.xl,
   },
-  // Modal styles
+  /* Modals */
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: spacing.lg,
   },
   modalContent: {
     width: '100%',
     maxWidth: 400,
-    borderRadius: 20,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    padding: 24,
-    maxHeight: '80%',
+    padding: spacing.xl,
+    maxHeight: '85%',
+  },
+  modalScroll: {
+    flexGrow: 0,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
-    justifyContent: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
   modalTitle: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
   },
   modalSubtitle: {
-    fontSize: 14,
-    marginBottom: 20,
-    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: spacing.md,
   },
   modalLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    marginTop: 12,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: spacing.sm,
+    marginTop: spacing.lg,
   },
   modalInput: {
-    borderWidth: 1.5,
-    borderRadius: 12,
-    padding: 14,
+    minHeight: 52,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     fontSize: 15,
   },
-  modalButtons: {
+  inlineErrorRow: {
     flexDirection: 'row',
-    gap: 12,
-    marginTop: 24,
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    marginTop: spacing.md,
   },
-  modalBtn: {
+  inlineErrorText: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  modalCancelBtn: {
-    borderWidth: 1.5,
-  },
-  modalSaveBtn: {},
-  modalBtnText: {
-    fontSize: 16,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '600',
+  },
+  /* One-Hand Action Bar */
+  actionBar: {
+    marginTop: spacing.xl,
+    gap: spacing.md,
+  },
+  cancelLink: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelLinkText: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  primaryBtn: {
+    minHeight: 56,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  primaryBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
   },
   feedbackInput: {
     minHeight: 120,
@@ -1056,116 +1173,92 @@ const styles = StyleSheet.create({
   categoryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.sm,
   },
   categoryChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill,
     borderWidth: 1.5,
   },
   categoryText: {
     fontSize: 13,
-    fontWeight: '500',
+    lineHeight: 18,
+    fontWeight: '600',
   },
   faqScroll: {
-    maxHeight: 300,
+    maxHeight: 320,
   },
   faqItem: {
-    paddingVertical: 14,
-    borderBottomWidth: 1,
+    paddingVertical: spacing.lg,
   },
   faqQuestion: {
     fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 6,
+    lineHeight: 22,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
   },
   faqAnswer: {
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
   },
-  // Sign Out Modal Styles
-  signOutModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+  infoBody: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
   },
-  signOutModalContainer: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
-  },
+  /* Sign-out modal */
   signOutModalIcon: {
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: radii.pill,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   signOutModalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+    marginBottom: spacing.sm,
     textAlign: 'center',
   },
   signOutModalMessage: {
     fontSize: 15,
-    textAlign: 'center',
     lineHeight: 22,
-    marginBottom: 24,
+    textAlign: 'center',
   },
-  signOutModalButtons: {
-    flexDirection: 'row',
-    width: '100%',
-    gap: 12,
-  },
-  signOutModalButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-  },
-  signOutModalCancelButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-  },
-  signOutModalConfirmButton: {
-    backgroundColor: '#EF4444',
-  },
-  signOutModalButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  // GPS fetch button
+  /* GPS fetch */
   gpsFetchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    marginBottom: 16,
+    justifyContent: 'center',
+    gap: spacing.sm,
+    minHeight: 48,
+    borderWidth: 1.5,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.lg,
   },
   gpsFetchText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  gpsMessageRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  gpsMessageText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
 });
-
 
 export default ProfileScreen;

@@ -1,15 +1,16 @@
 // =====================================================
-// CLINIC DASHBOARD — Polished
+// CLINIC DASHBOARD — "Prakash"
 // Priority: Quick Actions → Approval Tools → Activity Stats → District Alerts → AI Insights
+// Four-state data regions: skeleton / content / quiet-zero / error-with-retry.
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import { ScrollView, View, StyleSheet, RefreshControl } from 'react-native';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, QuickActionBtn,
-  AlertCard, ToolCard, EmptyState, SectionDivider,
+  ToolCard, SectionDivider, SkeletonBlock, ErrorCard,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
@@ -18,14 +19,19 @@ import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferenc
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
+const LOAD_ERROR = "Couldn't load dashboard data — check connection";
+
 export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
   const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ myReports: 0, districtAlerts: 0, pendingReports: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
 
   const load = async () => {
+    setError(null);
     try {
       const [myDisease, myWater, pendingDisease, pendingWater, campaigns] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('reporter_id', profile.id),
@@ -41,26 +47,35 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
         .eq('approval_status', 'approved')
         .order('created_at', { ascending: false })
         .limit(60);
+
+      // Silent zeros are design bugs: a failed query marks the region errored.
+      let failed = false;
+      const countOf = (r: PromiseSettledResult<any>): number => {
+        if (r.status !== 'fulfilled' || r.value?.error) { failed = true; return 0; }
+        return r.value.count ?? 0;
+      };
+
+      if (alertData.error) failed = true;
       const visibleAlerts = filterAlertsForProfile(alertData.data ?? [], profile);
-      const myReportsCount =
-        (myDisease.status === 'fulfilled' ? myDisease.value.count ?? 0 : 0) +
-        (myWater.status === 'fulfilled' ? myWater.value.count ?? 0 : 0);
-      const pendingReportsCount =
-        (pendingDisease.status === 'fulfilled' ? pendingDisease.value.count ?? 0 : 0) +
-        (pendingWater.status === 'fulfilled' ? pendingWater.value.count ?? 0 : 0);
 
       setStats({
-        myReports: myReportsCount,
-        pendingReports: pendingReportsCount,
-        campaigns: campaigns.status === 'fulfilled' ? campaigns.value.count ?? 0 : 0,
+        myReports: countOf(myDisease) + countOf(myWater),
+        pendingReports: countOf(pendingDisease) + countOf(pendingWater),
+        campaigns: countOf(campaigns),
         districtAlerts: visibleAlerts.length,
       });
       setAlerts(visibleAlerts.slice(0, 4));
-    } catch {}
+      if (failed) setError(LOAD_ERROR);
+    } catch {
+      setError(LOAD_ERROR);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  const retry = () => { setLoading(true); load(); };
 
   return (
     <ScrollView
@@ -70,13 +85,23 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
     >
       <DashboardHeader profile={profile} />
 
+      {/* Error-with-retry: one inline card covering the failed data regions */}
+      {!loading && error && (
+        <View style={styles.errorWrap}>
+          <ErrorCard message={error} onRetry={retry} />
+        </View>
+      )}
+
       {isWidgetVisible('quick_actions') && (
         <>
-          <Section title="Quick Actions" style={{ marginTop: 16 }}>
+          <Section title="Quick Actions" style={{ marginTop: spacing.lg }}>
             <View style={styles.qaRow}>
-              <QuickActionBtn icon="virus" iconFamily="material" label="Report Disease" color="#EF4444" onPress={() => onNavigate('new-disease-report')} />
-              <QuickActionBtn icon="water" label="Water Quality" color="#3B82F6" onPress={() => onNavigate('new-water-report')} />
-              <QuickActionBtn icon="checkmark-done" label="Review Queue" color="#10B981" onPress={() => onNavigate('approval-queue:disease')} />
+              <QuickActionBtn icon="thermometer-outline" label="Report Disease" color={colors.danger} onPress={() => onNavigate('new-disease-report')} />
+              <QuickActionBtn icon="water-outline" label="Water Quality" color={colors.info} onPress={() => onNavigate('new-water-report')} />
+            </View>
+            <View style={[styles.qaRow, styles.rowGap]}>
+              <QuickActionBtn icon="checkmark-done-outline" label="Review Queue" color={colors.success} onPress={() => onNavigate('approval-queue:disease')} />
+              <View style={styles.statSpacer} />
             </View>
           </Section>
           <SectionDivider />
@@ -86,8 +111,8 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       {isWidgetVisible('approval_tools') && (
         <>
           <Section title="Clinic Approval Tools">
-            <ToolCard icon="medkit" iconColor="#EF4444" title="Disease Reports" subtitle="Verify and approve submitted disease reports" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
-            <ToolCard icon="water" iconColor="#3B82F6" title="Water Quality Reports" subtitle="Verify and approve water quality submissions" onPress={() => onNavigate('approval-queue:water')} />
+            <ToolCard icon="medkit-outline" iconColor={colors.danger} title="Disease Reports" subtitle="Verify and approve submitted disease reports" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
+            <ToolCard icon="water-outline" iconColor={colors.info} title="Water Quality Reports" subtitle="Verify and approve water quality submissions" onPress={() => onNavigate('approval-queue:water')} />
           </Section>
           <SectionDivider />
         </>
@@ -96,11 +121,29 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       {isWidgetVisible('overview_stats') && (
         <>
           <Section title="Your Activity">
-            <View style={styles.statsRow}>
-              <StatCard label="My Reports" value={stats.myReports} icon="document-text" color="#6D28D9" />
-              <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone" color="#10B981" />
-              <StatCard label="District Alerts" value={stats.districtAlerts} icon="warning" color="#F59E0B" />
-            </View>
+            {loading ? (
+              <>
+                <View style={styles.statsRow}>
+                  <SkeletonBlock height={122} radius={radii.md} style={styles.skelStat} />
+                  <SkeletonBlock height={122} radius={radii.md} style={styles.skelStat} />
+                </View>
+                <View style={[styles.statsRow, styles.rowGap]}>
+                  <SkeletonBlock height={122} radius={radii.md} style={styles.skelStat} />
+                  <View style={styles.statSpacer} />
+                </View>
+              </>
+            ) : !error ? (
+              <>
+                <View style={styles.statsRow}>
+                  <StatCard label="My Reports" value={stats.myReports} icon="document-text-outline" color={colors.primary} />
+                  <StatCard label="Active Campaigns" value={stats.campaigns} icon="megaphone-outline" color={colors.success} />
+                </View>
+                <View style={[styles.statsRow, styles.rowGap]}>
+                  <StatCard label="District Alerts" value={stats.districtAlerts} icon="warning-outline" color={colors.warning} />
+                  <View style={styles.statSpacer} />
+                </View>
+              </>
+            ) : null}
           </Section>
           <SectionDivider />
         </>
@@ -108,15 +151,23 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
 
       {isWidgetVisible('alerts_map') && (
         <>
-          <MapAndAlertsSection
-            profile={profile}
-            alerts={alerts}
-            onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
-            onViewAllAlerts={() => onNavigate('all-alerts')}
-            alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
-            emptyTitle="District is Clear"
-            emptySubtitle="No active health alerts in your district."
-          />
+          {loading ? (
+            <Section title={profile.district ? `${profile.district} Alerts` : 'Active Alerts'}>
+              <SkeletonBlock height={160} radius={radii.md} style={styles.skelGap} />
+              <SkeletonBlock height={72} radius={radii.md} style={styles.skelGap} />
+              <SkeletonBlock height={72} radius={radii.md} />
+            </Section>
+          ) : !error ? (
+            <MapAndAlertsSection
+              profile={profile}
+              alerts={alerts}
+              onOpenReport={(type, id) => onNavigate(`open-report:${type}:${id}`)}
+              onViewAllAlerts={() => onNavigate('all-alerts')}
+              alertSectionTitle={`${profile.district ? profile.district + ' Alerts' : 'Active Alerts'}`}
+              emptyTitle="District is Clear"
+              emptySubtitle="No active health alerts in your district."
+            />
+          ) : null}
           <SectionDivider />
         </>
       )}
@@ -124,10 +175,10 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
       {isWidgetVisible('operations_tools') && (
         <>
           <Section title="Operations Intelligence">
-            <ToolCard icon="pulse" iconColor="#0EA5E9" title="District Health Score" subtitle="View district health score and response indicators" onPress={() => onNavigate('health-score')} />
-            <ToolCard icon="analytics" iconColor="#F59E0B" title="Campaign Intelligence" subtitle="Track campaign effectiveness for your district" onPress={() => onNavigate('campaign-intelligence')} />
-            <ToolCard icon="git-network" iconColor="#EF4444" title="Escalation Monitoring" subtitle="Monitor pending approvals crossing escalation windows" onPress={() => onNavigate('escalation-monitoring')} />
-            <ToolCard icon="options" iconColor="#8B5CF6" title="Customize Widgets" subtitle="Tailor the dashboard modules visible to you" onPress={() => onNavigate('widget-customization')} />
+            <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="View district health score and response indicators" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Track campaign effectiveness for your district" onPress={() => onNavigate('campaign-intelligence')} />
+            <ToolCard icon="git-network-outline" iconColor={colors.danger} title="Escalation Monitoring" subtitle="Monitor pending approvals crossing escalation windows" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Tailor the dashboard modules visible to you" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />
         </>
@@ -141,8 +192,13 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
 };
 
 const styles = StyleSheet.create({
-  qaRow: { flexDirection: 'row', gap: 8 },
-  statsRow: { flexDirection: 'row', gap: 8 },
+  qaRow: { flexDirection: 'row', gap: spacing.sm },
+  statsRow: { flexDirection: 'row', gap: spacing.sm },
+  rowGap: { marginTop: spacing.sm },
+  statSpacer: { flex: 1 },
+  skelStat: { flex: 1, width: 'auto' },
+  skelGap: { marginBottom: spacing.md },
+  errorWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.lg },
 });
 
 export default ClinicDashboard;

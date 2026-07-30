@@ -1,9 +1,15 @@
 // =====================================================
-// THEME CONTEXT - Professional Medical Theme
+// THEME CONTEXT — "Prakash" design system tokens
+// Ink-on-paper light mode, opaque-surface dark mode.
+// Keys are never renamed; values follow DESIGN_SPEC.md.
 // =====================================================
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useColorScheme } from 'react-native';
+import { useColorScheme, AccessibilityInfo } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ─── Spacing & shape scales (strict 4pt grid) ────────
+export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
+export const radii = { sm: 8, md: 12, lg: 16, pill: 999 } as const;
 
 // Professional Medical Color Palette
 export const colors = {
@@ -134,6 +140,13 @@ export interface Theme {
   info: string;
   infoLight: string;
   infoBg: string;
+  ai: string;
+  aiBg: string;
+  headerBg: string;
+  skeleton: string;
+  skeletonHighlight: string;
+  offline: string;
+  offlineBg: string;
   border: string;
   borderLight: string;
   borderDark: string;
@@ -183,230 +196,260 @@ export interface Theme {
 export const themes = {
   light: {
     mode: 'light' as const,
-    // Backgrounds — off-white palette (easier on eyes than pure white)
-    background: '#F1F5F9',
+    // Backgrounds — ink on paper, opaque solids
+    background: '#EEF2F6',
     surface: '#F8FAFC',
-    surfaceVariant: '#EEF2F7',
+    surfaceVariant: '#E3EAF1',
     card: '#FFFFFF',
-    cardHover: '#F8FAFC',
-    
+    cardHover: '#F1F5F9',
+
     // Text
-    text: '#1E293B',
-    textSecondary: '#64748B',
-    textTertiary: '#94A3B8',
+    text: '#0C1D2E',
+    textSecondary: '#3D5568',
+    textTertiary: '#64788A',
     textInverse: '#FFFFFF',
-    
-    // Primary actions
-    primary: colors.primary[500],
-    primaryLight: colors.primary[100],
-    primaryDark: colors.primary[700],
-    primaryVariant: colors.primary[600],
+
+    // Primary actions — deep institutional blue
+    primary: '#0B5FA5',
+    primaryLight: '#D8E9F7',
+    primaryDark: '#083D6E',
+    primaryVariant: '#0A5290',
     onPrimary: '#FFFFFF',
-    
+
     // Secondary
-    secondary: colors.secondary[500],
-    secondaryLight: colors.secondary[100],
+    secondary: '#0F766E',
+    secondaryLight: '#D6EDEA',
     onSecondary: '#FFFFFF',
-    
-    // Accent
-    accent: colors.danger[500],
-    
+
+    // Accent — warm saffron
+    accent: '#C2410C',
+
     // Status colors
-    success: colors.success[600],
-    successLight: colors.success[50],
-    successBg: colors.success[100],
-    
-    warning: colors.warning[600],
-    warningLight: colors.warning[50],
-    warningBg: colors.warning[100],
-    
-    error: colors.danger[600],
-    danger: colors.danger[600],
-    dangerLight: colors.danger[50],
-    dangerBg: colors.danger[100],
-    
-    info: colors.info[600],
-    infoLight: colors.info[50],
-    infoBg: colors.info[100],
-    
+    success: '#15803D',
+    successLight: '#EAF7EF',
+    successBg: '#DCF2E3',
+
+    warning: '#B45309',
+    warningLight: '#FEF6E8',
+    warningBg: '#FDEED6',
+
+    error: '#B91C1C',
+    danger: '#B91C1C',
+    dangerLight: '#FDEFEF',
+    dangerBg: '#FBE2E2',
+
+    info: '#0369A1',
+    infoLight: '#EAF6FC',
+    infoBg: '#DDF0FA',
+
+    // AI — indigo means "the system inferred this"
+    ai: '#4F46E5',
+    aiBg: '#E7E8FB',
+
     // Borders
-    border: '#E2E8F0',
-    borderLight: '#F1F5F9',
-    borderDark: '#CBD5E1',
-    
+    border: '#C3CFDA',
+    borderLight: '#D8E1E9',
+    borderDark: '#8CA0B0',
+
+    // Header — flat navy band
+    headerBg: '#083D6E',
+
     // Sidebar
-    sidebar: '#0F172A',
-    sidebarText: '#E2E8F0',
+    sidebar: '#0C1D2E',
+    sidebarText: '#A7B8C7',
     sidebarTextActive: '#FFFFFF',
-    sidebarHover: '#1E293B',
-    sidebarActive: colors.primary[600],
-    
+    sidebarHover: '#16324A',
+    sidebarActive: '#53A6E3',
+
     // Navigation
     navBackground: '#F8FAFC',
-    navBorder: '#E2E8F0',
-    
+    navBorder: '#C3CFDA',
+
     // Input
-    inputBackground: '#F8FAFC',
-    inputBorder: '#94A3B8',
-    inputFocus: colors.primary[500],
-    inputFocusBorder: colors.primary[500],
-    inputFilledBorder: '#64748B',
-    inputErrorBorder: colors.danger[600],
-    inputPlaceholderColor: '#64748B',
-    placeholder: '#64748B',
-    
-    // Charts
-    chartLine: colors.primary[500],
-    chartArea: colors.primary[100],
-    chartGrid: '#E2E8F0',
-    
+    inputBackground: '#FFFFFF',
+    inputBorder: '#64788A',
+    inputFocus: '#0B5FA5',
+    inputFocusBorder: '#0B5FA5',
+    inputFilledBorder: '#3D5568',
+    inputErrorBorder: '#B91C1C',
+    inputPlaceholderColor: '#64788A',
+    placeholder: '#64788A',
+
+    // Skeleton loading
+    skeleton: '#E3EAF1',
+    skeletonHighlight: '#F2F6FA',
+
+    // Offline / sync
+    offline: '#C2410C',
+    offlineBg: '#FDE8D8',
+
+    // Charts — one ink series, hairline grid
+    chartLine: '#0B5FA5',
+    chartArea: '#D8E9F7',
+    chartGrid: '#E3EAF1',
+
     // Severity indicators
-    severityCritical: colors.danger[600],
-    severityHigh: colors.warning[600],
-    severityMedium: colors.warning[500],
-    severityLow: colors.success[600],
-    
+    severityCritical: '#B91C1C',
+    severityHigh: '#C2410C',
+    severityMedium: '#B45309',
+    severityLow: '#15803D',
+
     // Water quality
-    waterSafe: colors.success[600],
-    waterModerate: colors.warning[500],
-    waterUnsafe: colors.danger[500],
-    waterCritical: colors.danger[700],
-    
-    // Shadow
-    shadow: 'rgba(15, 23, 42, 0.08)',
-    shadowMedium: 'rgba(15, 23, 42, 0.12)',
-    shadowDark: 'rgba(15, 23, 42, 0.16)',
-    
+    waterSafe: '#15803D',
+    waterModerate: '#B45309',
+    waterUnsafe: '#B91C1C',
+    waterCritical: '#7F1D1D',
+
+    // Shadow — single recipe (opacity 0.06)
+    shadow: 'rgba(12, 29, 46, 0.06)',
+    shadowMedium: 'rgba(12, 29, 46, 0.10)',
+    shadowDark: 'rgba(12, 29, 46, 0.14)',
+
     // Overlay
-    overlay: 'rgba(15, 23, 42, 0.5)',
-    
+    overlay: 'rgba(12, 29, 46, 0.50)',
+
     // Status badges
-    badgeActive: colors.success[500],
-    badgePending: colors.warning[500],
-    badgeInactive: colors.gray[500],
-    
-    disabled: '#94A3B8',
+    badgeActive: '#15803D',
+    badgePending: '#B45309',
+    badgeInactive: '#64788A',
+
+    disabled: '#8CA0B0',
     elevation: {
-      low: 'rgba(0,0,0,0.1)',
-      medium: 'rgba(0,0,0,0.2)',
-      high: 'rgba(0,0,0,0.3)',
+      low: 'rgba(12, 29, 46, 0.06)',
+      medium: 'rgba(12, 29, 46, 0.10)',
+      high: 'rgba(12, 29, 46, 0.14)',
     },
-    alert: colors.danger[500],
-    campaign: colors.success[500],
+    alert: '#B91C1C',
+    campaign: '#15803D',
   } as Theme,
   
   dark: {
     mode: 'dark' as const,
-    // ── True black base + opaque elevated surfaces ──
-    background:     '#000000',
-    surface:        '#121212',
-    surfaceVariant: '#1A1A1A',
-    card:           '#1A1A1A',
-    cardHover:      '#242424',
+    // ── Opaque surface ladder: background → surface → card → cardHover ──
+    background:     '#0B1219',
+    surface:        '#111A24',
+    surfaceVariant: '#1B2733',
+    card:           '#16212E',
+    cardHover:      '#1D2938',
 
     // Text
-    text:          '#FFFFFF',
-    textSecondary: '#A3A3A3',
-    textTertiary:  '#737373',
-    textInverse:   '#000000',
+    text:          '#F2F7FB',
+    textSecondary: '#A7B8C7',
+    textTertiary:  '#7C8FA0',
+    textInverse:   '#0C1D2E',
 
-    // Primary — teal (not blue)
-    primary:        '#0D9488',
-    primaryLight:   'rgba(13,148,136,0.18)',
-    primaryDark:    '#059669',
-    primaryVariant: '#0F766E',
-    onPrimary:      '#000000',
+    // Primary — lifted institutional blue
+    primary:        '#53A6E3',
+    primaryLight:   '#123A5C',
+    primaryDark:    '#3584C8',
+    primaryVariant: '#3584C8',
+    onPrimary:      '#06263F',
 
     // Secondary
-    secondary:      '#EA580C',
-    secondaryLight: 'rgba(234,88,12,0.14)',
-    onSecondary:    '#000000',
+    secondary:      '#2DD4BF',
+    secondaryLight: '#123B36',
+    onSecondary:    '#06263F',
 
-    // Accent
-    accent: colors.danger[400],
+    // Accent — warm saffron
+    accent: '#FB923C',
 
     // Status
-    success:      colors.success[400],
-    successLight: 'rgba(68,160,60,0.15)',
-    successBg:    'rgba(68,160,60,0.20)',
+    success:      '#4ADE80',
+    successLight: '#0E2A1D',
+    successBg:    '#123324',
 
-    warning:      colors.warning[400],
-    warningLight: 'rgba(255,179,0,0.15)',
-    warningBg:    'rgba(255,179,0,0.20)',
+    warning:      '#FBBF24',
+    warningLight: '#2E230B',
+    warningBg:    '#3A2C0D',
 
-    error:       colors.danger[400],
-    danger:      colors.danger[400],
-    dangerLight: 'rgba(239,68,68,0.15)',
-    dangerBg:    'rgba(239,68,68,0.20)',
+    error:       '#F87171',
+    danger:      '#F87171',
+    dangerLight: '#301111',
+    dangerBg:    '#3D1717',
 
-    info:      colors.info[400],
-    infoLight: 'rgba(3,155,229,0.15)',
-    infoBg:    'rgba(3,155,229,0.20)',
+    info:      '#4FC3F7',
+    infoLight: '#0B2534',
+    infoBg:    '#0E2E40',
+
+    // AI — indigo means "the system inferred this"
+    ai:   '#818CF8',
+    aiBg: '#232A4E',
 
     // Borders
-    border:      '#333333',
-    borderLight: '#262626',
-    borderDark:  '#404040',
+    border:      '#2B3B4B',
+    borderLight: '#22303D',
+    borderDark:  '#3E5163',
+
+    // Header — flat surface band with bottom border
+    headerBg: '#111A24',
 
     // Sidebar
-    sidebar:           '#000000',
-    sidebarText:       'rgba(255,255,255,0.55)',
-    sidebarTextActive: '#FFFFFF',
-    sidebarHover:      'rgba(255,255,255,0.07)',
-    sidebarActive:     '#26A69A',
+    sidebar:           '#0B1219',
+    sidebarText:       '#7C8FA0',
+    sidebarTextActive: '#F2F7FB',
+    sidebarHover:      '#1B2733',
+    sidebarActive:     '#53A6E3',
 
     // Navigation
-    navBackground: '#0B0B0B',
-    navBorder:     '#242424',
+    navBackground: '#111A24',
+    navBorder:     '#2B3B4B',
 
     // Input
-    inputBackground: '#121212',
-    inputBorder:     '#404040',
-    inputFocus:      '#0D9488',
-    inputFocusBorder:'#059669',
-    inputFilledBorder:'#525252',
+    inputBackground: '#111A24',
+    inputBorder:     '#4E6478',
+    inputFocus:      '#53A6E3',
+    inputFocusBorder:'#53A6E3',
+    inputFilledBorder:'#7C8FA0',
     inputErrorBorder:'#F87171',
-    inputPlaceholderColor:'#A3A3A3',
-    placeholder:     '#A3A3A3',
+    inputPlaceholderColor:'#7C8FA0',
+    placeholder:     '#7C8FA0',
 
-    // Charts
-    chartLine: '#0D9488',
-    chartArea: 'rgba(13,148,136,0.18)',
-    chartGrid: '#2A2A2A',
+    // Skeleton loading
+    skeleton:          '#1B2733',
+    skeletonHighlight: '#263442',
+
+    // Offline / sync
+    offline:   '#FB923C',
+    offlineBg: '#3B2312',
+
+    // Charts — one ink series, hairline grid
+    chartLine: '#53A6E3',
+    chartArea: '#123A5C',
+    chartGrid: '#1E2732',
 
     // Severity
-    severityCritical: colors.danger[400],
-    severityHigh:     colors.warning[400],
-    severityMedium:   colors.warning[300],
-    severityLow:      colors.success[400],
+    severityCritical: '#F87171',
+    severityHigh:     '#FB923C',
+    severityMedium:   '#FBBF24',
+    severityLow:      '#4ADE80',
 
     // Water quality
-    waterSafe:     colors.success[400],
-    waterModerate: colors.warning[400],
-    waterUnsafe:   colors.danger[400],
-    waterCritical: colors.danger[300],
+    waterSafe:     '#4ADE80',
+    waterModerate: '#FBBF24',
+    waterUnsafe:   '#F87171',
+    waterCritical: '#FCA5A5',
 
-    // Shadow
-    shadow:       'rgba(0,0,0,0.45)',
-    shadowMedium: 'rgba(0,0,0,0.60)',
-    shadowDark:   'rgba(0,0,0,0.80)',
+    // Shadow — zero shadows in dark mode (surface ladder is the elevation)
+    shadow:       'rgba(0,0,0,0)',
+    shadowMedium: 'rgba(0,0,0,0)',
+    shadowDark:   'rgba(0,0,0,0)',
 
     // Overlay
     overlay: 'rgba(0,0,0,0.60)',
 
     // Badges
-    badgeActive:   colors.success[400],
-    badgePending:  colors.warning[400],
-    badgeInactive: colors.gray[500],
+    badgeActive:   '#4ADE80',
+    badgePending:  '#FBBF24',
+    badgeInactive: '#7C8FA0',
 
-    disabled: '#525252',
+    disabled: '#4E6478',
     elevation: {
-      low:    'rgba(255,255,255,0.05)',
-      medium: 'rgba(255,255,255,0.09)',
-      high:   'rgba(255,255,255,0.14)',
+      low:    'rgba(0,0,0,0)',
+      medium: 'rgba(0,0,0,0)',
+      high:   'rgba(0,0,0,0)',
     },
-    alert:    colors.danger[400],
-    campaign: colors.success[400],
+    alert:    '#F87171',
+    campaign: '#4ADE80',
   } as Theme,
 };
 
@@ -419,6 +462,10 @@ interface ThemeContextType {
   setThemeMode: (mode: ThemeMode) => void;
   toggleTheme: () => void;
   isDark: boolean;
+  /** OS "reduce motion" setting — collapse all animation to static when true */
+  reduceMotion: boolean;
+  spacing: typeof spacing;
+  radii: typeof radii;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -450,14 +497,18 @@ export function getSeverityColor(severity: string, themeColors: Theme): string {
 }
 
 // Helper function to get water quality color
+// Legacy vocab: 'poor' (needs treatment) maps to unsafe,
+// 'contaminated' (do not consume) maps to critical.
 export function getWaterQualityColor(quality: string, themeColors: Theme): string {
   switch (quality) {
     case 'safe':
       return themeColors.waterSafe;
     case 'moderate':
       return themeColors.waterModerate;
+    case 'poor':
     case 'unsafe':
       return themeColors.waterUnsafe;
+    case 'contaminated':
     case 'critical':
       return themeColors.waterCritical;
     default:
@@ -500,10 +551,31 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const systemColorScheme = useColorScheme();
   const [themeMode, setThemeModeState] = useState<ThemeMode>('light');
   const [isLoaded, setIsLoaded] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
 
   // Load saved theme preference
   useEffect(() => {
     loadThemePreference();
+  }, []);
+
+  // Read OS reduce-motion once at start and subscribe to changes
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => {
+        if (mounted) setReduceMotion(!!enabled);
+      })
+      .catch(() => {
+        /* not available on this platform — animations stay enabled */
+      });
+    const subscription = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged',
+      (enabled) => setReduceMotion(!!enabled),
+    );
+    return () => {
+      mounted = false;
+      subscription?.remove?.();
+    };
   }, []);
 
   const loadThemePreference = async () => {
@@ -547,6 +619,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     setThemeMode,
     toggleTheme,
     isDark,
+    reduceMotion,
+    spacing,
+    radii,
   };
 
   if (!isLoaded) {

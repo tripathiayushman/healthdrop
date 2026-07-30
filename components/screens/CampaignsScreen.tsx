@@ -1,5 +1,7 @@
 // =====================================================
-// CAMPAIGNS SCREEN - Health Campaigns Management (Vector Icons)
+// CAMPAIGNS SCREEN - Health Campaigns Management
+// ("Prakash" design) — approval-consistent visibility,
+// token-driven status colors, 4-state data region.
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import {
@@ -12,12 +14,13 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
-  Platform,
+  Pressable,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
+import { SkeletonBlock, ErrorCard } from '../dashboards/DashboardShared';
 
 interface CampaignsScreenProps {
   profile: Profile;
@@ -42,6 +45,7 @@ interface Campaign {
   target_beneficiaries?: number;
   status: string;
   approval_status?: string;
+  organizer_id?: string;
   max_participants?: number;
   current_participants?: number;
   notes?: string;
@@ -51,8 +55,7 @@ interface Campaign {
 type CampaignEligibilityFields = Pick<Campaign, 'status' | 'approval_status' | 'start_date' | 'end_date'>;
 
 const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors, isDark } = useTheme();
-  const modalSurfaceColor = isDark ? '#1A1A1A' : '#FFFFFF';
+  const { colors, isDark, reduceMotion } = useTheme();
   const [activeTab, setActiveTab] = useState<'active' | 'upcoming' | 'past'>('active');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -66,6 +69,11 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawTarget, setWithdrawTarget] = useState<{ id: string; name: string } | null>(null);
 
+  // Approval consistency: admins/officers see everything; other roles see
+  // approved campaigns (or legacy rows without an approval status) plus
+  // their own submissions in any status.
+  const hasFullVisibility = ['super_admin', 'health_admin', 'district_officer'].includes(profile.role);
+
   useEffect(() => {
     loadCampaigns();
     loadUserEnrollments();
@@ -75,20 +83,28 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     setLoading(true);
     setCampaignsError(null);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('health_campaigns')
         .select('*')
         .order('start_date', { ascending: false });
 
+      if (!hasFullVisibility) {
+        query = query.or(
+          `approval_status.eq.approved,approval_status.is.null,organizer_id.eq.${profile.id}`
+        );
+      }
+
+      const { data, error } = await query;
+
       if (error) {
-        setCampaignsError('Failed to load campaigns. Please try again.');
+        setCampaignsError("Couldn't load campaigns — check connection");
         console.error('[CampaignsScreen.loadCampaigns] Query failed', { error });
         return;
       }
 
       setCampaigns(data || []);
     } catch (error) {
-      setCampaignsError('Failed to load campaigns. Please try again.');
+      setCampaignsError("Couldn't load campaigns — check connection");
       console.error('[CampaignsScreen.loadCampaigns] Unexpected error', { error });
     } finally {
       setLoading(false);
@@ -131,26 +147,48 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   };
 
   const getCampaignTypeInfo = (type: string) => {
-    const types: Record<string, { icon: string; iconFamily: 'ionicons' | 'material'; color: string }> = {
-      vaccination: { icon: 'needle', iconFamily: 'material', color: '#3B82F6' },
-      awareness: { icon: 'megaphone', iconFamily: 'ionicons', color: '#8B5CF6' },
-      screening: { icon: 'flask', iconFamily: 'ionicons', color: '#EC4899' },
-      sanitation: { icon: 'hand-wash', iconFamily: 'material', color: '#10B981' },
-      nutrition: { icon: 'nutrition', iconFamily: 'ionicons', color: '#F59E0B' },
-      default: { icon: 'clipboard', iconFamily: 'ionicons', color: '#6B7280' },
+    const types: Record<string, { icon: string; color: string }> = {
+      vaccination: { icon: 'medkit-outline', color: colors.info },
+      awareness: { icon: 'megaphone-outline', color: colors.primary },
+      screening: { icon: 'flask-outline', color: colors.accent },
+      sanitation: { icon: 'hand-left-outline', color: colors.success },
+      nutrition: { icon: 'nutrition-outline', color: colors.warning },
+      default: { icon: 'clipboard-outline', color: colors.textSecondary },
     };
     return types[type] || types.default;
   };
 
   const getStatusColor = (status: string) => {
     const statusColors: Record<string, string> = {
-      active: '#10B981',
-      upcoming: '#3B82F6',
-      completed: '#6B7280',
-      cancelled: '#EF4444',
+      active: colors.success,
+      upcoming: colors.info,
+      completed: colors.textSecondary,
+      cancelled: colors.danger,
     };
     return statusColors[status] || colors.textSecondary;
   };
+
+  const getStatusBg = (status: string) => {
+    const statusBgs: Record<string, string> = {
+      active: colors.successBg,
+      upcoming: colors.infoBg,
+      completed: colors.surfaceVariant,
+      cancelled: colors.dangerBg,
+    };
+    return statusBgs[status] || colors.surfaceVariant;
+  };
+
+  const StatusPill: React.FC<{ status: string }> = ({ status }) => (
+    <View
+      style={[styles.statusPill, { backgroundColor: getStatusBg(status) }]}
+      accessibilityLabel={`Status: ${status || 'unknown'}`}
+    >
+      <View style={[styles.statusDot, { backgroundColor: getStatusColor(status) }]} />
+      <Text style={[styles.statusPillText, { color: getStatusColor(status) }]} maxFontSizeMultiplier={1.3}>
+        {status?.toUpperCase()}
+      </Text>
+    </View>
+  );
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -183,7 +221,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     return campaigns.filter((campaign) => {
       const startDate = new Date(campaign.start_date);
       const endDate = new Date(campaign.end_date);
-      
+
       switch (activeTab) {
         case 'active':
           return startDate <= now && endDate >= now;
@@ -251,7 +289,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           if (updateError) throw updateError;
 
           Alert.alert(
-            '🎉 Re-enrolled Successfully!',
+            'Re-enrolled Successfully',
             `You have been re-enrolled in "${campaignName}".`,
             [{ text: 'OK', style: 'default' }]
           );
@@ -284,7 +322,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
         }
       } else {
         Alert.alert(
-          '🎉 Enrolled Successfully!',
+          'Enrolled Successfully',
           `You have been enrolled in "${campaignName}". You will receive updates about this campaign.`,
           [{ text: 'OK', style: 'default' }]
         );
@@ -308,12 +346,12 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
   const confirmWithdraw = async () => {
     if (!withdrawTarget) return;
-    
+
     const { id: campaignId, name: campaignName } = withdrawTarget;
-    
+
     setShowWithdrawModal(false);
     setWithdrawing(campaignId);
-    
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -383,23 +421,27 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   const renderCampaigns = () => {
     if (filteredCampaigns.length === 0) {
       return (
-        <View style={[styles.emptyState, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Ionicons name="megaphone-outline" size={48} color={colors.textSecondary} />
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>No {activeTab} Campaigns</Text>
-          <Text style={[styles.emptyDescription, { color: colors.textSecondary }]}>
+        <View style={[styles.emptyState, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+          <Ionicons name="checkmark-circle-outline" size={24} color={colors.success} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>
             {activeTab === 'active'
-              ? 'There are no active campaigns right now'
+              ? 'No active campaigns right now.'
               : activeTab === 'upcoming'
-              ? 'No upcoming campaigns scheduled'
-              : 'No past campaigns found'}
+              ? 'No upcoming campaigns scheduled.'
+              : 'No past campaigns on record.'}
           </Text>
           {canCreateCampaigns && (
-            <TouchableOpacity
-              style={[styles.emptyButton, { backgroundColor: colors.primary }]}
+            <Pressable
+              style={({ pressed }) => [
+                styles.emptyButton,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+              ]}
               onPress={() => onNavigateToForm('new-campaign')}
+              accessibilityRole="button"
+              accessibilityLabel="Create campaign"
             >
-              <Text style={styles.emptyButtonText}>Create Campaign</Text>
-            </TouchableOpacity>
+              <Text style={[styles.emptyButtonText, { color: colors.onPrimary }]}>Create Campaign</Text>
+            </Pressable>
           )}
         </View>
       );
@@ -415,23 +457,15 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       return (
         <View
           key={campaign.id}
-          style={[styles.campaignCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+          style={[styles.campaignCard, { backgroundColor: colors.card, borderColor: colors.border }, !isDark && styles.cardShadow]}
         >
           <View style={styles.campaignHeader}>
-            <View style={[styles.typeIcon, { backgroundColor: typeInfo.color + '20' }]}>
-              {typeInfo.iconFamily === 'material' ? (
-                <MaterialCommunityIcons name={typeInfo.icon as any} size={24} color={typeInfo.color} />
-              ) : (
-                <Ionicons name={typeInfo.icon as any} size={24} color={typeInfo.color} />
-              )}
+            <View style={[styles.typeIcon, { backgroundColor: typeInfo.color + '14' }]}>
+              <Ionicons name={typeInfo.icon as any} size={24} color={typeInfo.color} />
             </View>
             <View style={styles.campaignTitleSection}>
               <Text style={[styles.campaignTitle, { color: colors.text }]}>{getCampaignTitle(campaign)}</Text>
-              <View style={[styles.statusBadge, { backgroundColor: getStatusColor(campaign.status) + '20' }]}>
-                <Text style={[styles.statusText, { color: getStatusColor(campaign.status) }]}>
-                  {campaign.status?.toUpperCase()}
-                </Text>
-              </View>
+              <StatusPill status={campaign.status} />
             </View>
           </View>
 
@@ -442,7 +476,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           <View style={styles.campaignDetails}>
             <View style={styles.detailItem}>
               <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
-              <Text style={[styles.detailText, { color: colors.text }]}>
+              <Text style={[styles.detailText, styles.numericText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                 {formatDate(campaign.start_date)} - {formatDate(campaign.end_date)}
               </Text>
             </View>
@@ -464,15 +498,15 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
             <View style={styles.progressSection}>
               <View style={styles.progressHeader}>
                 <Text style={[styles.progressLabel, { color: colors.textSecondary }]}>Participation</Text>
-                <Text style={[styles.progressValue, { color: colors.text }]}>
+                <Text style={[styles.progressValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                   {currentPart}/{maxPart}
                 </Text>
               </View>
-              <View style={[styles.progressBar, { backgroundColor: colors.border }]}>
+              <View style={[styles.progressBar, { backgroundColor: colors.surfaceVariant }]}>
                 <View
                   style={[
                     styles.progressFill,
-                    { width: `${Math.min(progressPercent, 100)}%`, backgroundColor: typeInfo.color },
+                    { width: `${Math.min(progressPercent, 100)}%`, backgroundColor: colors.primary },
                   ]}
                 />
               </View>
@@ -480,53 +514,66 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           )}
 
           <View style={styles.campaignActions}>
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: colors.background, borderColor: colors.border }]}
+            <Pressable
+              style={({ pressed }) => [
+                styles.actionButton,
+                {
+                  backgroundColor: pressed ? colors.cardHover : 'transparent',
+                  borderColor: colors.inputBorder,
+                },
+              ]}
               onPress={() => handleViewDetails(campaign)}
+              accessibilityRole="button"
+              accessibilityLabel={`View details for ${getCampaignTitle(campaign)}`}
             >
-              <Ionicons name="eye-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
               <Text style={[styles.actionButtonText, { color: colors.text }]}>View Details</Text>
-            </TouchableOpacity>
+            </Pressable>
             {campaignIsActive && canEnroll && (
               enrolledCampaigns.has(campaign.id) ? (
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.primaryButton, { backgroundColor: '#EF4444' }]}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionButton,
+                    styles.primaryButton,
+                    { backgroundColor: colors.danger, opacity: pressed ? 0.9 : 1 },
+                  ]}
                   onPress={() => handleWithdraw(campaign.id, getCampaignTitle(campaign))}
                   disabled={withdrawing === campaign.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Withdraw from ${getCampaignTitle(campaign)}`}
                 >
                   {withdrawing === campaign.id ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <ActivityIndicator size="small" color={colors.textInverse} />
                   ) : (
-                    <>
-                      <Ionicons name="exit-outline" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
-                      <Text style={[styles.actionButtonText, { color: '#FFFFFF' }]}>Withdraw</Text>
-                    </>
+                    <Text style={[styles.actionButtonText, { color: colors.textInverse }]}>Withdraw</Text>
                   )}
-                </TouchableOpacity>
+                </Pressable>
               ) : (
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.primaryButton, { backgroundColor: typeInfo.color }]}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionButton,
+                    styles.primaryButton,
+                    { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                  ]}
                   onPress={() => handleEnroll(campaign.id, getCampaignTitle(campaign))}
                   disabled={campaign.id === enrollingCampaignId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Enroll in ${getCampaignTitle(campaign)}`}
                 >
                   {campaign.id === enrollingCampaignId ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <ActivityIndicator size="small" color={colors.onPrimary} />
                   ) : (
-                    <>
-                      <Ionicons name="person-add-outline" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
-                      <Text style={[styles.actionButtonText, { color: '#FFFFFF' }]}>Enroll</Text>
-                    </>
+                    <Text style={[styles.actionButtonText, { color: colors.onPrimary }]}>Enroll</Text>
                   )}
-                </TouchableOpacity>
+                </Pressable>
               )
             )}
           </View>
 
           {/* Enrolled Badge */}
           {enrolledCampaigns.has(campaign.id) && (
-            <View style={[styles.enrolledBadge, { backgroundColor: '#10B981' + '20' }]}>
-              <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-              <Text style={[styles.enrolledBadgeText, { color: '#10B981' }]}>You're Enrolled</Text>
+            <View style={[styles.enrolledBadge, { backgroundColor: colors.successBg }]}>
+              <Ionicons name="checkmark-circle" size={14} color={colors.success} />
+              <Text style={[styles.enrolledBadgeText, { color: colors.success }]}>You're Enrolled</Text>
             </View>
           )}
         </View>
@@ -534,23 +581,34 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     });
   };
 
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.accent }]}>
+      {/* Header — flat headerBg band */}
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
         <View style={styles.headerTopRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>Campaigns</Text>
-            <Text style={styles.headerSubtitle}>Health awareness and outreach programs</Text>
+            <Text style={[styles.headerTitle, { color: headerText }]}>Campaigns</Text>
+            <Text style={[styles.headerSubtitle, { color: headerSub }]}>Health awareness and outreach programs</Text>
           </View>
           {canViewCampaignIntelligence && (
             <TouchableOpacity
-              style={styles.headerActionBtn}
+              style={[styles.headerActionBtn, { borderColor: headerSub }]}
               onPress={() => onNavigateToForm('campaign-intelligence')}
-              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Open campaign intelligence"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="analytics" size={15} color="#FFFFFF" />
-              <Text style={styles.headerActionText}>Intelligence</Text>
+              <Ionicons name="analytics-outline" size={15} color={headerText} />
+              <Text style={[styles.headerActionText, { color: headerText }]}>Intelligence</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -563,11 +621,14 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
             key={tab}
             style={[
               styles.tab,
-              activeTab === tab && { backgroundColor: colors.accent },
+              activeTab === tab && { backgroundColor: colors.primary },
             ]}
             onPress={() => setActiveTab(tab)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: activeTab === tab }}
+            accessibilityLabel={`${tab} campaigns tab`}
           >
-            <Text style={[styles.tabText, { color: activeTab === tab ? '#FFF' : colors.text }]}>
+            <Text style={[styles.tabText, { color: activeTab === tab ? colors.onPrimary : colors.text }]}>
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
             </Text>
           </TouchableOpacity>
@@ -578,24 +639,25 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       <ScrollView
         style={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.accent]} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
         showsVerticalScrollIndicator={false}
       >
+        {/* Eyebrow-and-count section header */}
+        <Text style={[styles.sectionEyebrow, { color: colors.textSecondary }]} numberOfLines={1}>
+          {activeTab.toUpperCase()} CAMPAIGNS
+          {!loading && !campaignsError && (
+            <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${filteredCampaigns.length}`}</Text>
+          )}
+        </Text>
+
         {loading ? (
-          <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <ActivityIndicator size="large" color={colors.accent} />
-            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading campaigns...</Text>
+          <View style={styles.skeletonWrap} accessibilityElementsHidden>
+            <SkeletonBlock height={220} radius={radii.md} />
+            <SkeletonBlock height={220} radius={radii.md} />
           </View>
         ) : campaignsError ? (
-          <View style={[styles.errorState, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="alert-circle-outline" size={42} color={colors.accent} />
-            <Text style={[styles.errorTitle, { color: colors.text }]}>Unable to Load Campaigns</Text>
-            <Text style={[styles.errorDescription, { color: colors.textSecondary }]}>{campaignsError}</Text>
-            <TouchableOpacity style={[styles.retryButton, { backgroundColor: colors.accent }]} onPress={loadCampaigns}>
-              <Text style={styles.retryButtonText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
+          <ErrorCard message={campaignsError} onRetry={loadCampaigns} />
         ) : (
           renderCampaigns()
         )}
@@ -605,46 +667,58 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       {/* Campaign Details Modal */}
       <Modal
         visible={showDetailModal}
-        animationType="slide"
+        animationType={reduceMotion ? 'none' : 'slide'}
         transparent={true}
         presentationStyle="overFullScreen"
         statusBarTranslucent={true}
         onRequestClose={() => setShowDetailModal(false)}
       >
-        <View style={[styles.modalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
-          <View style={[styles.modalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }]}>
-            <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContainer, { backgroundColor: colors.card }]}>
+            {/* 3px status top rule — never flood-fill a modal header */}
+            <View
+              style={[
+                styles.modalTopRule,
+                { backgroundColor: selectedCampaign ? getStatusColor(selectedCampaign.status) : colors.border },
+              ]}
+            />
+            <View style={[styles.modalHeader, { borderBottomColor: colors.borderLight }]}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Campaign Details</Text>
-              <TouchableOpacity onPress={() => setShowDetailModal(false)}>
-                <Ionicons name="close" size={24} color={colors.text} />
+              <TouchableOpacity
+                onPress={() => setShowDetailModal(false)}
+                style={[styles.modalCloseBtn, { backgroundColor: colors.surfaceVariant }]}
+                accessibilityRole="button"
+                accessibilityLabel="Close campaign details"
+              >
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            
+
             {selectedCampaign && (
               <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Campaign Name</Text>
                   <Text style={[styles.detailValue, { color: colors.text }]}>{getCampaignTitle(selectedCampaign)}</Text>
                 </View>
-                
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Type</Text>
                   <Text style={[styles.detailValue, { color: colors.text }]}>{selectedCampaign.campaign_type}</Text>
                 </View>
-                
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Description</Text>
                   <Text style={[styles.detailValue, { color: colors.text }]}>{selectedCampaign.description || 'No description'}</Text>
                 </View>
-                
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Schedule</Text>
-                  <Text style={[styles.detailValue, { color: colors.text }]}>
+                  <Text style={[styles.detailValue, styles.numericText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                     {formatDate(selectedCampaign.start_date)} - {formatDate(selectedCampaign.end_date)}
                   </Text>
                 </View>
-                
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Location</Text>
                   <Text style={[styles.detailValue, { color: colors.text }]}>
                     {selectedCampaign.location_name || 'N/A'}
@@ -652,83 +726,95 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                     {selectedCampaign.state && `, ${selectedCampaign.state}`}
                   </Text>
                 </View>
-                
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Target Audience</Text>
                   <Text style={[styles.detailValue, { color: colors.text }]}>{selectedCampaign.target_audience || 'General Public'}</Text>
                 </View>
-                
+
                 {selectedCampaign.target_beneficiaries && (
-                  <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+                  <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                     <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Target Beneficiaries</Text>
-                    <Text style={[styles.detailValue, { color: colors.text }]}>{selectedCampaign.target_beneficiaries}</Text>
+                    <Text style={[styles.detailValue, styles.numericText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {selectedCampaign.target_beneficiaries}
+                    </Text>
                   </View>
                 )}
-                
+
                 {selectedCampaign.contact_person && (
-                  <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+                  <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                     <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Contact Person</Text>
                     <Text style={[styles.detailValue, { color: colors.text }]}>{selectedCampaign.contact_person}</Text>
                     {selectedCampaign.contact_phone && (
-                      <Text style={[styles.detailValue, { color: colors.primary }]}>{selectedCampaign.contact_phone}</Text>
+                      <Text style={[styles.detailValue, styles.numericText, { color: isDark ? colors.primary : colors.primaryDark }]} maxFontSizeMultiplier={1.3}>
+                        {selectedCampaign.contact_phone}
+                      </Text>
                     )}
                   </View>
                 )}
-                
+
                 {selectedCampaign.notes && (
-                  <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+                  <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                     <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Notes</Text>
                     <Text style={[styles.detailValue, { color: colors.text }]}>{selectedCampaign.notes}</Text>
                   </View>
                 )}
-                
-                <View style={[styles.detailSection, { borderBottomColor: colors.border }]}>
+
+                <View style={[styles.detailSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Status</Text>
-                  <View style={[styles.statusBadge, { backgroundColor: getStatusColor(selectedCampaign.status) + '20', alignSelf: 'flex-start' }]}>
-                    <Text style={[styles.statusText, { color: getStatusColor(selectedCampaign.status) }]}>
-                      {selectedCampaign.status?.toUpperCase()}
-                    </Text>
+                  <View style={{ alignSelf: 'flex-start' }}>
+                    <StatusPill status={selectedCampaign.status} />
                   </View>
                 </View>
 
                 {/* Enrollment Status in Modal */}
                 {enrolledCampaigns.has(selectedCampaign.id) && (
-                  <View style={[styles.enrolledBadge, { backgroundColor: '#10B981' + '20', marginBottom: 12 }]}>
-                    <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-                    <Text style={[styles.enrolledBadgeText, { color: '#10B981', fontSize: 15 }]}>You're Enrolled in this Campaign</Text>
+                  <View style={[styles.enrolledBadge, { backgroundColor: colors.successBg, marginBottom: spacing.md }]}>
+                    <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+                    <Text style={[styles.enrolledBadgeText, { color: colors.success, fontSize: 15 }]}>You're Enrolled in this Campaign</Text>
                   </View>
                 )}
 
                 {isCampaignActive(selectedCampaign) && canEnroll && (
                   enrolledCampaigns.has(selectedCampaign.id) ? (
-                    <TouchableOpacity
-                      style={[styles.enrollModalButton, { backgroundColor: '#EF4444' }]}
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.enrollModalButton,
+                        { backgroundColor: colors.danger, opacity: pressed ? 0.9 : 1 },
+                      ]}
                       onPress={() => {
                         setShowDetailModal(false);
                         handleWithdraw(selectedCampaign.id, getCampaignTitle(selectedCampaign));
                       }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Withdraw from campaign"
                     >
-                      <Ionicons name="exit-outline" size={20} color="#FFFFFF" />
-                      <Text style={styles.enrollModalButtonText}>Withdraw from Campaign</Text>
-                    </TouchableOpacity>
+                      <Ionicons name="exit-outline" size={20} color={colors.textInverse} />
+                      <Text style={[styles.enrollModalButtonText, { color: colors.textInverse }]}>Withdraw from Campaign</Text>
+                    </Pressable>
                   ) : (
-                    <TouchableOpacity
-                      style={[styles.enrollModalButton, { backgroundColor: colors.accent }]}
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.enrollModalButton,
+                        { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                      ]}
                       onPress={() => {
                         setShowDetailModal(false);
                         handleEnroll(selectedCampaign.id, getCampaignTitle(selectedCampaign));
                       }}
                       disabled={selectedCampaign.id === enrollingCampaignId}
+                      accessibilityRole="button"
+                      accessibilityLabel="Enroll in campaign"
                     >
                       {selectedCampaign.id === enrollingCampaignId ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
+                        <ActivityIndicator size="small" color={colors.onPrimary} />
                       ) : (
                         <>
-                          <Ionicons name="person-add-outline" size={20} color="#FFFFFF" />
-                          <Text style={styles.enrollModalButtonText}>Enroll in Campaign</Text>
+                          <Ionicons name="person-add-outline" size={20} color={colors.onPrimary} />
+                          <Text style={[styles.enrollModalButtonText, { color: colors.onPrimary }]}>Enroll in Campaign</Text>
                         </>
                       )}
-                    </TouchableOpacity>
+                    </Pressable>
                   )
                 )}
               </ScrollView>
@@ -740,7 +826,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       {/* Withdraw Confirmation Modal */}
       <Modal
         visible={showWithdrawModal}
-        animationType="fade"
+        animationType={reduceMotion ? 'none' : 'fade'}
         transparent={true}
         presentationStyle="overFullScreen"
         statusBarTranslucent={true}
@@ -749,10 +835,16 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
           setWithdrawTarget(null);
         }}
       >
-        <View style={[styles.confirmModalOverlay, Platform.OS === 'web' ? ({ backdropFilter: 'blur(10px)' } as any) : {}]}>
-          <View style={[styles.confirmModalContainer, { backgroundColor: modalSurfaceColor, borderColor: colors.border }]}>
-            <View style={[styles.confirmModalIcon, { backgroundColor: '#FEE2E2' }]}>
-              <Ionicons name="warning" size={32} color="#EF4444" />
+        <View style={[styles.confirmModalOverlay, { backgroundColor: colors.overlay }]}>
+          <View
+            style={[
+              styles.confirmModalContainer,
+              { backgroundColor: colors.card, borderColor: colors.border },
+              !isDark && styles.cardShadow,
+            ]}
+          >
+            <View style={[styles.confirmModalIcon, { backgroundColor: colors.dangerBg }]}>
+              <Ionicons name="warning-outline" size={32} color={colors.danger} />
             </View>
             <Text style={[styles.confirmModalTitle, { color: colors.text }]}>
               Withdraw from Campaign?
@@ -761,22 +853,33 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               Are you sure you want to withdraw from "{withdrawTarget?.name}"? You can re-enroll later if spots are available.
             </Text>
             <View style={styles.confirmModalButtons}>
-              <TouchableOpacity
-                style={[styles.confirmModalButton, styles.confirmModalCancelButton, { borderColor: colors.border }]}
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmModalButton,
+                  styles.confirmModalCancelButton,
+                  { borderColor: colors.inputBorder, backgroundColor: pressed ? colors.cardHover : 'transparent' },
+                ]}
                 onPress={() => {
                   setShowWithdrawModal(false);
                   setWithdrawTarget(null);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel withdrawal"
               >
                 <Text style={[styles.confirmModalButtonText, { color: colors.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.confirmModalButton, styles.confirmModalWithdrawButton]}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmModalButton,
+                  { backgroundColor: colors.danger, opacity: pressed ? 0.9 : 1 },
+                ]}
                 onPress={confirmWithdraw}
+                accessibilityRole="button"
+                accessibilityLabel="Confirm withdrawal"
               >
-                <Ionicons name="exit-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                <Text style={[styles.confirmModalButtonText, { color: '#FFFFFF' }]}>Withdraw</Text>
-              </TouchableOpacity>
+                <Ionicons name="exit-outline" size={18} color={colors.textInverse} style={{ marginRight: 6 }} />
+                <Text style={[styles.confirmModalButtonText, { color: colors.textInverse }]}>Withdraw</Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -789,195 +892,188 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  /* Light-mode-only shadow — the single recipe */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
   header: {
-    paddingTop: 20,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    paddingTop: 42,
+    paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg,
   },
-  loadingState: {
-    marginTop: 16,
-    marginHorizontal: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    paddingVertical: 28,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+  skeletonWrap: {
+    gap: spacing.md,
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  errorState: {
-    marginTop: 16,
-    marginHorizontal: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    paddingVertical: 24,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  errorTitle: {
-    marginTop: 10,
-    fontSize: 17,
+  sectionEyebrow: {
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
-  },
-  errorDescription: {
-    marginTop: 6,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 14,
-  },
-  retryButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  retryButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 13,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#FFFFFF',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.4,
     marginBottom: 4,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: spacing.md,
   },
   headerActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.4)',
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderRadius: 18,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.md,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   headerActionText: {
-    color: '#FFFFFF',
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   tabContainer: {
     flexDirection: 'row',
-    margin: 16,
-    borderRadius: 12,
-    padding: 4,
+    margin: spacing.lg,
+    marginBottom: spacing.sm,
+    borderRadius: radii.md,
+    padding: spacing.xs,
     borderWidth: 1,
   },
   tab: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: radii.sm,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   tabText: {
     fontSize: 13,
-    fontWeight: '600',
+    lineHeight: 18,
+    fontWeight: '700',
   },
   content: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: spacing.lg,
   },
   emptyState: {
-    padding: 32,
-    borderRadius: 16,
-    borderWidth: 1,
     alignItems: 'center',
-    marginTop: 20,
+    padding: spacing.xl,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-    marginTop: 16,
-  },
-  emptyDescription: {
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
     textAlign: 'center',
-    marginBottom: 20,
   },
   emptyButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 25,
+    marginTop: spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
+    fontWeight: '700',
+    fontSize: 15,
   },
   campaignCard: {
-    padding: 16,
-    borderRadius: 16,
+    padding: spacing.lg,
+    borderRadius: radii.md,
     borderWidth: 1,
-    marginBottom: 16,
+    marginBottom: spacing.md,
   },
   campaignHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   typeIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: spacing.md,
   },
   campaignTitleSection: {
     flex: 1,
   },
   campaignTitle: {
-    fontSize: 17,
-    fontWeight: '600',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
     marginBottom: 6,
   },
-  statusBadge: {
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     alignSelf: 'flex-start',
     paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
   },
-  statusText: {
-    fontSize: 10,
-    fontWeight: '700',
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusPillText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
   campaignDescription: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 12,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+    marginBottom: spacing.md,
   },
   campaignDetails: {
-    gap: 8,
-    marginBottom: 12,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   detailItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: spacing.sm,
   },
   detailText: {
     fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  numericText: {
+    fontVariant: ['tabular-nums'],
   },
   progressSection: {
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   progressHeader: {
     flexDirection: 'row',
@@ -986,10 +1082,16 @@ const styles = StyleSheet.create({
   },
   progressLabel: {
     fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   progressValue: {
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 16,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   progressBar: {
     height: 6,
@@ -1002,23 +1104,24 @@ const styles = StyleSheet.create({
   },
   campaignActions: {
     flexDirection: 'row',
-    gap: 12,
+    gap: spacing.md,
   },
   actionButton: {
     flex: 1,
     flexDirection: 'row',
-    paddingVertical: 10,
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: radii.md,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
   },
   primaryButton: {
     borderWidth: 0,
   },
   actionButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
   },
   bottomSpacer: {
     height: 80,
@@ -1026,137 +1129,147 @@ const styles = StyleSheet.create({
   // Modal Styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
   modalContainer: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
     maxHeight: '85%',
-    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  modalTopRule: {
+    height: 3,
+    width: '100%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
+    gap: spacing.md,
+    padding: spacing.lg,
     borderBottomWidth: 1,
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+    flex: 1,
+  },
+  modalCloseBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   modalContent: {
-    padding: 20,
+    padding: spacing.lg,
   },
   detailSection: {
-    marginBottom: 16,
-    paddingBottom: 16,
+    marginBottom: spacing.lg,
+    paddingBottom: spacing.lg,
     borderBottomWidth: 1,
   },
   detailLabel: {
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 16,
+    fontWeight: '700',
     marginBottom: 4,
     textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   detailValue: {
-    fontSize: 16,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
   },
   enrollModalButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginTop: 8,
-    marginBottom: 20,
-    gap: 8,
+    minHeight: 56,
+    borderRadius: radii.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xl,
+    gap: spacing.sm,
   },
   enrollModalButtonText: {
-    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   enrolledBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginTop: 12,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    marginTop: spacing.md,
     gap: 6,
   },
   enrolledBadgeText: {
     fontSize: 13,
-    fontWeight: '600',
+    lineHeight: 18,
+    fontWeight: '700',
   },
   // Withdraw Confirmation Modal Styles
   confirmModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: spacing.xl,
   },
   confirmModalContainer: {
     width: '100%',
     maxWidth: 400,
-    borderRadius: 20,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    padding: 24,
+    padding: spacing.xl,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
   },
   confirmModalIcon: {
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: radii.pill,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   confirmModalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+    marginBottom: spacing.sm,
     textAlign: 'center',
   },
   confirmModalMessage: {
     fontSize: 15,
-    textAlign: 'center',
     lineHeight: 22,
-    marginBottom: 24,
+    fontWeight: '500',
+    textAlign: 'center',
+    marginBottom: spacing.xl,
   },
   confirmModalButtons: {
     flexDirection: 'row',
     width: '100%',
-    gap: 12,
+    gap: spacing.md,
   },
   confirmModalButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 12,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.md,
   },
   confirmModalCancelButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-  },
-  confirmModalWithdrawButton: {
-    backgroundColor: '#EF4444',
+    borderWidth: 1.5,
   },
   confirmModalButtonText: {
     fontSize: 15,
-    fontWeight: '600',
+    lineHeight: 22,
+    fontWeight: '700',
   },
 });
 

@@ -1,7 +1,9 @@
 // =====================================================
-// AI CHATBOT — Floating FAB + Slide-up Chat Panel
-// Redesigned: no emoji, no AI/Gemini text, modern icons,
-// properly positioned above tab bar + existing FABs
+// AI CHATBOT — "Prakash" design system.
+// Indigo = intelligence: the launcher FAB, assistant
+// avatar and assistant bubbles use the ai/aiBg tokens.
+// Flat opaque surfaces, 1px borders, no gradients or
+// blur, 48dp touch targets, body text >= 15px.
 // =====================================================
 import React, { useState, useRef, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -9,7 +11,7 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
+  Pressable,
   TextInput,
   ScrollView,
   Animated,
@@ -19,15 +21,14 @@ import {
   Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { Profile } from '../../types';
 import { getChatResponse } from '../../lib/services/gemini';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const PANEL_HEIGHT = SCREEN_HEIGHT * 0.62;
 
-// FAB sits just above the tab bar (70px) + an extra gap from add buttons (58px)
-// Total safe bottom offset = tab bar(70) + add-button-height(56) + gap(12) = 138
+// FAB sits just above the tab bar + existing add buttons
 const FAB_BOTTOM = 96;
 
 interface AIChatbotProps {
@@ -51,7 +52,7 @@ const INITIAL_MESSAGE: LocalChatMessage = {
 };
 
 export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, reduceMotion } = useTheme();
   const messageCounterRef = useRef(0);
   const createMessageId = () => {
     messageCounterRef.current += 1;
@@ -70,6 +71,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     { ...INITIAL_MESSAGE, id: createMessageId(), timestamp: new Date() },
   ]);
   const [inputText, setInputText] = useState('');
+  const [inputFocused, setInputFocused] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [consentToExternalProcessing, setConsentToExternalProcessing] = useState<boolean | null>(null);
 
@@ -107,15 +109,13 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     }
   };
 
-  const IS_MOBILE = Platform.OS !== 'web';
-
   const openChat = () => setIsOpen(true);
   const closeChat = () => setIsOpen(false);
 
   const toggleChat = () => { if (isOpen) closeChat(); else openChat(); };
 
   const scrollToBottom = () => {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: !reduceMotion }), 100);
   };
 
   const sendMessage = async () => {
@@ -152,170 +152,237 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
     }
   };
 
-  // Colours
-  const panelBg   = isDark ? 'rgba(15,15,15,0.75)' : 'rgba(255,255,255,0.85)';
-  const aiBubble  = '#000000'; // Black text bubble requested by user
-  const userBubble = '#1A1A1A'; // Slightly lighter black for distinction or matching
-  const aiText    = '#FFFFFF'; // White text requested by user
-  const userText  = '#FFFFFF';
+  const canSend = !!inputText.trim() && !isTyping;
 
   return (
     <>
-      <Modal visible={isOpen} animationType="slide" transparent onRequestClose={closeChat}>
-        <View style={styles.overlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <Modal
+        visible={isOpen}
+        animationType={reduceMotion ? 'none' : 'slide'}
+        transparent
+        onRequestClose={closeChat}
+      >
+        <View style={[styles.overlay, { backgroundColor: colors.overlay }]}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
             <View
               style={[
                 styles.sheet,
-                { backgroundColor: panelBg, borderColor: isDark ? '#2A2A4A' : '#E2E8F0' },
-                isDark && Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
+                { backgroundColor: colors.card, borderColor: colors.border },
+                !isDark && styles.cardShadow,
               ]}
             >
-          <View
-            style={[
-              styles.panelHeader, 
-              { backgroundColor: isDark ? 'rgba(20,20,20,0.8)' : 'rgba(30,30,30,0.85)' },
-              Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}
-            ]}
-          >
-            <View style={styles.panelHeaderLeft}>
-              <View style={styles.aiAvatarWrap}>
-                <Ionicons name="hardware-chip" size={20} color="#FFFFFF" />
-              </View>
-              <View>
-                <Text style={styles.panelTitle}>Health Assistant</Text>
-                <View style={styles.onlineRow}>
-                  <View style={styles.onlineDot} />
-                  <Text style={styles.onlineText}>Online</Text>
-                </View>
-              </View>
-            </View>
-            <TouchableOpacity onPress={closeChat} style={styles.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Ionicons name="chevron-down" size={22} color="rgba(255,255,255,0.8)" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Messages */}
-          <ScrollView
-            ref={scrollRef}
-            style={styles.messages}
-            contentContainerStyle={styles.messagesContent}
-            showsVerticalScrollIndicator={false}
-            onContentSizeChange={scrollToBottom}
-          >
-            {messages.map((msg) => (
-              <View
-                key={msg.id}
-                style={[styles.bubbleRow, msg.role === 'user' ? styles.userRow : styles.aiRow]}
-              >
-                {msg.role === 'assistant' && (
-                  <View style={[styles.aiAvatarSmall, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]}>
-                    <Ionicons name="hardware-chip" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
+              {/* Panel header — flat card band, AI identity chip */}
+              <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+                <View style={styles.panelHeaderLeft}>
+                  <View style={[styles.aiAvatarWrap, { backgroundColor: colors.aiBg }]}>
+                    <Ionicons name="sparkles" size={24} color={colors.ai} />
                   </View>
-                )}
-                <View
-                  style={[
-                    styles.bubble,
-                    msg.role === 'user'
-                      ? [styles.userBubble, { backgroundColor: userBubble }]
-                      : [styles.aiBubble, { backgroundColor: aiBubble }],
+                  <View style={styles.panelTitleWrap}>
+                    <Text style={[styles.panelTitle, { color: colors.text }]} numberOfLines={1}>
+                      Health Assistant
+                    </Text>
+                    <View style={styles.onlineRow}>
+                      <View style={[styles.onlineDot, { backgroundColor: colors.success }]} />
+                      <Text
+                        style={[styles.onlineText, { color: colors.textSecondary }]}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        Online
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+                <Pressable
+                  onPress={closeChat}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close assistant"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={({ pressed }) => [
+                    styles.closeBtn,
+                    { backgroundColor: pressed ? colors.cardHover : colors.surfaceVariant },
                   ]}
                 >
-                  <Text style={[styles.bubbleText, { color: msg.role === 'user' ? userText : aiText }]}>
-                    {msg.text}
-                  </Text>
-                  {msg.timestamp && (
-                    <Text style={[styles.timeText, { color: 'rgba(255,255,255,0.6)', alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start' }]}>
-                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                  )}
-                </View>
+                  <Ionicons name="chevron-down" size={24} color={colors.textSecondary} />
+                </Pressable>
               </View>
-            ))}
 
-            {/* Typing indicator */}
-            {isTyping && (
-              <View style={[styles.bubbleRow, styles.aiRow]}>
-                <View style={[styles.aiAvatarSmall, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]}>
-                  <Ionicons name="hardware-chip" size={14} color={isDark ? '#FFFFFF' : '#000000'} />
-                </View>
-                <View style={[styles.bubble, styles.aiBubble, { backgroundColor: aiBubble }]}>
-                  <View style={styles.typingDots}>
-                    {[0, 1, 2].map(i => <BouncingDot key={i} delay={i * 150} color={colors.textSecondary} />)}
+              {/* Messages */}
+              <ScrollView
+                ref={scrollRef}
+                style={styles.messages}
+                contentContainerStyle={styles.messagesContent}
+                showsVerticalScrollIndicator={false}
+                onContentSizeChange={scrollToBottom}
+              >
+                {messages.map((msg) => (
+                  <View
+                    key={msg.id}
+                    style={[styles.bubbleRow, msg.role === 'user' ? styles.userRow : styles.aiRow]}
+                  >
+                    {msg.role === 'assistant' && (
+                      <View style={[styles.aiAvatarSmall, { backgroundColor: colors.aiBg }]}>
+                        <Ionicons name="sparkles" size={16} color={colors.ai} />
+                      </View>
+                    )}
+                    <View
+                      style={[
+                        styles.bubble,
+                        msg.role === 'user'
+                          ? { backgroundColor: colors.primary }
+                          : { backgroundColor: colors.aiBg, borderWidth: 1, borderColor: colors.border },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.bubbleText,
+                          { color: msg.role === 'user' ? colors.onPrimary : colors.text },
+                        ]}
+                      >
+                        {msg.text}
+                      </Text>
+                      {msg.timestamp && (
+                        <Text
+                          style={[
+                            styles.timeText,
+                            {
+                              color: msg.role === 'user' ? colors.onPrimary : colors.textSecondary,
+                              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                            },
+                          ]}
+                          maxFontSizeMultiplier={1.3}
+                        >
+                          {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                      )}
+                    </View>
                   </View>
-                </View>
-              </View>
-            )}
-          </ScrollView>
+                ))}
 
-          {/* Input Area */}
-          <View style={[styles.inputArea, { borderTopColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', backgroundColor: 'transparent' }, Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {}]}>
-            {consentToExternalProcessing === null && (
-              <View style={[styles.privacyBanner, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', borderColor: colors.border }]}>
-                <Text style={[styles.privacyText, { color: colors.textSecondary }]}>
-                  Messages are processed by an external AI service. Share your name for personalized responses?
-                </Text>
-                <View style={styles.privacyActions}>
-                  <TouchableOpacity
-                    style={[styles.privacyButton, { borderColor: colors.border, backgroundColor: colors.background }]}
-                    onPress={() => persistConsent(false)}
-                  >
-                    <Text style={[styles.privacyButtonText, { color: colors.text }]}>No, stay anonymous</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.privacyButton, { borderColor: '#10B981', backgroundColor: '#10B981' }]}
-                    onPress={() => persistConsent(true)}
-                  >
-                    <Text style={[styles.privacyButtonText, { color: '#FFFFFF' }]}>Allow name</Text>
-                  </TouchableOpacity>
-                </View>
+                {/* Typing indicator */}
+                {isTyping && (
+                  <View style={[styles.bubbleRow, styles.aiRow]}>
+                    <View style={[styles.aiAvatarSmall, { backgroundColor: colors.aiBg }]}>
+                      <Ionicons name="sparkles" size={16} color={colors.ai} />
+                    </View>
+                    <View
+                      style={[
+                        styles.bubble,
+                        { backgroundColor: colors.aiBg, borderWidth: 1, borderColor: colors.border },
+                      ]}
+                      accessibilityLabel="Assistant is typing"
+                    >
+                      <View style={styles.typingDots}>
+                        {[0, 1, 2].map(i => (
+                          <BouncingDot key={i} delay={i * 150} color={colors.ai} animate={!reduceMotion} />
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </ScrollView>
+
+              {/* Input area */}
+              <View style={[styles.inputArea, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
+                {consentToExternalProcessing === null && (
+                  <View style={[styles.privacyBanner, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                    <Text style={[styles.privacyText, { color: colors.text }]}>
+                      Messages are processed by an external AI service. Share your name for personalized responses?
+                    </Text>
+                    <View style={styles.privacyActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="No, stay anonymous"
+                        style={({ pressed }) => [
+                          styles.privacyButton,
+                          styles.privacyButtonSecondary,
+                          {
+                            borderColor: colors.inputBorder,
+                            backgroundColor: pressed ? colors.cardHover : colors.card,
+                          },
+                        ]}
+                        onPress={() => persistConsent(false)}
+                      >
+                        <Text style={[styles.privacyButtonText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                          No, stay anonymous
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Allow name"
+                        style={({ pressed }) => [
+                          styles.privacyButton,
+                          { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                        ]}
+                        onPress={() => persistConsent(true)}
+                      >
+                        <Text style={[styles.privacyButtonText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                          Allow name
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+                <TextInput
+                  style={[styles.input, {
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    borderColor: inputFocused ? colors.inputFocusBorder : colors.inputBorder,
+                    borderWidth: inputFocused ? 2 : 1.5,
+                  }]}
+                  placeholder="Ask a health question..."
+                  placeholderTextColor={colors.placeholder}
+                  value={inputText}
+                  onChangeText={setInputText}
+                  onFocus={() => setInputFocused(true)}
+                  onBlur={() => setInputFocused(false)}
+                  onSubmitEditing={sendMessage}
+                  returnKeyType="send"
+                  multiline={false}
+                  editable={!isTyping}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Send message"
+                  accessibilityState={{ disabled: !canSend }}
+                  style={({ pressed }) => [
+                    styles.sendBtn,
+                    { backgroundColor: pressed && canSend ? colors.aiBg : colors.ai },
+                    !canSend && styles.disabledBtn,
+                  ]}
+                  onPress={sendMessage}
+                  disabled={!canSend}
+                >
+                  {({ pressed }) => (
+                    <Ionicons
+                      name="arrow-up"
+                      size={20}
+                      color={pressed && canSend ? colors.ai : colors.textInverse}
+                    />
+                  )}
+                </Pressable>
               </View>
-            )}
-            <TextInput
-              style={[styles.input, {
-                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                color: isDark ? '#E0E0F0' : colors.text,
-                borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
-              }]}
-              placeholder="Ask a health question..."
-              placeholderTextColor={colors.textSecondary}
-              value={inputText}
-              onChangeText={setInputText}
-              onSubmitEditing={sendMessage}
-              returnKeyType="send"
-              multiline={false}
-              editable={!isTyping}
-            />
-            <TouchableOpacity
-              style={[styles.sendBtn, { backgroundColor: inputText.trim() && !isTyping ? '#000000' : colors.border }]}
-              onPress={sendMessage}
-              disabled={!inputText.trim() || isTyping}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
             </View>
           </KeyboardAvoidingView>
         </View>
       </Modal>
 
-      {/* ── FLOATING ACTION BUTTON ─────────────────────────────── */}
+      {/* ── FLOATING ACTION BUTTON — indigo AI launcher ── */}
       {activeTab === 'home' && !isOpen && (
-        <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}> 
-          <TouchableOpacity
-            style={[
+        <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open health assistant"
+            style={({ pressed }) => [
               styles.fab,
-              isDark
-                ? { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.18)', borderWidth: 1 }
-                : { backgroundColor: '#000000' },
-              Platform.OS === 'web' ? ({ backdropFilter: 'blur(16px)' } as any) : {},
+              { backgroundColor: pressed ? colors.aiBg : colors.ai },
+              !isDark && styles.cardShadow,
             ]}
             onPress={toggleChat}
-            activeOpacity={0.85}
           >
-            <Ionicons name="sparkles" size={24} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
-          </TouchableOpacity>
+            {({ pressed }) => (
+              <Ionicons name="sparkles" size={24} color={pressed ? colors.ai : colors.textInverse} />
+            )}
+          </Pressable>
         </View>
       )}
     </>
@@ -323,15 +390,19 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
 };
 
 
-// ── Bouncing dot ────────────────────────────────────────────────────────────
-const BouncingDot: React.FC<{ delay: number; color: string }> = ({ delay, color }) => {
+// ── Bouncing dot — native-driver translateY, static when reduce-motion ──
+const BouncingDot: React.FC<{ delay: number; color: string; animate: boolean }> = ({ delay, color, animate }) => {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
+    if (!animate) {
+      anim.setValue(0);
+      return;
+    }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
-        Animated.timing(anim, { toValue: -5, duration: 280, useNativeDriver: false }),
-        Animated.timing(anim, { toValue: 0, duration: 280, useNativeDriver: false }),
+        Animated.timing(anim, { toValue: -5, duration: 280, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0, duration: 280, useNativeDriver: true }),
         Animated.delay(600 - delay),
       ])
     );
@@ -341,131 +412,135 @@ const BouncingDot: React.FC<{ delay: number; color: string }> = ({ delay, color 
     return () => {
       loop.stop();
     };
-  }, [delay]);
+  }, [delay, animate]);
   return <Animated.View style={[styles.dot, { backgroundColor: color, transform: [{ translateY: anim }] }]} />;
 };
 
 const styles = StyleSheet.create({
-  // ── Modal
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'flex-end'
+  /* ── Light-mode-only shadow (single recipe) ── */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
+
+  /* ── Modal ── */
+  overlay: { flex: 1, justifyContent: 'flex-end' },
+  kav: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     height: PANEL_HEIGHT,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
     borderWidth: 1,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 20,
-    width: '100%'
+    width: '100%',
   },
   panelHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 13,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
   },
-  panelHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  panelHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, flex: 1 },
+  panelTitleWrap: { flexShrink: 1 },
   aiAvatarWrap: {
-    width: 38, height: 38, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 44, height: 44, borderRadius: radii.md,
     alignItems: 'center', justifyContent: 'center',
   },
-  panelTitle: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
-  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
-  onlineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#4ADE80' },
-  onlineText: { fontSize: 11, color: 'rgba(255,255,255,0.75)' },
-  closeBtn: { padding: 6 },
+  panelTitle: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
+  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: 2 },
+  onlineDot: { width: 6, height: 6, borderRadius: 3 },
+  onlineText: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  closeBtn: {
+    width: 44, height: 44, borderRadius: radii.pill,
+    alignItems: 'center', justifyContent: 'center',
+  },
 
-  // ── Messages
+  /* ── Messages ── */
   messages: { flex: 1 },
-  messagesContent: { padding: 14, gap: 10, paddingBottom: 8 },
-  bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  messagesContent: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.sm },
+  bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
   userRow: { justifyContent: 'flex-end' },
   aiRow: { justifyContent: 'flex-start' },
   aiAvatarSmall: {
-    width: 28, height: 28, borderRadius: 10,
+    width: 28, height: 28, borderRadius: radii.sm,
     alignItems: 'center', justifyContent: 'center',
     marginBottom: 2,
   },
-  bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10, minWidth: 80 },
-  userBubble: { borderBottomRightRadius: 4 },
-  aiBubble: { borderBottomLeftRadius: 4 },
-  bubbleText: { fontSize: 14, lineHeight: 20 },
-  timeText: { fontSize: 10, marginTop: 4 },
+  bubble: {
+    maxWidth: '80%',
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minWidth: 80,
+  },
+  bubbleText: { fontSize: 15, lineHeight: 22, fontWeight: '500' },
+  timeText: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'], marginTop: spacing.xs },
 
-  // ── Typing
-  typingDots: { flexDirection: 'row', gap: 4, paddingVertical: 4, paddingHorizontal: 2 },
+  /* ── Typing ── */
+  typingDots: { flexDirection: 'row', gap: spacing.xs, paddingVertical: spacing.xs, paddingHorizontal: 2 },
   dot: { width: 7, height: 7, borderRadius: 3.5 },
 
-  // ── Input area
+  /* ── Input area ── */
   inputArea: {
     flexDirection: 'row', alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8, paddingHorizontal: 12, paddingVertical: 10,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
     borderTopWidth: 1,
   },
   privacyBanner: {
     width: '100%',
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 2,
+    borderRadius: radii.md,
+    padding: spacing.md,
   },
-  privacyText: {
-    fontSize: 12,
-    lineHeight: 17,
-  },
+  privacyText: { fontSize: 15, lineHeight: 22, fontWeight: '500' },
   privacyActions: {
-    marginTop: 8,
+    marginTop: spacing.md,
     flexDirection: 'row',
-    gap: 8,
+    gap: spacing.sm,
   },
   privacyButton: {
     flex: 1,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 8,
+    minHeight: 48,
+    borderRadius: radii.md,
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
   },
-  privacyButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  privacyButtonSecondary: { borderWidth: 1.5 },
+  privacyButtonText: { fontSize: 15, lineHeight: 22, fontWeight: '700', textAlign: 'center' },
   input: {
-    flex: 1, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 14, borderWidth: 1,
+    flex: 1,
+    minHeight: 52,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    fontSize: 15,
   },
   sendBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 48, height: 48, borderRadius: radii.pill,
     alignItems: 'center', justifyContent: 'center',
   },
+  disabledBtn: { opacity: 0.4 },
 
-  // ── FAB — matches Reports/Campaign add button style
+  /* ── FAB — indigo AI launcher ── */
   fabContainer: {
     position: 'absolute',
-    right: 16,
+    right: spacing.lg,
     zIndex: 999,
   },
   fab: {
     width: 56,
     height: 56,
-    borderRadius: 28,
+    borderRadius: radii.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
   },
 });
 

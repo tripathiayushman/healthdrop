@@ -1,18 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { Profile, AIAlert } from '../../types';
-import { useTheme } from '../../lib/ThemeContext';
+import { useTheme, Theme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
+import {
+  ErrorCard,
+  SkeletonBlock,
+  getSeverityColor,
+} from '../dashboards/DashboardShared';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 import { getAIAlerts } from '../../lib/services/advancedAnalytics';
 
@@ -53,8 +55,19 @@ const mapAiAlertToMapAlert = (alert: AIAlert): AlertItem => ({
   precautionary_measures: `Trend status: ${alert.trend_status}`,
 });
 
+/** Soft background tone for a severity level (solid fill is CRITICAL's privilege). */
+const severityBgTone = (level: string, t: Theme): string => {
+  switch (level?.toLowerCase()) {
+    case 'critical': return t.dangerBg;
+    case 'high':     return t.offlineBg;
+    case 'medium':   return t.warningBg;
+    case 'low':      return t.successBg;
+    default:         return t.surfaceVariant;
+  }
+};
+
 const MapTabScreen: React.FC<MapTabScreenProps> = ({ profile, onNavigateToForm }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -110,10 +123,10 @@ const MapTabScreen: React.FC<MapTabScreenProps> = ({ profile, onNavigateToForm }
       setAlerts(mergedAlerts);
 
       if (manualAlertsRes.error) {
-        setError('Some alert sources could not be loaded, but map intelligence is still available.');
+        setError("Couldn't load some alert sources — check connection.");
       }
     } catch {
-      setError('Unable to load map intelligence right now. Please try again.');
+      setError("Couldn't load map intelligence — check connection.");
       setAiAlerts([]);
       setAlerts([]);
     } finally {
@@ -143,47 +156,72 @@ const MapTabScreen: React.FC<MapTabScreenProps> = ({ profile, onNavigateToForm }
     };
   }, [alerts, aiAlerts]);
 
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
+  const metricCards: { label: string; value: number; rule: string }[] = [
+    { label: 'Visible Alerts', value: metrics.totalAlerts, rule: colors.primary },
+    { label: 'AI Signals', value: metrics.aiSignals, rule: colors.ai },
+    { label: 'Critical', value: metrics.criticalCount, rule: colors.danger },
+    { label: 'Districts', value: metrics.districtCount, rule: colors.info },
+  ];
+
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       showsVerticalScrollIndicator={false}
     >
-      <View style={[styles.header, { backgroundColor: colors.primary }]}> 
-        <Text style={styles.headerTitle}>Map Intelligence</Text>
-        <Text style={styles.headerSubtitle}>Live alerts, AI signals, and geospatial risk overview</Text>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <Text style={[styles.headerTitle, { color: headerText }]}>Map Intelligence</Text>
+        <Text style={[styles.headerSubtitle, { color: headerSub }]}>Live alerts, AI signals, and geospatial risk overview</Text>
       </View>
 
-      <View style={styles.metricsRow}>
-        <View style={[styles.metricCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>Visible Alerts</Text>
-          <Text style={[styles.metricValue, { color: colors.text }]}>{metrics.totalAlerts}</Text>
+      {loading && alerts.length === 0 ? (
+        <View style={styles.metricsRow}>
+          {[0, 1, 2, 3].map((i) => (
+            <SkeletonBlock key={i} width="48%" height={92} radius={8} style={{ flexGrow: 1 }} />
+          ))}
         </View>
-        <View style={[styles.metricCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>AI Signals</Text>
-          <Text style={[styles.metricValue, { color: colors.text }]}>{metrics.aiSignals}</Text>
+      ) : (
+        <View style={styles.metricsRow}>
+          {metricCards.map((card) => (
+            <View
+              key={card.label}
+              style={[
+                styles.metricCard,
+                { backgroundColor: colors.card, borderColor: colors.border, borderTopColor: card.rule },
+                !isDark && styles.cardShadow,
+              ]}
+              accessible
+              accessibilityLabel={`${card.label}: ${card.value}`}
+            >
+              <Text style={[styles.metricValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                {card.value}
+              </Text>
+              <Text style={[styles.metricLabel, { color: colors.textSecondary }]} numberOfLines={2}>
+                {card.label}
+              </Text>
+            </View>
+          ))}
         </View>
-        <View style={[styles.metricCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>Critical</Text>
-          <Text style={[styles.metricValue, { color: '#DC2626' }]}>{metrics.criticalCount}</Text>
-        </View>
-        <View style={[styles.metricCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>Districts</Text>
-          <Text style={[styles.metricValue, { color: colors.text }]}>{metrics.districtCount}</Text>
-        </View>
-      </View>
+      )}
 
       {error && (
-        <View style={[styles.errorCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Ionicons name="information-circle-outline" size={18} color={colors.textSecondary} />
-          <Text style={[styles.errorText, { color: colors.textSecondary }]}>{error}</Text>
+        <View style={styles.errorWrap}>
+          <ErrorCard message={error} onRetry={loadData} />
         </View>
       )}
 
       {loading && alerts.length === 0 ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading map intelligence...</Text>
+        <View style={styles.mapSkeletonWrap}>
+          <SkeletonBlock height={280} radius={12} />
         </View>
       ) : (
         <MapAndAlertsSection
@@ -197,51 +235,70 @@ const MapTabScreen: React.FC<MapTabScreenProps> = ({ profile, onNavigateToForm }
         />
       )}
 
-      <View style={[styles.aiFeed, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-        <Text style={[styles.aiFeedTitle, { color: colors.text }]}>AI Signal Feed</Text>
-        {aiAlerts.length === 0 ? (
-          <Text style={[styles.aiFeedEmpty, { color: colors.textSecondary }]}>No AI-generated signals available right now.</Text>
+      {/* AI Signal Feed — indigo means "the system inferred this" */}
+      <View
+        style={[
+          styles.aiFeed,
+          { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.ai },
+          !isDark && styles.cardShadow,
+        ]}
+      >
+        <View style={styles.aiFeedHeader}>
+          <Text style={[styles.aiFeedTitle, { color: colors.textSecondary }]}>
+            AI SIGNAL FEED
+            {aiAlerts.length > 0 && (
+              <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${aiAlerts.length}`}</Text>
+            )}
+          </Text>
+          <View style={[styles.aiBadge, { backgroundColor: colors.aiBg }]}>
+            <Text style={[styles.aiBadgeText, { color: colors.ai }]} maxFontSizeMultiplier={1.3}>AI</Text>
+          </View>
+        </View>
+        {loading && aiAlerts.length === 0 ? (
+          <View style={{ gap: 8 }}>
+            <SkeletonBlock height={64} radius={8} />
+            <SkeletonBlock height={64} radius={8} />
+          </View>
+        ) : aiAlerts.length === 0 ? (
+          <Text style={[styles.aiFeedEmpty, { color: colors.textSecondary }]}>
+            All quiet — the system has no AI-generated signals for your area right now.
+          </Text>
         ) : (
-          aiAlerts.slice(0, 6).map((signal) => (
-            <TouchableOpacity
-              key={signal.id}
-              style={[styles.signalCard, { borderColor: colors.border }]}
-              activeOpacity={0.85}
-            >
-              <View style={styles.signalHeader}>
-                <Text style={[styles.signalTitle, { color: colors.text }]} numberOfLines={1}>
-                  {signal.title}
-                </Text>
-                <View style={[styles.severityPill, { backgroundColor: `${signal.severity === 'critical' ? '#DC2626' : signal.severity === 'high' ? '#EA580C' : signal.severity === 'medium' ? '#F59E0B' : '#10B981'}22` }]}> 
-                  <Text
-                    style={[
-                      styles.severityText,
-                      {
-                        color:
-                          signal.severity === 'critical'
-                            ? '#DC2626'
-                            : signal.severity === 'high'
-                              ? '#EA580C'
-                              : signal.severity === 'medium'
-                                ? '#F59E0B'
-                                : '#10B981',
-                      },
-                    ]}
-                  >
-                    {signal.severity.toUpperCase()}
+          aiAlerts.slice(0, 6).map((signal) => {
+            const sev = signal.severity.toLowerCase();
+            const isCritical = sev === 'critical';
+            const pillFg = isCritical ? colors.textInverse : getSeverityColor(sev, colors);
+            const pillBg = isCritical ? colors.danger : severityBgTone(sev, colors);
+            return (
+              <View
+                key={signal.id}
+                style={[styles.signalCard, { borderColor: colors.border, backgroundColor: colors.surface }]}
+              >
+                <View style={styles.signalHeader}>
+                  <Text style={[styles.signalTitle, { color: colors.text }]} numberOfLines={1}>
+                    {signal.title}
                   </Text>
+                  <View
+                    style={[styles.severityPill, { backgroundColor: pillBg }]}
+                    accessibilityLabel={`Urgency: ${sev}`}
+                  >
+                    {!isCritical && <View style={[styles.severityDot, { backgroundColor: pillFg }]} />}
+                    <Text style={[styles.severityText, { color: pillFg }]} maxFontSizeMultiplier={1.3}>
+                      {signal.severity.toUpperCase()}
+                    </Text>
+                  </View>
                 </View>
+                <Text style={[styles.signalMeta, { color: colors.textSecondary }]}>
+                  {signal.district}
+                  {signal.confidence_score ? ` · Confidence ${Math.round(signal.confidence_score)}%` : ''}
+                  {` · ${signal.trend_status}`}
+                </Text>
+                <Text style={[styles.signalBody, { color: colors.textSecondary }]} numberOfLines={2}>
+                  {signal.recommended_action || signal.description}
+                </Text>
               </View>
-              <Text style={[styles.signalMeta, { color: colors.textSecondary }]}> 
-                {signal.district}
-                {signal.confidence_score ? ` • Confidence ${Math.round(signal.confidence_score)}%` : ''}
-                {` • ${signal.trend_status}`}
-              </Text>
-              <Text style={[styles.signalBody, { color: colors.textSecondary }]} numberOfLines={2}>
-                {signal.recommended_action || signal.description}
-              </Text>
-            </TouchableOpacity>
-          ))
+            );
+          })
         )}
       </View>
 
@@ -254,90 +311,110 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
   header: {
     paddingTop: 20,
     paddingBottom: 20,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
+    paddingHorizontal: 16,
   },
   headerTitle: {
-    color: '#FFFFFF',
-    fontSize: 26,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '800',
+    letterSpacing: -0.4,
     marginBottom: 4,
   },
   headerSubtitle: {
-    color: 'rgba(255,255,255,0.85)',
     fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   metricsRow: {
     paddingHorizontal: 16,
-    marginTop: 14,
+    marginTop: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 12,
   },
   metricCard: {
-    flexBasis: '48%',
+    flexBasis: '47%',
+    flexGrow: 1,
     borderRadius: 12,
     borderWidth: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    borderTopWidth: 3,
+    padding: 16,
+    minHeight: 92,
+    justifyContent: 'flex-end',
   },
   metricLabel: {
-    fontSize: 11,
-    marginBottom: 4,
-    fontWeight: '600',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    marginTop: 2,
   },
   metricValue: {
-    fontSize: 20,
+    fontSize: 24,
+    lineHeight: 28,
     fontWeight: '800',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
   },
-  errorCard: {
+  errorWrap: {
+    marginTop: 12,
+    marginHorizontal: 16,
+  },
+  mapSkeletonWrap: {
+    marginTop: 12,
+    marginHorizontal: 16,
+  },
+  aiFeed: {
     marginTop: 12,
     marginHorizontal: 16,
     borderRadius: 12,
     borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderLeftWidth: 3,
+    padding: 16,
+  },
+  aiFeedHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
     gap: 8,
   },
-  errorText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  loadingWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 28,
-    gap: 10,
-  },
-  loadingText: {
-    fontSize: 13,
-  },
-  aiFeed: {
-    marginTop: 10,
-    marginHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 12,
-  },
   aiFeedTitle: {
-    fontSize: 15,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
-    marginBottom: 8,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    flexShrink: 1,
+  },
+  aiBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  aiBadgeText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
   aiFeedEmpty: {
     fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   signalCard: {
     borderWidth: 1,
-    borderRadius: 10,
-    padding: 10,
+    borderRadius: 8,
+    padding: 12,
     marginBottom: 8,
   },
   signalHeader: {
@@ -347,26 +424,41 @@ const styles = StyleSheet.create({
   },
   signalTitle: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 15,
+    lineHeight: 22,
     fontWeight: '700',
   },
   severityPill: {
-    borderRadius: 10,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  severityDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   severityText: {
-    fontSize: 10,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '800',
+    letterSpacing: 0.6,
   },
   signalMeta: {
     marginTop: 4,
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   signalBody: {
     marginTop: 4,
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
 });
 

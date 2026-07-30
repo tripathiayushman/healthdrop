@@ -1,23 +1,23 @@
 // =====================================================
-// MAIN APP - Tab Navigation Container
-// Role-aware dashboard + improved bottom tab bar
-// Mobile UX: swipe-to-switch-tabs, glass tab bar
+// MAIN APP - Tab Navigation Container ("Prakash")
+// Flat headerBg shell header + Role Ribbon + Sync Pebble,
+// opaque bottom tab bar (outline icons at rest, filled
+// active, labels always), swipe-to-switch-tabs.
 // =====================================================
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
+  Pressable,
   Alert,
   Platform,
   PanResponder,
   StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../lib/ThemeContext';
+import { useTheme, spacing, radii } from '../lib/ThemeContext';
 import { Profile } from '../types';
 
 // Screens
@@ -33,6 +33,8 @@ import CampaignIntelligenceScreen from './screens/CampaignIntelligenceScreen';
 import HealthScoreScreen from './screens/HealthScoreScreen';
 import EscalationMonitoringScreen from './screens/EscalationMonitoringScreen';
 import WidgetCustomizationScreen from './screens/WidgetCustomizationScreen';
+import SyncOutboxScreen from './screens/SyncOutboxScreen';
+import MySubmissionsScreen from './screens/MySubmissionsScreen';
 
 // Forms
 import { DiseaseReportForm, WaterQualityReportForm, CampaignForm, AlertForm } from './forms';
@@ -42,6 +44,9 @@ import { AIChatbot } from './ai/AIChatbot';
 
 // Role-based Dashboard Router
 import { DashboardRouter } from './dashboards/DashboardRouter';
+
+// Shared shell pieces
+import { SyncPebble, ROLE_ACCENT } from './dashboards/DashboardShared';
 
 const IS_MOBILE = Platform.OS !== 'web';
 
@@ -57,7 +62,9 @@ type ScreenType =
   | 'campaign-intelligence'
   | 'health-score'
   | 'escalation-monitoring'
-  | 'widget-customization';
+  | 'widget-customization'
+  | 'sync-outbox'
+  | 'my-submissions';
 type RestrictedScreenType = Exclude<ScreenType, 'tabs' | CreateScreenType>;
 
 const TAB_ORDER: TabType[] = ['home', 'map', 'reports', 'campaigns', 'profile'];
@@ -69,6 +76,8 @@ const CREATE_PERMISSIONS: Record<CreateScreenType, Profile['role'][]> = {
   'new-alert': ['super_admin', 'health_admin', 'district_officer'],
 };
 
+const ALL_ROLES: Profile['role'][] = ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'];
+
 const SCREEN_PERMISSIONS: Record<RestrictedScreenType, Profile['role'][]> = {
   'admin-management': ['super_admin', 'health_admin', 'clinic'],
   'user-management': ['super_admin', 'health_admin'],
@@ -78,18 +87,19 @@ const SCREEN_PERMISSIONS: Record<RestrictedScreenType, Profile['role'][]> = {
   'health-score': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'],
   'escalation-monitoring': ['super_admin', 'health_admin', 'district_officer', 'clinic'],
   'widget-customization': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'],
+  'sync-outbox': ALL_ROLES,
+  'my-submissions': ALL_ROLES,
 };
 
 const CREATE_ACTIONS: Array<{
   screen: CreateScreenType;
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
-  color: string;
 }> = [
-  { screen: 'new-disease-report', label: 'Disease Report', icon: 'medkit', color: '#EF4444' },
-  { screen: 'new-water-report', label: 'Water Quality', icon: 'water', color: '#3B82F6' },
-  { screen: 'new-campaign', label: 'Campaign', icon: 'megaphone', color: '#10B981' },
-  { screen: 'new-alert', label: 'Health Alert', icon: 'warning', color: '#F59E0B' },
+  { screen: 'new-disease-report', label: 'Disease Report', icon: 'medkit-outline' },
+  { screen: 'new-water-report', label: 'Water Quality', icon: 'water-outline' },
+  { screen: 'new-campaign', label: 'Campaign', icon: 'megaphone-outline' },
+  { screen: 'new-alert', label: 'Health Alert', icon: 'warning-outline' },
 ];
 
 const isCreateScreen = (value: string): value is CreateScreenType =>
@@ -110,6 +120,8 @@ const isScreenType = (value: string): value is ScreenType =>
     'health-score',
     'escalation-monitoring',
     'widget-customization',
+    'sync-outbox',
+    'my-submissions',
   ].includes(value);
 
 const canCreateOnRole = (role: Profile['role'], screen: CreateScreenType): boolean =>
@@ -135,6 +147,14 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const availableCreateActions = CREATE_ACTIONS.filter(action =>
     canCreateOnRole(profile.role, action.screen)
   );
+
+  // Semantic tint per create action — token-driven, no hex literals.
+  const createActionColor: Record<CreateScreenType, string> = {
+    'new-disease-report': colors.danger,
+    'new-water-report': colors.info,
+    'new-campaign': colors.success,
+    'new-alert': colors.warning,
+  };
 
   useEffect(() => {
     setShowCreateMenu(false);
@@ -345,6 +365,20 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       </SafeAreaView>
     );
   }
+  if (currentScreen === 'sync-outbox') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <SyncOutboxScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'my-submissions') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <MySubmissionsScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
 
   // ── Tab definitions ───────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: keyof typeof Ionicons.glyphMap; activeIcon: keyof typeof Ionicons.glyphMap }[] = [
@@ -381,40 +415,36 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     }
   };
 
-  const tabBarStyle: any[] = [
-    styles.tabBar,
-    {
-      backgroundColor: Platform.OS !== 'web'
-        ? 'transparent' // BlurView handles the background on native
-        : isDark ? 'rgba(0,0,0,0.72)' : 'rgba(255,255,255,0.82)',
-      borderTopColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-      shadowColor: isDark ? '#000' : '#0F172A',
-    },
-    // Glass blur on web
-    Platform.OS === 'web' ? { backdropFilter: 'blur(16px)' } as any : {},
-  ];
-
   const renderTabItems = () => tabs.map((tab) => {
     const isActive = activeTab === tab.id;
     return (
-      <TouchableOpacity
+      <Pressable
         key={tab.id}
-        style={styles.tabItem}
+        style={({ pressed }) => [
+          styles.tabItem,
+          pressed && { backgroundColor: colors.surfaceVariant },
+        ]}
         onPress={() => setActiveTab(tab.id)}
-        activeOpacity={0.7}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: isActive }}
+        accessibilityLabel={tab.label}
       >
-        {isActive && (
-          <View style={[styles.activePill, { backgroundColor: colors.primary + '18' }]} />
-        )}
         <Ionicons
           name={isActive ? tab.activeIcon : tab.icon}
-          size={22}
+          size={24}
           color={isActive ? colors.primary : colors.textSecondary}
         />
-        <Text style={[styles.tabLabel, { color: isActive ? colors.primary : colors.textSecondary, fontWeight: isActive ? '700' : '400' }]}>
+        <Text
+          style={[
+            styles.tabLabel,
+            { color: isActive ? colors.primary : colors.textSecondary, fontWeight: isActive ? '700' : '600' },
+          ]}
+          maxFontSizeMultiplier={1.3}
+          numberOfLines={1}
+        >
           {tab.label}
         </Text>
-      </TouchableOpacity>
+      </Pressable>
     );
   });
 
@@ -423,8 +453,70 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     (activeTab === 'reports' || activeTab === 'campaigns') &&
     availableCreateActions.length > 0;
 
+  // The home dashboards render their own full DashboardHeader
+  // (greeting band + Role Ribbon), so the shell ribbon and dark-mode
+  // divider only appear on tabs without one — a single ribbon per screen.
+  const showShellRibbon = activeTab !== 'home';
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const roleAccent = ROLE_ACCENT[profile.role] ?? ROLE_ACCENT.volunteer;
+
+  // Shell-level quick access: My Submissions beside the report lists,
+  // Sync Outbox in the profile section.
+  const quickAccess =
+    activeTab === 'reports'
+      ? { screen: 'my-submissions', icon: 'albums-outline' as keyof typeof Ionicons.glyphMap, label: 'My Submissions' }
+      : activeTab === 'profile'
+        ? { screen: 'sync-outbox', icon: 'cloud-upload-outline' as keyof typeof Ionicons.glyphMap, label: 'Sync Outbox' }
+        : null;
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* ── Shell header — flat headerBg band + Sync Pebble ── */}
+      <View
+        style={[
+          styles.shellHeader,
+          { backgroundColor: colors.headerBg },
+          isDark && showShellRibbon && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <Text style={[styles.brandText, { color: headerText }]} maxFontSizeMultiplier={1.3}>
+          HealthDrop
+        </Text>
+        <Pressable
+          onPress={() => navigateToForm('sync-outbox')}
+          accessibilityRole="button"
+          accessibilityLabel="Open sync outbox"
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <SyncPebble />
+        </Pressable>
+      </View>
+      {showShellRibbon && (
+        <View style={[styles.roleRibbon, { backgroundColor: roleAccent }]} />
+      )}
+
+      {/* ── Quick access row (shell-level) ── */}
+      {quickAccess && (
+        <Pressable
+          style={({ pressed }) => [
+            styles.quickLink,
+            {
+              backgroundColor: pressed ? colors.cardHover : colors.card,
+              borderBottomColor: colors.border,
+            },
+          ]}
+          onPress={() => navigateToForm(quickAccess.screen)}
+          accessibilityRole="button"
+          accessibilityLabel={quickAccess.label}
+        >
+          <Ionicons name={quickAccess.icon} size={20} color={colors.textSecondary} />
+          <Text style={[styles.quickLinkLabel, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+            {quickAccess.label}
+          </Text>
+          <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+        </Pressable>
+      )}
+
       {/* Main Content — swipe gesture area (mobile only) */}
       <View style={styles.content} {...panResponder.panHandlers}>
         {renderTabContent()}
@@ -433,60 +525,70 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       {showUniversalAddFab && (
         <>
           {showCreateMenu && (
-            <TouchableOpacity
+            <Pressable
               style={styles.createMenuBackdrop}
-              activeOpacity={1}
               onPress={() => setShowCreateMenu(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close create menu"
             />
           )}
 
           {showCreateMenu && (
-            <View style={[styles.createMenu, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-              {availableCreateActions.map((action) => (
-                <TouchableOpacity
-                  key={action.screen}
-                  style={styles.createMenuItem}
-                  onPress={() => {
-                    setShowCreateMenu(false);
-                    navigateToForm(action.screen);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <View style={[styles.createMenuIcon, { backgroundColor: action.color + '1A' }]}>
-                    <Ionicons name={action.icon} size={16} color={action.color} />
-                  </View>
-                  <Text style={[styles.createMenuLabel, { color: colors.text }]}>{action.label}</Text>
-                </TouchableOpacity>
-              ))}
+            <View style={[styles.createMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {availableCreateActions.map((action) => {
+                const tint = createActionColor[action.screen];
+                return (
+                  <Pressable
+                    key={action.screen}
+                    style={({ pressed }) => [
+                      styles.createMenuItem,
+                      pressed && { backgroundColor: colors.cardHover },
+                    ]}
+                    onPress={() => {
+                      setShowCreateMenu(false);
+                      navigateToForm(action.screen);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Create ${action.label}`}
+                  >
+                    <View style={[styles.createMenuIcon, { backgroundColor: tint + '14' }]}>
+                      <Ionicons name={action.icon} size={18} color={tint} />
+                    </View>
+                    <Text style={[styles.createMenuLabel, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {action.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           )}
 
-          <TouchableOpacity
-            style={[
+          {/* Extended create button — labeled, never icon-only */}
+          <Pressable
+            style={({ pressed }) => [
               styles.createFab,
-              isDark
-                ? { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.18)', borderWidth: 1 }
-                : { backgroundColor: '#000000' },
-              Platform.OS === 'web' ? ({ backdropFilter: 'blur(16px)' } as any) : {},
+              {
+                backgroundColor: pressed ? colors.primaryDark : colors.primary,
+                shadowColor: colors.shadow,
+              },
             ]}
             onPress={() => setShowCreateMenu(prev => !prev)}
-            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={showCreateMenu ? 'Close create menu' : 'Create new record'}
+            accessibilityState={{ expanded: showCreateMenu }}
           >
-            <Ionicons name={showCreateMenu ? 'close' : 'add'} size={28} color={isDark ? '#E0E0F0' : '#FFFFFF'} />
-          </TouchableOpacity>
+            <Ionicons name={showCreateMenu ? 'close' : 'add'} size={24} color={colors.onPrimary} />
+            <Text style={[styles.createFabLabel, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+              Create
+            </Text>
+          </Pressable>
         </>
       )}
 
-      {/* ── Glass Bottom Tab Bar ─── */}
-      {Platform.OS !== 'web' ? (
-        <BlurView intensity={80} tint={isDark ? 'dark' : 'light'} style={tabBarStyle}>
-          {renderTabItems()}
-        </BlurView>
-      ) : (
-        <View style={tabBarStyle}>
-          {renderTabItems()}
-        </View>
-      )}
+      {/* ── Opaque Bottom Tab Bar — border-first, no glass ── */}
+      <View style={[styles.tabBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+        {renderTabItems()}
+      </View>
 
       {/* AI Chatbot — persistent across all tabs except Profile */}
       <AIChatbot profile={profile} activeTab={activeTab} />
@@ -500,84 +602,119 @@ const styles = StyleSheet.create({
     paddingTop: 0,
   },
   content: { flex: 1 },
+
+  /* ── Shell header ── */
+  shellHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    minHeight: 56,
+  },
+  brandText: {
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  roleRibbon: { height: 4, width: '100%' },
+
+  /* ── Quick access row ── */
+  quickLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+    borderBottomWidth: 1,
+  },
+  quickLinkLabel: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+
+  /* ── Create menu ── */
   createMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 18,
   },
   createFab: {
     position: 'absolute',
-    right: 16,
+    right: spacing.lg,
     bottom: Platform.OS === 'ios' ? 96 : 88,
-    width: 56,
     height: 56,
-    borderRadius: 28,
+    minWidth: 56,
+    borderRadius: radii.pill,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xl,
     zIndex: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
     shadowRadius: 8,
-    elevation: 10,
+    elevation: 2,
+  },
+  createFabLabel: {
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
   },
   createMenu: {
     position: 'absolute',
-    right: 16,
+    right: spacing.lg,
     bottom: Platform.OS === 'ios' ? 164 : 156,
-    borderRadius: 14,
+    borderRadius: radii.md,
     borderWidth: 1,
-    paddingVertical: 6,
-    minWidth: 188,
+    paddingVertical: spacing.xs,
+    minWidth: 220,
     zIndex: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    elevation: 9,
+    overflow: 'hidden',
   },
   createMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.md,
   },
   createMenuIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: radii.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   createMenuLabel: {
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600',
   },
+
+  /* ── Tab bar ── */
   tabBar: {
     flexDirection: 'row',
     borderTopWidth: 1,
     paddingBottom: Platform.OS === 'ios' ? 20 : 8,
-    paddingTop: 6,
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 12,
+    paddingTop: spacing.xs,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
-    gap: 3,
-    position: 'relative',
-  },
-  activePill: {
-    position: 'absolute',
-    top: 0, bottom: 0, left: 6, right: 6,
-    borderRadius: 12,
+    minHeight: 48,
+    paddingVertical: spacing.xs,
+    gap: 2,
+    borderRadius: radii.sm,
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 16,
     letterSpacing: 0.2,
   },
 });

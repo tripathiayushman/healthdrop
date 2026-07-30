@@ -1,9 +1,12 @@
 // =====================================================
-// INPUT FIELD COMPONENT
+// INPUT FIELD COMPONENT — "Prakash" design system
+// 52dp fields, label above (13/700 uppercase), inline
+// error with icon below. No Alert.alert validation.
 // =====================================================
 import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
-import { useTheme } from '../../lib/ThemeContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme, radii } from '../../lib/ThemeContext';
 
 interface InputFieldProps {
   label?: string;
@@ -42,33 +45,37 @@ export const InputField: React.FC<InputFieldProps> = ({
   const [isFocused, setIsFocused] = useState(false);
 
   const getBorderColor = () => {
-    if (error) return colors.inputErrorBorder || colors.danger;
-    if (isFocused) return colors.inputFocusBorder || colors.inputFocus;
-    if (value?.trim()) return colors.inputFilledBorder || colors.inputBorder;
+    if (error) return colors.inputErrorBorder;
+    if (isFocused) return colors.inputFocusBorder;
+    if (value?.trim()) return colors.inputFilledBorder;
     return colors.inputBorder;
   };
+
+  // 2px on focus/error, 1.5px at rest — no glow
+  const borderWidth = error || isFocused ? 2 : 1.5;
 
   return (
     <View style={styles.container}>
       {label && (
-        <Text style={[styles.label, { color: colors.text }]}>
+        <Text style={[styles.label, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
           {label}
           {required && <Text style={{ color: colors.danger }}> *</Text>}
         </Text>
       )}
-      
+
       <View
         style={[
           styles.inputContainer,
           {
             backgroundColor: disabled ? colors.surfaceVariant : colors.inputBackground,
             borderColor: getBorderColor(),
+            borderWidth,
           },
           multiline && { minHeight: numberOfLines * 24 + 24, alignItems: 'flex-start' },
         ]}
       >
         {icon && <View style={styles.icon}>{icon}</View>}
-        
+
         <TextInput
           value={value}
           onChangeText={onChangeText}
@@ -88,16 +95,24 @@ export const InputField: React.FC<InputFieldProps> = ({
             multiline && styles.multilineInput,
           ]}
         />
-        
+
         {rightIcon && (
-          <TouchableOpacity onPress={onRightIconPress} style={styles.rightIcon}>
+          <TouchableOpacity
+            onPress={onRightIconPress}
+            style={styles.rightIcon}
+            accessibilityRole="button"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             {rightIcon}
           </TouchableOpacity>
         )}
       </View>
-      
+
       {error && (
-        <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>
+        <View style={styles.errorRow} accessibilityLiveRegion="polite">
+          <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+          <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>
+        </View>
       )}
     </View>
   );
@@ -108,16 +123,19 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
     marginBottom: 8,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingHorizontal: 14,
+    minHeight: 52,
   },
   icon: {
     marginRight: 10,
@@ -138,9 +156,17 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     padding: 4,
   },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
   error: {
-    fontSize: 12,
-    marginTop: 4,
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
 });
 

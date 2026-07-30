@@ -11,6 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Profile } from '../../types';
 import { useTheme } from '../../lib/ThemeContext';
+import { EmptyState, SkeletonBlock } from '../dashboards/DashboardShared';
 import {
   WidgetPreferenceKey,
   getRoleWidgetDefinitions,
@@ -25,7 +26,7 @@ interface WidgetCustomizationScreenProps {
 }
 
 const WidgetCustomizationScreen: React.FC<WidgetCustomizationScreenProps> = ({ profile, onBack }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [preferences, setPreferences] = useState<Record<WidgetPreferenceKey, boolean>>({} as Record<WidgetPreferenceKey, boolean>);
@@ -62,37 +63,75 @@ const WidgetCustomizationScreen: React.FC<WidgetCustomizationScreenProps> = ({ p
     setSaving(false);
   };
 
+  const headerText = isDark ? colors.text : colors.textInverse;
+  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}> 
-      <View style={[styles.header, { backgroundColor: colors.primary }]}> 
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
-          <Ionicons name="chevron-back" size={20} color="#FFFFFF" />
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.headerBg },
+          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+        >
+          <Ionicons name="chevron-back" size={22} color={headerText} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Customize Widgets</Text>
-          <Text style={styles.headerSubtitle}>Choose which dashboard modules you want to see</Text>
+          <Text style={[styles.headerTitle, { color: headerText }]}>Customize Widgets</Text>
+          <Text style={[styles.headerSubtitle, { color: headerSub }]}>Choose which dashboard modules you want to see</Text>
         </View>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={[styles.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Ionicons name="information-circle-outline" size={18} color={colors.textSecondary} />
-          <Text style={[styles.infoText, { color: colors.textSecondary }]}>Your widget preferences are saved per account and applied to your role dashboard automatically.</Text>
+        <View
+          style={[
+            styles.infoCard,
+            { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.info },
+            !isDark && styles.cardShadow,
+          ]}
+        >
+          <Ionicons name="information-circle-outline" size={16} color={colors.info} />
+          <Text style={[styles.infoText, { color: colors.text }]}>Your widget preferences are saved per account and applied to your role dashboard automatically.</Text>
         </View>
 
         {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading widget preferences...</Text>
+          <View style={{ gap: 8 }}>
+            <SkeletonBlock height={64} radius={8} />
+            <SkeletonBlock height={64} radius={8} />
+            <SkeletonBlock height={64} radius={8} />
+            <SkeletonBlock height={64} radius={8} />
           </View>
         ) : availableWidgets.length === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No customizable widgets are available for your role.</Text>
-          </View>
+          <EmptyState
+            icon="checkmark-circle-outline"
+            color={colors.success}
+            title="Nothing to customize"
+            subtitle="No customizable widgets are available for your role."
+          />
         ) : (
-          <View style={[styles.listCard, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-            {availableWidgets.map((widget) => (
-              <View key={widget.key} style={[styles.itemRow, { borderColor: colors.border }]}> 
+          <View
+            style={[
+              styles.listCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+              !isDark && styles.cardShadow,
+            ]}
+          >
+            {availableWidgets.map((widget, index) => (
+              <View
+                key={widget.key}
+                style={[
+                  styles.itemRow,
+                  index < availableWidgets.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                ]}
+              >
                 <View style={{ flex: 1, paddingRight: 10 }}>
                   <Text style={[styles.itemTitle, { color: colors.text }]}>{widget.label}</Text>
                   <Text style={[styles.itemDescription, { color: colors.textSecondary }]}>{widget.description}</Text>
@@ -100,8 +139,9 @@ const WidgetCustomizationScreen: React.FC<WidgetCustomizationScreenProps> = ({ p
                 <Switch
                   value={preferences[widget.key] !== false}
                   onValueChange={(value) => handleToggle(widget.key, value)}
-                  thumbColor={preferences[widget.key] !== false ? colors.primary : '#9CA3AF'}
-                  trackColor={{ false: '#D1D5DB', true: `${colors.primary}77` }}
+                  thumbColor={colors.card}
+                  trackColor={{ false: colors.disabled, true: colors.primary }}
+                  accessibilityLabel={`${widget.label}${preferences[widget.key] !== false ? ', shown' : ', hidden'}`}
                 />
               </View>
             ))}
@@ -109,12 +149,14 @@ const WidgetCustomizationScreen: React.FC<WidgetCustomizationScreenProps> = ({ p
         )}
 
         <TouchableOpacity
-          style={[styles.resetBtn, { borderColor: colors.primary, backgroundColor: `${colors.primary}12` }]}
+          style={[styles.resetBtn, { borderColor: colors.inputBorder }, (saving || loading) && styles.btnDisabled]}
           onPress={handleReset}
           disabled={saving || loading}
+          accessibilityRole="button"
+          accessibilityLabel="Reset widgets to default"
         >
-          {saving ? <ActivityIndicator size="small" color={colors.primary} /> : <Ionicons name="refresh" size={16} color={colors.primary} />}
-          <Text style={[styles.resetText, { color: colors.primary }]}>Reset To Default</Text>
+          {saving ? <ActivityIndicator size="small" color={colors.text} /> : <Ionicons name="refresh-outline" size={16} color={colors.text} />}
+          <Text style={[styles.resetText, { color: colors.text }]}>Reset To Default</Text>
         </TouchableOpacity>
 
         <View style={{ height: 80 }} />
@@ -127,32 +169,37 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
   header: {
     paddingTop: 18,
     paddingBottom: 16,
     paddingHorizontal: 16,
-    borderBottomLeftRadius: 18,
-    borderBottomRightRadius: 18,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
   backBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '800',
+    letterSpacing: -0.4,
   },
   headerSubtitle: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
     marginTop: 2,
   },
   content: {
@@ -162,66 +209,58 @@ const styles = StyleSheet.create({
   },
   infoCard: {
     borderWidth: 1,
+    borderLeftWidth: 3,
     borderRadius: 12,
-    padding: 10,
+    padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
+    gap: 12,
+    marginBottom: 12,
   },
   infoText: {
     flex: 1,
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  loadingWrap: {
-    paddingVertical: 30,
-    alignItems: 'center',
-    gap: 10,
-  },
-  loadingText: {
     fontSize: 13,
-  },
-  emptyCard: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 14,
-  },
-  emptyText: {
-    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   listCard: {
     borderWidth: 1,
     borderRadius: 12,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
   },
   itemRow: {
     paddingVertical: 12,
-    borderBottomWidth: 1,
+    minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
   },
   itemTitle: {
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 22,
     fontWeight: '700',
     marginBottom: 2,
   },
   itemDescription: {
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   resetBtn: {
     marginTop: 12,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 6,
   },
+  btnDisabled: {
+    opacity: 0.4,
+  },
   resetText: {
-    fontSize: 13,
+    fontSize: 15,
+    lineHeight: 22,
     fontWeight: '700',
   },
 });
