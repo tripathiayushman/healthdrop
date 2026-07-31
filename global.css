@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme variables mapped to the HealthDrop "Prakash" palette
+   (see DESIGN_SPEC.md / lib/ThemeContext.tsx — keep the two in sync). */
+@layer base {
+  :root {
+    --background: 210 31% 95%;
+    --foreground: 210 59% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 59% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 59% 11%;
+    --primary: 207 88% 35%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 33% 92%;
+    --secondary-foreground: 210 59% 11%;
+    --muted: 210 33% 92%;
+    --muted-foreground: 207 26% 32%;
+    --accent: 17 88% 40%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 74% 42%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 209 24% 81%;
+    --input: 208 16% 47%;
+    --ring: 207 88% 35%;
+    --radius: 0.75rem;
+  }
+
+  .dark:root {
+    --background: 210 39% 7%;
+    --foreground: 207 53% 97%;
+    --card: 213 35% 13%;
+    --card-foreground: 207 53% 97%;
+    --popover: 213 35% 13%;
+    --popover-foreground: 207 53% 97%;
+    --primary: 205 72% 61%;
+    --primary-foreground: 206 83% 14%;
+    --secondary: 210 31% 15%;
+    --secondary-foreground: 207 53% 97%;
+    --muted: 210 31% 15%;
+    --muted-foreground: 208 22% 72%;
+    --accent: 27 96% 61%;
+    --accent-foreground: 210 59% 11%;
+    --destructive: 0 91% 71%;
+    --destructive-foreground: 210 59% 11%;
+    --border: 210 27% 23%;
+    --input: 209 21% 39%;
+    --ring: 205 72% 61%;
+  }
+}

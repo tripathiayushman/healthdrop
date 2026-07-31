@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -44,11 +46,16 @@ jobs:
         id: version
         run: |
           VERSION=$(node -p "require('./app.json').expo.version")
+          # versionCode must be strictly increasing across ALL builds or
+          # Android refuses to update. Commit count is monotonic per push,
+          # unlike per-workflow run numbers which reset between workflows.
+          BUILD_NUM=$(git rev-list --count HEAD)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "buildnum=$BUILD_NUM" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}-build.${BUILD_NUM}" >> "$GITHUB_OUTPUT"
 
       - name: Sync versionCode for this build
-        run: node scripts/sync-version.cjs "${{ steps.version.outputs.version }}" "${{ github.run_number }}"
+        run: node scripts/sync-version.cjs "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.buildnum }}"
 
       - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
@@ -70,7 +77,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: HealthDrop ${{ steps.version.outputs.version }} (build ${{ github.run_number }})
+          name: HealthDrop ${{ steps.version.outputs.version }} (build ${{ steps.version.outputs.buildnum }})
           generate_release_notes: true
           make_latest: true
           files: |
