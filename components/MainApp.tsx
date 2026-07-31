@@ -40,6 +40,8 @@ import OutbreakSignalScreen from './screens/OutbreakSignalScreen';
 import OutbreakConsoleScreen from './screens/OutbreakConsoleScreen';
 import WaterSourcesScreen from './screens/WaterSourcesScreen';
 import WeeklySummaryScreen from './screens/WeeklySummaryScreen';
+import NotificationsInboxScreen from './screens/NotificationsInboxScreen';
+import AdvisoryComposerScreen from './screens/AdvisoryComposerScreen';
 
 // Forms
 import { DiseaseReportForm, WaterQualityReportForm, CampaignForm, AlertForm } from './forms';
@@ -74,7 +76,9 @@ type ScreenType =
   | 'outbreak-signal'
   | 'outbreak-console'
   | 'water-sources'
-  | 'weekly-summary';
+  | 'weekly-summary'
+  | 'notifications-inbox'
+  | 'advisory-composer';
 type RestrictedScreenType = Exclude<ScreenType, 'tabs' | CreateScreenType>;
 
 const TAB_ORDER: TabType[] = ['home', 'map', 'reports', 'campaigns', 'profile'];
@@ -103,6 +107,8 @@ const SCREEN_PERMISSIONS: Record<RestrictedScreenType, Profile['role'][]> = {
   'outbreak-console': ['super_admin', 'health_admin', 'district_officer'],
   'water-sources': ALL_ROLES,
   'weekly-summary': ['super_admin', 'health_admin', 'district_officer', 'clinic'],
+  'notifications-inbox': ALL_ROLES,
+  'advisory-composer': ['super_admin', 'health_admin', 'district_officer'],
 };
 
 const CREATE_ACTIONS: Array<{
@@ -140,6 +146,8 @@ const isScreenType = (value: string): value is ScreenType =>
     'outbreak-console',
     'water-sources',
     'weekly-summary',
+    'notifications-inbox',
+    'advisory-composer',
   ].includes(value);
 
 const canCreateOnRole = (role: Profile['role'], screen: CreateScreenType): boolean =>
@@ -490,6 +498,20 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       </SafeAreaView>
     );
   }
+  if (currentScreen === 'notifications-inbox') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <NotificationsInboxScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'advisory-composer') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <AdvisoryComposerScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
 
   // ── Tab definitions ───────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: keyof typeof Ionicons.glyphMap; activeIcon: keyof typeof Ionicons.glyphMap }[] = [
@@ -600,6 +622,15 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <SyncPebble />
+        </Pressable>
+        <Pressable
+          onPress={() => navigateToForm('notifications-inbox')}
+          accessibilityRole="button"
+          accessibilityLabel="Open notifications inbox"
+          hitSlop={{ top: 12, bottom: 12, left: 8, right: 12 }}
+          style={{ marginLeft: spacing.sm }}
+        >
+          <Ionicons name="notifications-outline" size={22} color={headerText} />
         </Pressable>
       </View>
       {showShellRibbon && (

@@ -1,6 +1,7 @@
 // =====================================================
 // USER MANAGEMENT SERVICE
 // =====================================================
+import { Platform } from 'react-native';
 import { supabase } from '../supabase';
 import { Profile, ApiResponse } from '../../types';
 import { sanitizeSearchTerm } from './searchSanitize';
@@ -272,7 +273,12 @@ export const usersService = {
     }
   },
 
-  // Register Expo push token — call after login on physical device
+  // Register Expo push token — call after login on physical device.
+  // Transition period: writes BOTH the legacy profiles.expo_push_token column
+  // (one token per user — the current server-side send path) AND the new
+  // multi-device user_push_tokens table (token is the PK, so re-registering a
+  // token under a new account MOVES it via upsert on token). Each write fails
+  // soft on its own so the old path keeps working if the new table is missing.
   async registerExpoPushToken(token: string): Promise<void> {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -282,6 +288,18 @@ export const usersService = {
         .from('profiles')
         .update({ expo_push_token: token })
         .eq('id', user.id);
+
+      // claim_push_token is a SECURITY DEFINER RPC: unlike a direct upsert
+      // (blocked by owner-only RLS when the token row belongs to another
+      // user), it can MOVE a shared device's token to the current account.
+      const { error: tokenTableError } = await supabase.rpc('claim_push_token', {
+        p_token: token,
+        p_platform: Platform.OS,
+      });
+      if (tokenTableError) {
+        // Non-critical — the legacy profiles column above remains the fallback
+        console.warn('[Push] claim_push_token failed:', tokenTableError.message);
+      }
     } catch (err) {
       // Non-critical — never block the login flow
       console.warn('[Push] Failed to register token:', err);
@@ -303,6 +321,16 @@ export async function clearExpoPushToken(): Promise<void> {
       .from('profiles')
       .update({ expo_push_token: null })
       .eq('id', userId);
+
+    // Transition period: also drop this user's rows from the new multi-device
+    // table. Fail-soft — RLS lets a user delete only their own rows anyway.
+    const { error: tokenTableError } = await supabase
+      .from('user_push_tokens')
+      .delete()
+      .eq('user_id', userId);
+    if (tokenTableError) {
+      console.warn('[Push] user_push_tokens delete failed:', tokenTableError.message);
+    }
   } catch (err) {
     // Non-critical — never block the sign-out flow
     console.warn('[Push] Failed to clear token:', err);

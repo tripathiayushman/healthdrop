@@ -338,6 +338,72 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   const resolvedDiseaseName =
     disease === 'Other…' ? customDisease.trim() : disease;
 
+  // ── Cluster / duplicate awareness (ROADMAP item 4) ─────────────────────────
+  // Every worker is an early-warning sensor: once disease + district are both
+  // known (district resolves on Step 2 via GPS or typing), quietly ask the
+  // server "any similar reports here this week?". The answer INFORMS — it
+  // never blocks the save, and a failed lookup stays silent. One query per
+  // disease+district combination (cached), debounced so district keystrokes
+  // don't fire requests.
+  const [cluster, setCluster] = useState<{
+    key: string;
+    count: number;
+    totalCases: number;
+    district: string;
+  } | null>(null);
+  const [clusterDismissedKey, setClusterDismissedKey] = useState<string | null>(null);
+  const clusterCacheRef = useRef<
+    Map<string, { count: number; totalCases: number } | 'pending'>
+  >(new Map());
+
+  const clusterDistrict = location.district.trim();
+  useEffect(() => {
+    if (step !== 2) return;
+    const diseaseName = resolvedDiseaseName.trim();
+    if (!diseaseName || !clusterDistrict) return;
+
+    const key = `${clusterDistrict.toLowerCase()}|${diseaseName.toLowerCase()}`;
+    let cancelled = false;
+
+    const apply = (result: { count: number; totalCases: number }) => {
+      setCluster(
+        result.count > 0
+          ? { key, count: result.count, totalCases: result.totalCases, district: clusterDistrict }
+          : null
+      );
+    };
+
+    // Debounce — the district field is hand-editable on Step 2.
+    const timer = setTimeout(async () => {
+      const cached = clusterCacheRef.current.get(key);
+      if (cached === 'pending') return;
+      if (cached) {
+        apply(cached);
+        return;
+      }
+      clusterCacheRef.current.set(key, 'pending');
+      const res = await diseaseReportsService.nearbyRecentReports({
+        diseaseName,
+        district: clusterDistrict,
+      });
+      const result =
+        res.error || !res.data
+          ? // Silent on failure — cache the miss so we never hammer the network.
+            { count: 0, totalCases: 0 }
+          : { count: res.data.count, totalCases: res.data.totalCases };
+      clusterCacheRef.current.set(key, result);
+      if (!cancelled) apply(result);
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [step, resolvedDiseaseName, clusterDistrict]);
+
+  const clusterVisible =
+    step === 2 && !!cluster && cluster.count > 0 && cluster.key !== clusterDismissedKey;
+
   // Display-only glossary lookup — chips and the payload keep the English
   // identifiers; Hindi renders dual-script ("दस्त (Diarrhea)") per Bharosa.
   const diseaseDisplay = (name: string): string =>
@@ -443,6 +509,8 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     setRefillInfo(null);
     setRefillError(null);
     setSavedResult(null);
+    setCluster(null);
+    setClusterDismissedKey(null);
     setStep(1);
     setErrors({});
     setDisease('');
@@ -893,6 +961,34 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         )}
       </ScrollView>
 
+      {/* Cluster / duplicate awareness — informs, never blocks. Pinned above
+          the submit area so it's seen without scrolling; dismissible. */}
+      {clusterVisible && cluster && (
+        <View
+          style={[styles.clusterCard, { backgroundColor: colors.infoBg }]}
+          accessibilityLiveRegion="polite"
+        >
+          <Ionicons name="pulse" size={20} color={colors.info} style={styles.clusterIcon} />
+          <Text style={[styles.clusterText, { color: colors.info }]}>
+            {cluster.count === 1
+              ? t('diseaseForm.clusterOne', { district: cluster.district })
+              : t('diseaseForm.clusterMany', {
+                  n: cluster.count,
+                  cases: cluster.totalCases,
+                  district: cluster.district,
+                })}
+          </Text>
+          <Pressable
+            onPress={() => setClusterDismissedKey(cluster.key)}
+            accessibilityRole="button"
+            accessibilityLabel={t('diseaseForm.clusterDismiss')}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="close" size={18} color={colors.info} />
+          </Pressable>
+        </View>
+      )}
+
       {/* One-Hand Action Bar */}
       <View style={[styles.actionZone, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
         {step === 2 && (
@@ -1014,6 +1110,15 @@ const styles = StyleSheet.create({
     fontSize: 24, lineHeight: 28, fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
+
+  /* Cluster / duplicate awareness card — info tokens, never red */
+  clusterCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    borderRadius: radii.md, padding: spacing.md,
+    marginHorizontal: spacing.lg, marginBottom: spacing.sm,
+  },
+  clusterIcon: { marginTop: 1 },
+  clusterText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '600' },
 
   /* One-Hand Action Bar */
   actionZone: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1 },

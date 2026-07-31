@@ -1,310 +1,149 @@
-<div align="center">
+# HealthDrop
 
-# 🏥 HealthDrop Surveillance System
+**Rural disease-outbreak and water-quality surveillance, built on trust.**
 
-**A cross-platform mobile app for real-time public health threat detection, reporting, and coordinated response.**
+HealthDrop is a cross-platform (Android-first) app that connects the people who see public-health problems first — ASHA workers, volunteers, clinics — with the district officers and health admins who can act on them. It is built for low-connectivity rural India: reports work offline, alerts read like posters, and every signal passes through a human before it reaches the public.
 
-[![React Native](https://img.shields.io/badge/React_Native-0.81.5-61DAFB?logo=react)](https://reactnative.dev/)
-[![Expo](https://img.shields.io/badge/Expo-SDK_54-000020?logo=expo)](https://expo.dev/)
-[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL_+_RLS-3ECF8E?logo=supabase)](https://supabase.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript)](https://typescriptlang.org/)
+React Native (Expo SDK 54) + Supabase (Postgres, RLS, Edge Functions). TypeScript throughout.
 
-</div>
+> **Status: pre-launch.** The app is feature-complete for its pilot scope but not yet in the field. Launch blockers — including owner-only actions like secret rotation, database backups, and a hosted privacy policy — are tracked item-by-item in [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
 
----
+## The trust loop
 
-## 📱 Overview
+Surveillance systems fail when field workers stop believing their reports matter. HealthDrop closes the loop at every step:
 
-**HealthDrop** bridges the gap between community-level field workers, healthcare facilities, and public health administrators. It enables rapid detection and coordinated response to disease outbreaks, contaminated water sources, and other public health threats — especially in rural and semi-urban areas.
+1. **Report** — a worker files a disease or water-quality report, online or offline (queued in the Sync Outbox).
+2. **Human approval** — clinic / district officer / admin verifies it in the Approval Queue; rejections carry a reason and can be refiled from My Submissions.
+3. **Signal** — approved disease reports feed a DB-trigger outbreak detector; officers review signals in the Outbreak Signal screen and manage confirmed ones in the Outbreak Console (with audit-stamped status notes).
+4. **Alert** — approved health alerts push to affected districts and render as bilingual posters; field staff acknowledge ("I'll inform my area"), and the ack count shows officers their real-time reach.
+5. **Promise** — a flagged water source is a promise: flag → fix → retest → reopen, tracked as a visible stepper in Water Sources.
+6. **Digest** — officers share a weekly district summary to WhatsApp (or PDF) so the work is seen.
 
-### Core Features
+## Features by role
 
-| Feature | Description |
-|---|---|
-| 🦠 **Disease Reporting** | Document outbreaks with severity, location, and patient details |
-| 💧 **Water Quality Monitoring** | Report contaminated water sources with chemical parameters |
-| 🚨 **Health Alerts** | Urgency-graded alerts propagate to affected districts within a 10 km radius |
-| 📋 **Campaign Management** | Create, manage, and enroll in health campaigns |
-| ➕ **Unified Create Menu** | Role-aware create button shown on Reports and Campaigns tabs |
-| ✅ **Approval Workflow** | Verify → Approve → Reject pipeline with rejection reasons |
-| 🤖 **AI Health Insights** | Location-aware insights powered by direct OpenRouter Chat Completions |
-| 🔔 **Push Notifications** | Real-time Expo push notifications sent to users in the affected 10 km alert zone |
-| 📡 **Offline Sync** | Disease, water, campaign, and alert submissions queued locally and synced on reconnect |
+Six roles, routed to role-specific dashboards (`components/dashboards/DashboardRouter.tsx`); screen access is enforced in `components/MainApp.tsx` and by Postgres RLS.
 
----
+**Every role gets:**
 
-## 🛠️ Tech Stack
+- Role dashboard with customizable widgets, plus Map, Reports, Campaigns, and Profile tabs
+- All Alerts inbox with poster view and alert acknowledgements
+- Water Sources registry with the promise-loop stepper
+- District Health Score, My Submissions, and the Sync Outbox (offline queue inspector)
+- AI chatbot and AI insights panel (optional — requires OpenRouter config)
+- Dark mode, English/Hindi language toggle, and password recovery via email OTP
+
+**On top of that:**
+
+| Role | Adds |
+| --- | --- |
+| **Volunteer** | View-and-acknowledge role; no record creation |
+| **ASHA worker** | Create disease reports, water-quality reports, and campaigns (offline-first); campaign intelligence |
+| **Clinic** | Create disease/water reports; Approval Queue (verify/approve/reject); escalation monitoring; weekly summary; admin management |
+| **District officer** | All report/campaign/alert creation; Approval Queue; Outbreak Signal review and Outbreak Console; escalation monitoring; weekly WhatsApp digest; campaign intelligence |
+| **Health admin** | Everything above plus user management and alert approvals |
+| **Super admin** | Every screen, including user management and pending-alert approvals |
+
+## Tech stack
 
 | Layer | Technology |
-|---|---|
-| Mobile | React Native 0.81.5 + Expo SDK 54 |
-| Web | react-native-web (Android / iOS / Web) |
-| Language | TypeScript 5.9 |
-| Backend | Supabase (PostgreSQL + Auth + Row-Level Security) |
-| AI | Direct OpenRouter Chat Completions API (`EXPO_PUBLIC_OPENROUTER_MODEL`) |
-| Location | expo-location + district centroid fallback + 10 km radius matching |
-| Gradients | expo-linear-gradient |
-| Icons | @expo/vector-icons (Ionicons, MaterialCommunityIcons) |
-| Dates | date-fns |
+| --- | --- |
+| App | Expo SDK 54 · React Native 0.81 · React 19 · TypeScript 5.9 |
+| Design system | "Bharosa" tokens via `lib/ThemeContext.tsx` · NativeWind 4 (Tailwind 3.4) · react-native-reusables-style primitives in `components/ui/` |
+| Backend | Supabase — Postgres + RLS, Auth, Edge Functions (`openrouter-proxy`, `push-notifications`), pg_net trigger-driven push |
+| Offline | AsyncStorage sync queue + NetInfo (`src/services/offlineSync/`) |
+| Push | expo-notifications + Expo push service; fan-out happens server-side from DB triggers |
+| AI (optional) | OpenRouter chat completions, proxy-first through the `openrouter-proxy` edge function |
+| i18n | i18next / react-i18next — English + Hindi (phase 1) |
+| Maps | Leaflet 1.9 inside react-native-webview |
+| Charts / PDF | react-native-chart-kit + react-native-svg · expo-print + expo-sharing |
+| CI/CD | GitHub Actions → EAS Build → GitHub Releases |
 
----
+## Getting started
 
-## 👥 User Roles
-
-| Role | Description |
-|---|---|
-| 🔴 **Super Admin** | Full system control — manage users, approvals, all data globally |
-| 🟠 **Health Admin** | Operational admin — approve reports, manage campaigns, send alerts |
-| 🟣 **District Officer** | District-scoped governance — reports, campaigns, alerts within district |
-| 🟡 **Clinic** | Medical verification — submit + verify/approve disease & water reports |
-| 🔵 **ASHA Worker** | Field worker — submit disease/water reports, view district content |
-| 🟢 **Volunteer** | Community participant — enroll in campaigns, view approved alerts |
-
----
-
-## 📐 Architecture
-
-```
-┌──────────────────────────────────────┐
-│           React Native App            │
-│                                       │
-│  ┌─────────────┐  ┌────────────────┐  │
-│  │  Tab Bar    │  │  Full-Screen   │  │
-│  │  Home       │  │  Overlays      │  │
-│  │  Reports    │  │  (Forms, Queue,│  │
-│  │  Campaigns  │  │   User Mgmt,  │  │
-│  │  Profile    │  │   All Alerts) │  │
-│  └─────────────┘  └────────────────┘  │
-│                                       │
-│  DashboardRouter → role-specific UI   │
-│  AIChatbot (floating FAB overlay)     │
-└────────────────┬──────────────────────┘
-                 │ Supabase JS Client
-┌────────────────▼──────────────────────┐
-│              Supabase                  │
-│  PostgreSQL + RLS + Auth + Realtime   │
-│  Edge Functions (Push Notifications)  │
-└───────────────────────────────────────┘
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Node.js 18+
-- npm or yarn
-- Expo CLI (`npm install -g expo-cli`)
-- A [Supabase](https://supabase.com) project
-
-### 1. Clone
-```bash
-git clone https://github.com/tripathiayushman/healthdrop.git
-cd healthdrop
-```
-
-### 2. Install Dependencies
 ```bash
 npm install
+cp .env.example .env    # then fill in your values
+npx expo start
 ```
 
-### 3. Configure Environment
-Create a `.env` file in the project root:
-```env
-EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-EXPO_PUBLIC_OPENROUTER_API_KEY=your-openrouter-api-key
-EXPO_PUBLIC_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
-EXPO_PUBLIC_OFFLINE_SYNC_ENABLED=true
+`.env` (see [.env.example](.env.example) for the commented version):
+
+- **Required:** `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY` (the `sb_publishable_...` key; the legacy `EXPO_PUBLIC_SUPABASE_ANON_KEY` name still works as a fallback)
+- **Optional (AI):** `EXPO_PUBLIC_OPENROUTER_API_KEY`, `EXPO_PUBLIC_OPENROUTER_MODEL` — only used as a direct-API fallback when the `openrouter-proxy` edge function isn't configured; AI panels degrade gracefully without them
+- **Optional (flag):** `EXPO_PUBLIC_OFFLINE_SYNC_ENABLED` (default `true`)
+
+Run on a device with Expo Go or a development build. Note: remote push tokens do not register in Expo Go on this SDK — use an APK build to test push.
+
+## Builds & releases
+
+CI lives in [.github/workflows/](.github/workflows/):
+
+- **`build-on-push.yml`** — every push to `main` (except changes only to Markdown, `database_structure/`, or `mesc/`) builds an Android APK on EAS (`preview` profile) and publishes a GitHub Release tagged `v<version>-build.<n>` with the APK attached. Include `[skip build]` in the commit message to skip. Superseded queued builds are cancelled.
+- **`versionCode` = git commit count** — strictly increasing across all builds, so Android always accepts the newest APK as an update.
+- **`prepare-release.yml`** (manual dispatch) bumps `package.json`/`app.json` and pushes a `v*` tag; **`build-android-release.yml`** builds and releases from that tag.
+
+Manual build: `eas build --platform android --profile preview` (`preview` = APK, `production` = app-bundle; see `eas.json`).
+
+CI needs the `EXPO_TOKEN` repo secret, and the app's `EXPO_PUBLIC_*` variables must be set in the EAS environment — builds do not read `.env`. Operational details (rollback, monitoring, push pipeline) are in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+## Project structure
+
+```text
+App.tsx                  # auth/session shell, offline-profile cache, push registration
+index.ts                 # Expo entry
+components/
+  AuthScreen.tsx         # sign in / sign up / OTP password reset
+  MainApp.tsx            # tab shell, role-gated screen routing
+  dashboards/            # one dashboard per role + DashboardRouter
+  screens/               # 19 sub-screens (alerts, approvals, outbreaks, water, digest, ...)
+  forms/                 # disease / water / campaign / alert forms
+  shared/                # buttons, inputs, map, badges, tables
+  ai/                    # AIChatbot, AIInsightsPanel
+  charts/                # TrendChart
+  ui/                    # react-native-reusables-style primitives
+lib/
+  supabase.ts            # client (env-driven)
+  ThemeContext.tsx       # Bharosa design tokens (source of truth)
+  i18n/                  # i18next setup + en/hi locales
+  services/              # data services (reports, alerts, outbreaks, digest, ...)
+src/
+  services/offlineSync/  # queue, sync service
+  services/pushSetup.ts  # Android channels + foreground handler
+  hooks/ · components/   # useLocation, LocationField
+supabase/functions/      # openrouter-proxy, push-notifications edge functions
+database_structure/      # SQL schema, RLS, triggers, outbreak detection, push pipeline
+scripts/                 # sync-version.cjs (CI version stamping)
+types/ · utils/ · assets/
+.github/workflows/       # CI (see Builds & releases)
+docs/                    # OPERATIONS.md runbook
 ```
 
-If you are upgrading from older builds, remove `EXPO_PUBLIC_GEMINI_API_KEY` and keep only OpenRouter variables.
+## Design system — "Bharosa"
 
-Create your OpenRouter API key at [openrouter.ai](https://openrouter.ai/keys).
+Calm paper and ink, one action teal, flat and printable. Color is spent like money: severity and water-quality ladders, sync truths, and a reserved AI violet appear only when they mean something.
 
-> **Supabase:** Create a project at [supabase.com](https://supabase.com)
-> **OpenRouter:** Get a key at [openrouter.ai](https://openrouter.ai/keys)
+- **Tokens live in `lib/ThemeContext.tsx`** — semantic colors (light + dark), a strict 4pt `spacing` scale, and `radii`. Theme keys are never renamed.
+- NativeWind (`global.css`, `tailwind.config.js`) and the `components/ui/` primitives are available alongside token-driven styles.
+- [DESIGN_SPEC.md](DESIGN_SPEC.md) is the **previous** design iteration ("Prakash") and is kept for its still-valid craft rules; Bharosa superseded it and its full canvas is maintained outside the repo (Claude Design). When the two disagree, `ThemeContext.tsx` and shipped screens win.
 
-### 4. Run
-```bash
-npx expo start --clear
-```
-- Press `a` for Android emulator
-- Press `i` for iOS simulator
-- Press `w` for web browser
-- Scan QR with **Expo Go** app on your phone
+## Languages
 
----
+English is the default UI language. **Hindi (phase 1)** covers the worker-facing chrome and is selectable in Profile → Language. The current Hindi strings are machine-drafted and awaiting native-speaker review (an open item in [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)) — treat them as beta.
 
-## 📂 Project Structure
+## Contributing
 
-```
-healthdrop/
-├── App.tsx                     ← Root component
-├── index.ts                    ← Entry point
-├── .env.example                ← Environment template
-│
-├── types/                      ← TypeScript types
-├── lib/
-│   ├── supabase.ts             ← Supabase client
-│   ├── ThemeContext.tsx        ← Dark/Light theme
-│   └── services/              ← API service layer
-│       ├── diseaseReports.ts
-│       ├── waterQuality.ts
-│       ├── campaigns.ts
-│       ├── users.ts
-│       └── notifications.ts
-│
-└── components/
-    ├── MainApp.tsx             ← Navigation container
-    ├── AuthScreen.tsx          ← Auth (sign in / sign up)
-   ├── ai/                     ← OpenRouter-backed AI panel + chatbot
-    ├── dashboards/             ← 6 role-specific dashboards
-    ├── forms/                  ← Report / campaign / alert forms
-    └── screens/                ← Tab screens + overlays
-```
+- **Type gate:** `npx tsc --noEmit` must pass before a commit.
+- **Token discipline:** no hex literals in component files — every color comes from `useTheme()`; severity/water colors resolve through their helper functions; spacing and radii from the exported scales.
+- **Four-state data regions:** every data region renders loading (skeleton twin), error, empty (the "quiet zero"), and content. No blank zeros, no silent `catch {}`, no conflating empty with error.
+- **Schema changes:** commit the SQL to `database_structure/` and run the Supabase advisors afterwards (see [docs/OPERATIONS.md](docs/OPERATIONS.md)).
+- Doc-only commits are already excluded from CI builds; use `[skip build]` for anything else that shouldn't ship an APK.
 
----
+## Further reading
 
-## 🔐 Security
+- [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) — the verified launch plan (59 items) and outstanding owner actions
+- [ROADMAP_FEATURES.md](ROADMAP_FEATURES.md) — ranked feature backlog
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — operating runbook: monitoring, incident playbooks, push pipeline, rollback, secrets
 
-- **Row-Level Security (RLS)** enforced at database level for all tables
-- SECURITY DEFINER functions prevent RLS recursion (`get_my_role()`, `get_my_district()`)
-- Automatic geographic scoping for district roles with 10 km alert-radius propagation
-- `.env` file never committed to source control
-- Auth tokens stored in `expo-secure-store` (encrypted on device)
+## License
 
----
-
-## 🔄 Approval Workflow
-
-```
-Disease/Water Report Submitted
-        │
-        ▼
-  [pending_approval]
-        │
-   ┌────┴────┐
-   ▼         ▼
-[approved] [rejected] → rejection_reason saved
-   │
-   ▼
-[verified] ← Verify button (clinic / admin)
-```
-
-Campaigns and alerts also go through the same `pending_approval → approved/rejected` pipeline.
-
----
-
-## 🤖 AI Integration
-
-The app uses **direct OpenRouter Chat Completions** for insights and chat:
-
-- **AIInsightsPanel** — Embedded in every dashboard; uses district/state/global context
-- **AIChatbot** — Floating button → slide-up chat for health Q&A
-- Uses `EXPO_PUBLIC_OPENROUTER_API_KEY` and `EXPO_PUBLIC_OPENROUTER_MODEL` directly
-- Radius-filtered alert/report context is used for district-scoped users
-
-OpenRouter free-tier usage can be constrained by request/throughput limits and availability windows; check OpenRouter docs for current limits: https://openrouter.ai/docs
-
----
-
-## 🧾 Recent Major Updates (2026-03-30)
-
-- Implemented 10 km alert propagation for district-scoped roles (district officer, clinic, ASHA worker, volunteer).
-- Unified alert visibility across dashboards, All Alerts screen, map alert layer, and AI insights context.
-- Updated push notification targeting so recipients match affected users in the same 10 km zone.
-- Moved AI flow to direct OpenRouter calls from app service layer (`lib/services/gemini.ts`) with environment-driven model selection.
-- Improved map location fallback with district aliases and centroid-based geographic matching.
-- Reduced noisy runtime warnings (Expo push setup and Android navigation behavior).
-
-## 🧾 Final Fixes (2026-04-08)
-
-- Replaced per-screen duplicate add FABs with one centralized global create menu in `MainApp`.
-- Added strict role-gated create routing for disease, water, campaign, and alert forms.
-- Refactored disease/water forms to use offline-first service submission paths.
-- Added offline queueing for campaign and health-alert forms to match production offline expectations.
-- Hardened map fullscreen expansion to avoid dual map instances during expand/collapse transitions.
-
-## 🧾 UI and Runtime Updates (2026-04-09)
-
-- Shifted the universal create FAB to the right side and limited visibility to Reports and Campaigns tabs.
-- Applied AI-style glassmorphic styling to the universal create FAB for visual consistency.
-- Normalized dashboard quick-action button sizing to enforce even card heights across roles.
-- Added AI insights local cache fallback so previously fetched insights remain visible when network drops.
-- Added runtime toggle `EXPO_PUBLIC_OFFLINE_SYNC_ENABLED`:
-   - `true` enables offline sync service startup (recommended for production)
-   - `false` disables offline sync startup for online-only QA/testing
-
-### Supabase Changes (Final Fixes & Alignment)
-
-- Synced offline queue table mapping to current schema names:
-   - `feedback` sync target corrected to `user_feedback`
-   - campaign queue target `health_campaigns`
-   - alert queue target `health_alerts`
-- Preserved idempotent upsert flow for disease/water (`client_idempotency_key`).
-- Added direct-insert reconnect sync for queued campaign/alert payloads for schema-safe compatibility.
-
-## 🧾 Previous Major Updates (2026-03-27)
-
-- Consolidated and applied a large CodeRabbit review batch across dashboards, reports, campaigns, queue flows, AI chat, and shared components.
-- Added stronger runtime safety and UX handling: loading/error states, guarded async updates, safer date rendering, cleaner logs.
-- Improved accessibility for icon-only actions and modal controls.
-- Improved type safety in map and approval queue flows with stricter unions/interfaces.
-- Added CI/CD release automation:
-   - `prepare-release.yml` (manual release prep + tag)
-   - `build-android-release.yml` (tag-triggered EAS APK + GitHub release)
-   - `eas.json` and `scripts/sync-version.cjs`
-
-## 🌍 External Setup Needed (Outside VS Code)
-
-Only required if you have not already configured these:
-
-1. OpenRouter account
-- Create/manage your API key at `https://openrouter.ai/keys`.
-
-2. GitHub repository secrets
-- Add `EXPO_TOKEN` for Android release workflow.
-
-3. Expo/EAS project setup
-- Ensure EAS project linkage and Android credentials are configured for release builds.
-
-4. Database patching (if pending)
-- Execute `database_structure/FIX_CLINIC_RLS_POLICIES.sql`.
-- Execute `database_structure/FIX_VERIFICATION_AND_VISIBILITY.sql`.
-
----
-
-## 📱 Screens
-
-| Screen | Access | Description |
-|---|---|---|
-| Dashboard | All roles | Role-specific statistics, radius-filtered alerts, quick actions |
-| Reports | All roles | Disease + water reports with role-aware filters |
-| Campaigns | All roles | Campaign list; create/manage (super_admin+health_admin+district_officer+asha_worker); enroll (volunteer+asha_worker) |
-| All Alerts | All roles | Full alert list with search + urgency filter + 10 km radius visibility for district roles |
-| Approval Queue | Super Admin + Health Admin + District Officer + Clinic | Verify/Approve/Reject with role-scoped tabs and permissions |
-| User Management | Super Admin + Health Admin | User role management and account status |
-| Profile | All roles | Settings, theme toggle, logout |
-
----
-
-## 🌐 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -m 'Add my feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<div align="center">
-  Built with ❤️ using React Native, Expo, and Supabase
-</div>
+[MIT](LICENSE)

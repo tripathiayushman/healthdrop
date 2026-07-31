@@ -299,6 +299,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
             <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Review campaign performance and AI recommendations" onPress={() => onNavigate('campaign-intelligence')} />
             <ToolCard icon="git-network-outline" iconColor={colors.danger} title="Escalation Monitoring" subtitle="Track district approvals nearing SLA breach" onPress={() => onNavigate('escalation-monitoring')} />
             <ToolCard icon="share-social-outline" iconColor={colors.primary} title="Weekly Summary" subtitle="IDSP-style verified digest — share on WhatsApp" onPress={() => onNavigate('weekly-summary')} />
+            <ToolCard icon="radio-outline" iconColor={colors.primary} title="Broadcast to staff" subtitle="In-app advisory to field staff in your district — never shown to public" onPress={() => onNavigate('advisory-composer')} />
             <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Control visibility of dashboard sections" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />

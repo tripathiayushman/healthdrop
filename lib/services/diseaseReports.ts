@@ -298,6 +298,68 @@ export const diseaseReportsService = {
     }
   },
 
+  // Nearby recent reports — cluster/duplicate awareness at report entry
+  // (ROADMAP item 4). One cheap query, aggregation on the client. The result
+  // INFORMS the reporter before she saves — it never gates submission.
+  // Counts approved OR pending reports (rejected ones are noise, not signal).
+  async nearbyRecentReports(params: {
+    diseaseName: string;
+    district: string;
+    days?: number;
+  }): Promise<ApiResponse<{
+    count: number;
+    totalCases: number;
+    latestAt: string | null;
+    sameReporterCount: number;
+  }>> {
+    try {
+      const { diseaseName, district, days = 7 } = params;
+      const disease = sanitizeSearchTerm(diseaseName);
+      const districtTerm = district.trim();
+      if (!disease || !districtTerm) {
+        return {
+          data: { count: 0, totalCases: 0, latestAt: null, sameReporterCount: 0 },
+          error: null,
+        };
+      }
+
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+      // Reporter id from the locally cached session — no network round-trip.
+      const { data: { session } } = await supabase.auth.getSession();
+      const myId = session?.user?.id ?? null;
+
+      // ilike without wildcards = case-insensitive match on the disease name.
+      const { data, error } = await supabase
+        .from('disease_reports')
+        .select('cases_count, created_at, reporter_id')
+        .ilike('disease_name', disease)
+        .eq('district', districtTerm)
+        .gte('created_at', since)
+        .in('approval_status', ['approved', 'pending_approval'])
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+
+      const rows = data ?? [];
+      return {
+        data: {
+          count: rows.length,
+          totalCases: rows.reduce((sum, r) => sum + (Number(r.cases_count) || 0), 0),
+          latestAt: rows.length > 0 ? String(rows[0].created_at) : null,
+          sameReporterCount: myId
+            ? rows.filter((r) => r.reporter_id === myId).length
+            : 0,
+        },
+        error: null,
+      };
+    } catch (error: any) {
+      // Awareness feature only — callers are expected to stay silent on failure.
+      return { data: null, error: error?.message ?? String(error) };
+    }
+  },
+
   // Get recent reports
   async getRecent(limit: number = 5): Promise<ApiResponse<DiseaseReport[]>> {
     try {

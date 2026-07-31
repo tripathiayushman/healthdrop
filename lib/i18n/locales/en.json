@@ -71,6 +71,9 @@
     "sickWord": "sick",
     "deathOne": "death",
     "deathMany": "deaths",
+    "clusterOne": "1 similar report in {{district}} this week — yours may be a duplicate. If it's a new case, submit anyway.",
+    "clusterMany": "{{n}} similar reports ({{cases}} cases) in {{district}} this week — a cluster may be forming. Your report strengthens the signal.",
+    "clusterDismiss": "Dismiss nearby reports notice",
     "diseases": {
       "Diarrhea": "Diarrhea",
       "Cholera": "Cholera",

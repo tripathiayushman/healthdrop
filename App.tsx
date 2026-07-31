@@ -296,17 +296,15 @@ function AppContent() {
             });
         }
 
-        // Block deactivated / deleted users
+        // Block deactivated / deleted users. No Alert here — AuthScreen
+        // detects the deactivated profile at sign-in and shows its themed
+        // "Account Deactivated" message; this path just signs out.
         if (!data.is_active) {
           console.warn('[Auth] Deactivated user tried to login:', userId);
           clearCachedProfile(userId);
           await supabase.auth.signOut();
           setSession(null);
           setProfile(null);
-          Alert.alert(
-            'Account Deactivated',
-            'Your account has been deactivated by an administrator. Please contact support if you believe this is an error.'
-          );
           return;
         }
 
