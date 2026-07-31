@@ -60,15 +60,30 @@ jobs:
         run: |
           set -euo pipefail
           STAMP=$(date -u +%Y%m%d-%H%M)
-          # Custom format (-Fc) is compressed and restores selectively with pg_restore.
-          pg_dump "$DB_URL" \
-            --no-owner --no-privileges \
-            --schema=public --schema=auth \
-            -Fc -f "healthdrop-$STAMP.dump"
-          gpg --batch --yes --symmetric --cipher-algo AES256 \
-            --passphrase "$PASSPHRASE" \
-            -o "healthdrop-$STAMP.dump.gpg" "healthdrop-$STAMP.dump"
-          rm -f "healthdrop-$STAMP.dump"
+
+          # public = the surveillance data; this one must succeed.
+          # Custom format (-Fc) is compressed and restores selectively.
+          pg_dump "$DB_URL" --no-owner --no-privileges \
+            --schema=public -Fc -f "healthdrop-public-$STAMP.dump"
+
+          # auth = accounts. Best-effort: the pooler role does not always hold
+          # rights on every object supabase_auth_admin owns, and losing the
+          # surveillance backup over that would be the worse outcome. Accounts
+          # can be re-created; six months of field reports cannot.
+          if pg_dump "$DB_URL" --no-owner --no-privileges \
+               --schema=auth -Fc -f "healthdrop-auth-$STAMP.dump" 2> auth-dump.err; then
+            echo "auth schema dumped"
+          else
+            echo "::warning::auth schema dump failed (permissions) — public data still backed up."
+            sed 's/^/  /' auth-dump.err | head -5
+            rm -f "healthdrop-auth-$STAMP.dump"
+          fi
+
+          for f in healthdrop-*-"$STAMP".dump; do
+            gpg --batch --yes --symmetric --cipher-algo AES256 \
+              --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
+            rm -f "$f"
+          done
           ls -lh healthdrop-*.dump.gpg
           echo "STAMP=$STAMP" >> "$GITHUB_ENV"
 
