@@ -9,6 +9,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../../lib/supabase';
+import { log } from '../../../lib/logger';
 import { generateUUID } from './uuid';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -55,7 +56,15 @@ export interface SyncCounts {
 // ── Storage key ───────────────────────────────────────────────────────────────
 
 const QUEUE_KEY = '@healthdrop/sync_queue';
+/** Evidence copy of an unparseable queue blob — kept for later diagnosis. */
+const CORRUPT_QUEUE_KEY = 'healthdrop:sync_queue.corrupt';
 const DEFAULT_MAX_ATTEMPTS = 3;
+/**
+ * Soft cap on stored items. Enqueueing beyond it evicts the OLDEST
+ * synced/cancelled leftovers first; pending/syncing/failed items — the
+ * user's unsent field reports — are never evicted.
+ */
+const QUEUE_SOFT_CAP = 200;
 
 // ── SyncQueue class ───────────────────────────────────────────────────────────
 
@@ -64,6 +73,14 @@ type QueueChangeListener = () => void;
 export class SyncQueue {
     /** Listeners invoked whenever the queue mutates (enqueue / removal). */
     private changeListeners: QueueChangeListener[] = [];
+
+    /**
+     * True after a queue write failed even after the purge-and-retry pass
+     * (storage full/broken). Sticky until the next successful write.
+     * counts() folds this into `failed` so the Sync Pebble's failure state
+     * shows — the queue on disk no longer matches what the user was told.
+     */
+    private persistFailed = false;
 
     /**
      * Promise-chain mutex (F9): every storage read-modify-write runs strictly
@@ -94,21 +111,81 @@ export class SyncQueue {
             try {
                 listener();
             } catch (err) {
-                console.warn('[SyncQueue] change listener failed:', err);
+                log.warn('SyncQueue', 'change listener failed', err);
             }
         });
     }
 
-    /** Raw storage read — internal; callers outside the lock use getAll(). */
+    /**
+     * Raw storage read — internal; callers outside the lock use getAll().
+     * Corruption resilience: an unparseable (or non-array) blob is copied to
+     * CORRUPT_QUEUE_KEY as evidence, the queue is reset to [], and the app
+     * keeps running — never crash, never silently discard the raw bytes.
+     */
     private async readAll(): Promise<QueueItem[]> {
         const raw = await AsyncStorage.getItem(QUEUE_KEY);
         if (!raw) return [];
-        return JSON.parse(raw) as QueueItem[];
+        try {
+            const parsed = JSON.parse(raw) as unknown;
+            if (!Array.isArray(parsed)) {
+                throw new Error('queue blob is not an array');
+            }
+            return parsed as QueueItem[];
+        } catch (err) {
+            try {
+                await AsyncStorage.setItem(CORRUPT_QUEUE_KEY, raw);
+            } catch {
+                // Best-effort evidence copy — storage may itself be failing.
+            }
+            try {
+                await AsyncStorage.setItem(QUEUE_KEY, '[]');
+            } catch {
+                // Best-effort reset — the in-memory [] still lets this call go on.
+            }
+            log.error(
+                'SyncQueue',
+                `queue storage corrupted — reset to empty; raw blob copied to ${CORRUPT_QUEUE_KEY}`,
+                err
+            );
+            return [];
+        }
     }
 
-    /** Persist the entire queue */
-    private async saveAll(items: QueueItem[]): Promise<void> {
-        await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(items));
+    /**
+     * Persist the entire queue. Returns true when the write reached storage.
+     * Quota resilience: on write failure, purge synced/cancelled leftovers
+     * and retry once; if that also fails, record it (surfaced through
+     * counts() → the Sync Pebble) and return false — callers decide whether
+     * their contract requires throwing.
+     */
+    private async saveAll(items: QueueItem[]): Promise<boolean> {
+        try {
+            await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(items));
+            this.persistFailed = false;
+            return true;
+        } catch (firstErr) {
+            const pruned = items.filter(
+                (i) => i.status !== 'synced' && i.status !== 'cancelled'
+            );
+            try {
+                await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(pruned));
+                this.persistFailed = false;
+                log.warn(
+                    'SyncQueue',
+                    `queue write failed — succeeded on retry after purging ${items.length - pruned.length} synced/cancelled item(s)`,
+                    firstErr
+                );
+                return true;
+            } catch (retryErr) {
+                this.persistFailed = true;
+                log.error(
+                    'SyncQueue',
+                    'queue write failed even after purging synced/cancelled items — storage may be full',
+                    retryErr
+                );
+                return false;
+            }
+        }
     }
 
     /**
@@ -121,7 +198,7 @@ export class SyncQueue {
             const { data } = await supabase.auth.getSession();
             return data.session?.user?.id ?? null;
         } catch (err) {
-            console.warn('[SyncQueue] could not read session for owner scoping:', err);
+            log.warn('SyncQueue', 'could not read session for owner scoping', err);
             return null;
         }
     }
@@ -168,11 +245,43 @@ export class SyncQueue {
             ownerId,
         };
 
-        await this.withLock(async () => {
-            const items = await this.readAll();
-            await this.saveAll([...items, item as QueueItem]);
+        const persisted = await this.withLock(async () => {
+            let items = await this.readAll();
+
+            // Soft cap (~200 items): evict the OLDEST synced/cancelled
+            // leftovers first. Pending/syncing/failed items are the user's
+            // unsent field reports — they are NEVER evicted.
+            if (items.length >= QUEUE_SOFT_CAP) {
+                const evictIds = items
+                    .filter((i) => i.status === 'synced' || i.status === 'cancelled')
+                    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+                    .slice(0, items.length - QUEUE_SOFT_CAP + 1)
+                    .map((i) => i.localId);
+                if (evictIds.length > 0) {
+                    const evictSet = new Set(evictIds);
+                    items = items.filter((i) => !evictSet.has(i.localId));
+                    log.warn(
+                        'SyncQueue',
+                        `soft cap ${QUEUE_SOFT_CAP} reached — evicted ${evictIds.length} oldest synced/cancelled item(s)`
+                    );
+                } else {
+                    log.warn(
+                        'SyncQueue',
+                        `queue holds ${items.length} item(s) (soft cap ${QUEUE_SOFT_CAP}) and none are evictable — keeping every unsent report`
+                    );
+                }
+            }
+
+            return this.saveAll([...items, item as QueueItem]);
         });
         this.emitChange();
+        if (!persisted) {
+            // The report never reached storage — telling the caller "saved on
+            // phone" would be a lie. Callers already surface enqueue errors.
+            throw new Error(
+                'Could not save this report on the phone — storage looks full. Free some space and try again.'
+            );
+        }
         return localId;
     }
 
@@ -192,6 +301,10 @@ export class SyncQueue {
                 if (item.status === 'cancelled') return item; // tombstone is terminal
                 return { ...item, ...patch };
             });
+            // Persist failure is logged and surfaced via counts(); a sync pass
+            // must keep running, so status patches never throw. A lost 'synced'
+            // patch only means one extra upload attempt later — the
+            // client_idempotency_key dedupes it server-side.
             await this.saveAll(updated);
         });
     }
@@ -202,19 +315,28 @@ export class SyncQueue {
      * (which re-reads right before upload) skips it; removeSynced() purges it.
      */
     async cancelItem(localId: string): Promise<void> {
-        await this.withLock(async () => {
+        const persisted = await this.withLock(async () => {
             const items = await this.readAll();
             const updated = items.map((item) =>
                 item.localId === localId
                     ? { ...item, status: 'cancelled' as QueueItemStatus }
                     : item
             );
-            await this.saveAll(updated);
+            return this.saveAll(updated);
         });
         this.emitChange();
+        if (!persisted) {
+            // The tombstone never reached storage — the item may still upload.
+            // Throw so the Outbox shows its honest "couldn't remove" error.
+            throw new Error('Could not remove the saved report — storage write failed.');
+        }
     }
 
-    /** Remove synced items and cancelled tombstones (call after a sync pass). */
+    /**
+     * Remove synced items and cancelled tombstones (call after a sync pass).
+     * Housekeeping — a persist failure is logged + surfaced via counts()
+     * rather than thrown, so sync passes stay resilient.
+     */
     async removeSynced(): Promise<void> {
         await this.withLock(async () => {
             const items = await this.readAll();
@@ -255,13 +377,17 @@ export class SyncQueue {
      * WARNING: discards that user's not-yet-synced reports.
      */
     async clearForUser(userId: string): Promise<void> {
-        await this.withLock(async () => {
+        const persisted = await this.withLock(async () => {
             const items = await this.readAll();
-            await this.saveAll(
+            return this.saveAll(
                 items.filter((i) => i.ownerId != null && i.ownerId !== userId)
             );
         });
         this.emitChange();
+        if (!persisted) {
+            // Privacy-critical: the outgoing user's items are still on disk.
+            throw new Error('Could not clear the sync queue for the signed-out user.');
+        }
     }
 
     /**
@@ -300,6 +426,10 @@ export class SyncQueue {
                 failed++;
             }
         }
+        // A queue that cannot be written to storage needs the user's
+        // attention — fold it into `failed` so the Sync Pebble's failure
+        // state shows without changing the SyncCounts contract.
+        if (this.persistFailed) failed = Math.max(failed, 1);
         return { pending, failed };
     }
 

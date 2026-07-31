@@ -3,10 +3,15 @@
 // - Uses actual lat/lon from DB (NOT district name lookup)
 // - GPS session cache (persists until page reload / logout)
 // - Side-by-side layout via MapAndAlertsSection export
+// - Leaflet 1.9.4 VENDORED inline (leafletAssets.ts) — the map
+//   shell no longer depends on the unpkg CDN at runtime
 // - Leaflet perf: preferCanvas, optimised tile settings
 // - Token-driven marker colors + per-layer legend labels
 // - Severity markers carry a text count badge
-// - Honest offline notice (Leaflet CDN cannot work offline)
+// - Honest offline states: netinfo-offline panel, and a tile
+//   watchdog that falls back to the district list when tiles
+//   repeatedly fail ("Map tiles need internet — data below is
+//   from your last sync")
 // =====================================================
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -20,6 +25,7 @@ import { Profile } from '../../types';
 import { useTheme, Theme } from '../../lib/ThemeContext';
 import { AlertCard, EmptyState, getSeverityColor } from '../dashboards/DashboardShared';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import { LEAFLET_CSS, LEAFLET_JS } from './leafletAssets';
 
 // Import WebView for native map rendering
 let WebViewComponent: any = null;
@@ -455,8 +461,8 @@ function buildLeafletHtml(
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>${LEAFLET_CSS}</style>
+<script>${LEAFLET_JS}</script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:${mapTheme.pageBg};}
@@ -479,9 +485,10 @@ var map = L.map('map', {
   zoomControl: true
 }).setView(${initView});
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileBase}/{z}/{x}/{y}{r}.png', {
+var baseTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileBase}/{z}/{x}/{y}{r}.png', {
   maxZoom: 13,
   maxNativeZoom: 12,
+  detectRetina: false,
   subdomains: 'abcd',
   updateWhenIdle: true,
   updateWhenZooming: false,
@@ -489,10 +496,34 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileBase}/{z}/{x}/{y}{r}.png', 
 }).addTo(map);
 
 // City labels only (lightweight second layer)
-L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileLabels}/{z}/{x}/{y}{r}.png', {
-  maxZoom: 13, maxNativeZoom: 12, subdomains: 'abcd',
+var labelTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileLabels}/{z}/{x}/{y}{r}.png', {
+  maxZoom: 13, maxNativeZoom: 12, detectRetina: false, subdomains: 'abcd',
   updateWhenIdle: true, updateWhenZooming: false
 }).addTo(map);
+
+// Tile watchdog — Leaflet itself is inlined, so only TILES need the
+// network. After repeated failures (and failures clearly outnumbering
+// successes) tell the RN side so it can swap in the honest fallback.
+var tileErrors = 0, tileLoads = 0, tilesDownSent = false;
+function noteTileLoad() { tileLoads++; }
+function noteTileError() {
+  tileErrors++;
+  if (!tilesDownSent && tileErrors >= 6 && tileErrors >= tileLoads * 3) {
+    tilesDownSent = true;
+    var msg = 'HEALTHMAP_TILES_OFFLINE';
+    try {
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(msg);
+      } else if (window.parent && window.parent !== window) {
+        window.parent.postMessage(msg, '*');
+      }
+    } catch (e) {}
+  }
+}
+baseTiles.on('tileload', noteTileLoad);
+baseTiles.on('tileerror', noteTileError);
+labelTiles.on('tileload', noteTileLoad);
+labelTiles.on('tileerror', noteTileError);
 
 var markers = ${markersJs};
 var activeLayer = ${activeLayerJs};
@@ -584,7 +615,32 @@ leg.addTo(map);
 }
 
 // ── WebMap iframe ─────────────────────────────────────
-function WebMap({ html, height }: { html: string; height: number | string }) {
+const TILES_OFFLINE_MSG = 'HEALTHMAP_TILES_OFFLINE';
+
+function WebMap({
+  html,
+  height,
+  onTilesOffline,
+}: {
+  html: string;
+  height: number | string;
+  onTilesOffline?: () => void;
+}) {
+  // Keep the latest callback without re-subscribing the web listener.
+  const tilesOfflineRef = useRef(onTilesOffline);
+  tilesOfflineRef.current = onTilesOffline;
+
+  // Web branch: the sandboxed iframe reports tile failure via
+  // window.parent.postMessage — listen once per mount.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const onMessage = (event: MessageEvent) => {
+      if (event?.data === TILES_OFFLINE_MSG) tilesOfflineRef.current?.();
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   if (Platform.OS !== 'web') {
     if (WebViewComponent) {
       const nativeStyle = typeof height === 'number'
@@ -598,6 +654,9 @@ function WebMap({ html, height }: { html: string; height: number | string }) {
           style={nativeStyle}
           javaScriptEnabled
           domStorageEnabled
+          onMessage={(event: any) => {
+            if (event?.nativeEvent?.data === TILES_OFFLINE_MSG) tilesOfflineRef.current?.();
+          }}
         />
       );
     }
@@ -652,6 +711,13 @@ const MapPanel: React.FC<MapPanelProps> = ({
   const [loadingData,  setLoadingData]  = useState(false);
   // Per-layer fetch errors — error ≠ empty; a failed load never renders as "No data".
   const [layerErrors, setLayerErrors] = useState<Partial<Record<Layer, string>>>({});
+  // Tile watchdog verdict — the map shell (vendored Leaflet) rendered fine but
+  // tiles keep failing. Distinct from netinfo-offline and from data-fetch errors.
+  const [tilesFailed, setTilesFailed] = useState(false);
+
+  // Give tiles another chance when the layer changes or connectivity returns.
+  useEffect(() => { setTilesFailed(false); }, [activeLayer, offline]);
+  const handleTilesOffline = useCallback(() => setTilesFailed(true), []);
 
   useEffect(() => {
     if (alerts.length && !alertLayerData.length) {
@@ -812,8 +878,8 @@ const MapPanel: React.FC<MapPanelProps> = ({
     }
   }, [activeLayer, fetchAlertLayerData, fetchLayerData]);
 
-  const showReportOverlay = !offline && !activeLayerError && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
-  const showAlertOverlay = !offline && !activeLayerError && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
+  const showReportOverlay = !offline && !activeLayerError && !tilesFailed && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
+  const showAlertOverlay = !offline && !activeLayerError && !tilesFailed && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
   const alertItems = React.useMemo(() => alertSource.slice(0, 8), [alertSource]);
   const mapHeight = isExpanded ? '100%' : (IS_MOBILE ? 250 : 195);
 
@@ -821,7 +887,8 @@ const MapPanel: React.FC<MapPanelProps> = ({
     <View style={{ flex: 1 }}>
       <View style={[mp.mapFrame, isExpanded && mp.mapFrameExpanded]}>
         {offline ? (
-          /* The Leaflet CDN map cannot work offline — say so honestly. */
+          /* No connection at all — the shell is local now, but tiles
+             and data need the network; say so honestly. */
           <View
             style={[
               mp.offlinePanel,
@@ -861,9 +928,46 @@ const MapPanel: React.FC<MapPanelProps> = ({
               }
             </TouchableOpacity>
           </View>
+        ) : tilesFailed ? (
+          /* Leaflet itself is vendored, so the shell loads — but the TILES
+             kept failing. Honest offline/list fallback: say why, show the
+             last-synced district data, offer a retry. */
+          <View
+            style={[
+              mp.offlinePanel,
+              { backgroundColor: colors.offlineBg, borderColor: colors.offline },
+              typeof mapHeight === 'number' ? { height: mapHeight } : { flex: 1 },
+            ]}
+            accessibilityLiveRegion="polite"
+          >
+            <Ionicons name="cloud-offline-outline" size={24} color={colors.offline} />
+            <Text style={[mp.offlineTitle, { color: colors.text }]}>
+              Map tiles need internet — data below is from your last sync
+            </Text>
+            <Text style={[mp.tilesFallbackCount, { color: colors.textSecondary }]}>
+              {markers.length} district{markers.length !== 1 ? 's' : ''} with {activeLayer} data
+            </Text>
+            {isExpanded && markers.slice(0, 4).map((m, i) => (
+              <View key={`${m.district}-${i}`} style={mp.tilesFallbackRow}>
+                <View style={[mp.tilesFallbackDot, { backgroundColor: m.color }]} />
+                <Text style={[mp.tilesFallbackRowText, { color: colors.text }]} numberOfLines={1}>
+                  {m.district} ({m.count})
+                </Text>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={[mp.retryBtn, { backgroundColor: colors.card, borderColor: colors.offline }]}
+              onPress={() => setTilesFailed(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading map tiles"
+            >
+              <Ionicons name="refresh-outline" size={16} color={colors.offline} />
+              <Text style={[mp.retryText, { color: colors.offline }]} maxFontSizeMultiplier={1.3}>Retry map</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
           /* Map — WebView on native, iframe on web */
-          <WebMap html={html} height={mapHeight} />
+          <WebMap html={html} height={mapHeight} onTilesOffline={handleTilesOffline} />
         )}
         {showAlertOverlay && (
           <View style={[mp.alertOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1040,6 +1144,11 @@ const mp = StyleSheet.create({
     marginTop: 4,
   },
   retryText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  // Tile-failure fallback — count line + district rows (last-synced data)
+  tilesFallbackCount: { fontSize: 13, lineHeight: 18, fontWeight: '600', textAlign: 'center', fontVariant: ['tabular-nums'] },
+  tilesFallbackRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  tilesFallbackDot: { width: 8, height: 8, borderRadius: 4 },
+  tilesFallbackRowText: { fontSize: 12, lineHeight: 16, fontVariant: ['tabular-nums'] },
   filterBar: { marginTop: 8, marginBottom: 2 },
   filterBarInline: { minHeight: 48 },
   filterBarExpanded: { minHeight: 56 },

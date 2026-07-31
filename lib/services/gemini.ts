@@ -6,8 +6,33 @@
 // =====================================================
 
 import { supabase } from '../supabase';
+import i18next, { getAppLanguage } from '../i18n';
 
 const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
+
+// -- Language ----------------------------------------------------------------
+// AI answers in the app language. Hindi replies must be simple,
+// village-appropriate Devanagari with dual-script disease names and numerals
+// kept as digits; English otherwise.
+
+const isHindi = (): boolean => getAppLanguage() === 'hi';
+
+/** Instruction block appended to chat system prompts. */
+const chatLanguageRule = (): string =>
+    isHindi()
+        ? 'Reply ONLY in simple, village-appropriate Hindi written in Devanagari script — short everyday words, no formal/Sanskritized Hindi. Write disease names in dual script, e.g. "दस्त (Diarrhea)". Keep all numbers as digits (e.g. 3, 104). Do not reply in English.'
+        : 'Reply in simple English.';
+
+/** Instruction block appended to the JSON insight prompts. */
+const insightLanguageRule = (): string =>
+    isHindi()
+        ? '\n\nWrite every JSON string value in simple, village-appropriate Hindi (Devanagari script). Keep the JSON keys exactly "headline", "body", "tips" in English. Write disease names in dual script, e.g. "दस्त (Diarrhea)". Keep all numbers as digits.'
+        : '';
+
+// Devanagari is token-hungrier than English — give Hindi replies headroom so
+// the model is not cut off mid-sentence (or mid-JSON).
+const maxTokensForLanguage = (base: number): number =>
+    isHindi() ? Math.round(base * 1.6) : base;
 
 function normalizeModel(model?: string): string {
     const value = String(model ?? '').trim();
@@ -197,8 +222,8 @@ export async function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
     };
 
     const text = await callOpenRouter([
-        { role: 'user', content: promptMap[ctx.scope] },
-    ], 0.7, 350);
+        { role: 'user', content: promptMap[ctx.scope] + insightLanguageRule() },
+    ], 0.7, maxTokensForLanguage(350));
 
     const cleaned = text.replace(/```(?:json)?/gi, '').trim();
     const match = cleaned.match(/\{[\s\S]*\}/);
@@ -214,7 +239,7 @@ export async function getAIInsights(ctx: InsightContext): Promise<AIInsight> {
     }
 
     const aiResponse: AIInsight = {
-        headline: parsed.headline ?? 'Health Update',
+        headline: parsed.headline ?? i18next.t('ai.headlineFallback'),
         body: parsed.body ?? '',
         tips: Array.isArray(parsed.tips) ? parsed.tips.slice(0, 3) : [],
         scope: ctx.scope,
@@ -232,17 +257,17 @@ export async function getChatResponse(
 ): Promise<string> {
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage || lastMessage.role !== 'user') {
-        return 'Hello! I am your HealthDrop assistant. How can I help?';
+        return i18next.t('ai.greetingFallback');
     }
 
     const userDisplayName = userContext.consentToExternalProcessing ? (userContext.fullName ?? 'user') : 'user';
-    const systemPrompt = `You are HealthDrop AI, a friendly health assistant for India.\nAssisting: ${userDisplayName} (${userContext.role}${userContext.district ? `, ${userContext.district}` : ''}).\nHelp with: disease symptoms, prevention, water quality, health campaigns, app guidance.\nBe concise (3-4 sentences max), simple language, never diagnose, recommend doctor for medical issues.`;
+    const systemPrompt = `You are HealthDrop AI, a friendly health assistant for India.\nAssisting: ${userDisplayName} (${userContext.role}${userContext.district ? `, ${userContext.district}` : ''}).\nHelp with: disease symptoms, prevention, water quality, health campaigns, app guidance.\nBe concise (3-4 sentences max), simple language, never diagnose, recommend doctor for medical issues.\n${chatLanguageRule()}`;
 
     const history: ORMessage[] = [
         { role: 'system', content: systemPrompt },
         ...messages.map((m) => ({ role: m.role, content: m.text } as ORMessage)),
     ];
 
-    const reply = await callOpenRouter(history, 0.8, 320);
-    return reply || 'I am not sure how to answer that. Could you rephrase?';
+    const reply = await callOpenRouter(history, 0.8, maxTokensForLanguage(320));
+    return reply || i18next.t('ai.replyFallback');
 }

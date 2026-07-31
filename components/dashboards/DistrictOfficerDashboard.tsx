@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
+import { formatRelative } from '../../lib/format';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, QuickActionBtn,
@@ -28,16 +29,6 @@ interface Props {
 }
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
-
-const relativeAge = (iso: string): string => {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '';
-  const mins = Math.max(0, Math.floor((Date.now() - t) / 60000));
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-};
 
 const outbreakDay = (iso: string): number => {
   const t = new Date(iso).getTime();
@@ -163,7 +154,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
                 </Text>
               </View>
               <Text style={[styles.signalAge, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                {relativeAge(signalOutbreak.created_at)}
+                {formatRelative(signalOutbreak.created_at)}
               </Text>
             </View>
             <Text style={[styles.signalTitle, { color: colors.text }]} numberOfLines={2}>

@@ -21,6 +21,7 @@ import {
   Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { Profile } from '../../types';
 import { getChatResponse } from '../../lib/services/gemini';
@@ -45,14 +46,9 @@ export interface LocalChatMessage {
   timestamp?: Date;
 }
 
-const INITIAL_MESSAGE: LocalChatMessage = {
-  id: 'initial-message',
-  role: 'assistant',
-  text: "Hello! I am your HealthDrop assistant.\n\nI can help with disease information, water quality guidance, app navigation, and general health advice. What would you like to know?",
-};
-
 export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { t, i18n } = useTranslation();
   const messageCounterRef = useRef(0);
   const createMessageId = () => {
     messageCounterRef.current += 1;
@@ -68,7 +64,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
 
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<LocalChatMessage[]>(() => [
-    { ...INITIAL_MESSAGE, id: createMessageId(), timestamp: new Date() },
+    { id: createMessageId(), role: 'assistant', text: t('ai.welcome'), timestamp: new Date() },
   ]);
   const [inputText, setInputText] = useState('');
   const [inputFocused, setInputFocused] = useState(false);
@@ -96,6 +92,16 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
       mounted = false;
     };
   }, []);
+
+  // Keep the greeting in the app language until the conversation starts —
+  // once the user has sent anything, history is never rewritten.
+  useEffect(() => {
+    setMessages((prev) =>
+      prev.length === 1 && prev[0].role === 'assistant'
+        ? [{ ...prev[0], text: t('ai.welcome') }]
+        : prev
+    );
+  }, [i18n.language, t]);
 
   const persistConsent = async (consent: boolean) => {
     setConsentToExternalProcessing(consent);
@@ -145,7 +151,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
         userRole: profile.role,
         messageLength: text.length,
       });
-      setMessages(prev => [...prev, createLocalMessage('assistant', "Sorry, I could not connect right now. Please try again shortly.")]);
+      setMessages(prev => [...prev, createLocalMessage('assistant', t('ai.errorReply'))]);
     } finally {
       setIsTyping(false);
       scrollToBottom();
@@ -179,7 +185,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                   </View>
                   <View style={styles.panelTitleWrap}>
                     <Text style={[styles.panelTitle, { color: colors.text }]} numberOfLines={1}>
-                      Health Assistant
+                      {t('ai.assistantTitle')}
                     </Text>
                     <View style={styles.onlineRow}>
                       <View style={[styles.onlineDot, { backgroundColor: colors.success }]} />
@@ -187,7 +193,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                         style={[styles.onlineText, { color: colors.textSecondary }]}
                         maxFontSizeMultiplier={1.3}
                       >
-                        Online
+                        {t('ai.online')}
                       </Text>
                     </View>
                   </View>
@@ -195,7 +201,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                 <Pressable
                   onPress={closeChat}
                   accessibilityRole="button"
-                  accessibilityLabel="Close assistant"
+                  accessibilityLabel={t('ai.closeA11y')}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   style={({ pressed }) => [
                     styles.closeBtn,
@@ -269,7 +275,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                         styles.bubble,
                         { backgroundColor: colors.aiBg, borderWidth: 1, borderColor: colors.border },
                       ]}
-                      accessibilityLabel="Assistant is typing"
+                      accessibilityLabel={t('ai.typingA11y')}
                     >
                       <View style={styles.typingDots}>
                         {[0, 1, 2].map(i => (
@@ -286,12 +292,12 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                 {consentToExternalProcessing === null && (
                   <View style={[styles.privacyBanner, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <Text style={[styles.privacyText, { color: colors.text }]}>
-                      Messages are processed by an external AI service. Share your name for personalized responses?
+                      {t('ai.consentBody')}
                     </Text>
                     <View style={styles.privacyActions}>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel="No, stay anonymous"
+                        accessibilityLabel={t('ai.consentDecline')}
                         style={({ pressed }) => [
                           styles.privacyButton,
                           styles.privacyButtonSecondary,
@@ -303,12 +309,12 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                         onPress={() => persistConsent(false)}
                       >
                         <Text style={[styles.privacyButtonText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                          No, stay anonymous
+                          {t('ai.consentDecline')}
                         </Text>
                       </Pressable>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel="Allow name"
+                        accessibilityLabel={t('ai.consentAllow')}
                         style={({ pressed }) => [
                           styles.privacyButton,
                           { backgroundColor: pressed ? colors.primaryDark : colors.primary },
@@ -316,7 +322,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                         onPress={() => persistConsent(true)}
                       >
                         <Text style={[styles.privacyButtonText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
-                          Allow name
+                          {t('ai.consentAllow')}
                         </Text>
                       </Pressable>
                     </View>
@@ -329,7 +335,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                     borderColor: inputFocused ? colors.inputFocusBorder : colors.inputBorder,
                     borderWidth: inputFocused ? 2 : 1.5,
                   }]}
-                  placeholder="Ask a health question..."
+                  placeholder={t('ai.inputPlaceholder')}
                   placeholderTextColor={colors.placeholder}
                   value={inputText}
                   onChangeText={setInputText}
@@ -342,7 +348,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
                 />
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Send message"
+                  accessibilityLabel={t('ai.sendA11y')}
                   accessibilityState={{ disabled: !canSend }}
                   style={({ pressed }) => [
                     styles.sendBtn,
@@ -371,7 +377,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
         <View style={[styles.fabContainer, { bottom: FAB_BOTTOM }]}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Open health assistant"
+            accessibilityLabel={t('ai.openA11y')}
             style={({ pressed }) => [
               styles.fab,
               { backgroundColor: pressed ? colors.aiBg : colors.ai },

@@ -14,6 +14,8 @@ export interface Profile {
   created_at: string;
   updated_at: string;
   is_active: boolean;
+  /** False for self-signed-up clinic/ASHA accounts until an admin confirms the role. */
+  role_verified?: boolean;
   avatar_url?: string;
   assigned_area?: string;
   supervisor_id?: string;

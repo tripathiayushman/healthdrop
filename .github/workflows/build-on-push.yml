@@ -18,8 +18,11 @@ on:
 permissions:
   contents: write
 
+# Skip-marked runs get their own group (run_id) so a docs push with
+# [skip build] can never cancel an in-flight APK build — the job would
+# self-skip anyway, but entering the shared group cancels first.
 concurrency:
-  group: eas-build-main
+  group: ${{ contains(github.event.head_commit.message, '[skip build]') && github.run_id || 'eas-build-main' }}
   cancel-in-progress: true
 
 jobs:

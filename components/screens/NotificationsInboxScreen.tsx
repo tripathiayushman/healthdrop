@@ -15,28 +15,13 @@ import {
   RefreshControl, Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { format } from 'date-fns';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { Profile } from '../../types';
+import { formatRelative } from '../../lib/format';
 import { advisoriesService, InboxItem } from '../../lib/services/advisories';
 import { SkeletonBlock, ErrorCard, EmptyState, SyncPebble, ROLE_ACCENT } from '../dashboards/DashboardShared';
 
 const PAGE_SIZE = 20;
-
-/** Honest relative time; falls back to the date past a month. */
-const relativeTime = (iso?: string | null): string => {
-  if (!iso) return '';
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '';
-  const mins = Math.floor((Date.now() - t) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days <= 30) return `${days}d ago`;
-  return format(new Date(t), 'dd MMM yyyy');
-};
 
 /** Ink-toned eyebrow per row kind — never a severity word, never a severity color. */
 const eyebrowFor = (item: InboxItem): string => {
@@ -134,7 +119,7 @@ export default function NotificationsInboxScreen({
 
   const renderItem = ({ item }: { item: InboxItem }) => {
     const expanded = expandedId === item.id;
-    const when = relativeTime(item.created_at);
+    const when = formatRelative(item.created_at);
     const a11y =
       `${item.read ? 'Read' : 'Unread'}. ${item.isAdvisory ? 'Staff advisory. ' : ''}` +
       `${item.title}. ${when}. Tap to ${expanded ? 'collapse' : 'read'}.`;

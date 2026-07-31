@@ -3,6 +3,10 @@
 // No gradient fills, no bezier decoration; min/max/
 // latest labelled in 12px tabular text. Empty state is
 // a quiet zero, not an empty axis.
+// A11y: the container speaks one plain-language summary
+// ("14-day disease trend. Lowest X, highest Y, latest
+// Z.") while the SVG internals are hidden from screen
+// readers — TalkBack reads the sentence, not axis noise.
 // =====================================================
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
@@ -77,45 +81,57 @@ export const TrendChart: React.FC<TrendChartProps> = ({ data, maxPoints = 10 }) 
     );
   }
 
+  const a11ySummary = summary
+    ? `${rows.length}-day disease trend. Lowest ${summary.min}, highest ${summary.max}, latest ${summary.latest}.`
+    : undefined;
+
   return (
-    <View style={[styles.container, { borderColor: colors.border, backgroundColor: colors.card }]}>
-      <LineChart
-        data={chartData}
-        width={chartWidth}
-        height={220}
-        fromZero
-        withShadow={false}
-        withDots
-        chartConfig={{
-          backgroundGradientFrom: colors.card,
-          backgroundGradientTo: colors.card,
-          fillShadowGradientFromOpacity: 0,
-          fillShadowGradientToOpacity: 0,
-          decimalPlaces: 0,
-          color: () => colors.chartLine,
-          labelColor: () => colors.textSecondary,
-          propsForBackgroundLines: {
-            stroke: colors.chartGrid,
-            strokeWidth: 1,
-            strokeDasharray: '',
-          },
-          propsForDots: {
-            r: '3',
-            strokeWidth: '1',
-            stroke: colors.card,
-          },
-        }}
-        style={styles.chart}
-      />
-      {summary && (
-        <View style={styles.summaryRow}>
-          <Text style={[styles.summaryText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-            MIN <Text style={{ color: colors.text }}>{summary.min}</Text>
-            {'   ·   '}MAX <Text style={{ color: colors.text }}>{summary.max}</Text>
-            {'   ·   '}LATEST <Text style={{ color: colors.text }}>{summary.latest}</Text>
-          </Text>
-        </View>
-      )}
+    <View
+      style={[styles.container, { borderColor: colors.border, backgroundColor: colors.card }]}
+      accessible={true}
+      accessibilityLabel={a11ySummary}
+    >
+      {/* Decorative chart internals — hidden so screen readers get the
+          one-sentence summary above instead of raw SVG/label noise. */}
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <LineChart
+          data={chartData}
+          width={chartWidth}
+          height={220}
+          fromZero
+          withShadow={false}
+          withDots
+          chartConfig={{
+            backgroundGradientFrom: colors.card,
+            backgroundGradientTo: colors.card,
+            fillShadowGradientFromOpacity: 0,
+            fillShadowGradientToOpacity: 0,
+            decimalPlaces: 0,
+            color: () => colors.chartLine,
+            labelColor: () => colors.textSecondary,
+            propsForBackgroundLines: {
+              stroke: colors.chartGrid,
+              strokeWidth: 1,
+              strokeDasharray: '',
+            },
+            propsForDots: {
+              r: '3',
+              strokeWidth: '1',
+              stroke: colors.card,
+            },
+          }}
+          style={styles.chart}
+        />
+        {summary && (
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+              MIN <Text style={{ color: colors.text }}>{summary.min}</Text>
+              {'   ·   '}MAX <Text style={{ color: colors.text }}>{summary.max}</Text>
+              {'   ·   '}LATEST <Text style={{ color: colors.text }}>{summary.latest}</Text>
+            </Text>
+          </View>
+        )}
+      </View>
     </View>
   );
 };

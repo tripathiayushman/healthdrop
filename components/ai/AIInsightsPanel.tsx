@@ -10,6 +10,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile, TrendData } from '../../types';
@@ -37,11 +38,6 @@ const SCOPE_ICON: Record<InsightScope, keyof typeof Ionicons.glyphMap> = {
   state:    'map-outline',
   global:   'globe-outline',
 };
-const SCOPE_LABEL: Record<InsightScope, (d?: string, s?: string) => string> = {
-  district: (d) => d || 'Your District',
-  state:    (_, s) => s || 'Your State',
-  global:   () => 'General Health',
-};
 
 const INSIGHTS_CACHE_PREFIX = 'healthdrop:ai-insights';
 
@@ -68,6 +64,7 @@ const formatShortDateTime = (iso: string): string => {
 
 export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => {
   const { colors, isDark } = useTheme();
+  const { t, i18n } = useTranslation();
   const [insight, setInsight] = useState<AIInsight | null>(null);
   const [loading, setLoading] = useState(true);
   const [insightError, setInsightError] = useState(false);
@@ -240,33 +237,42 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   useEffect(() => {
     loadInsights();
     loadTrendData();
-  }, [profile.role, profile.district, profile.state]);
+    // i18n.language: a language switch re-requests the insight so the AI
+    // answers in the user's language (the cached copy stays as fallback).
+  }, [profile.role, profile.district, profile.state, i18n.language]);
 
   const toggleExpand = () => setExpanded(v => !v);
+
+  // Scope chip text: real district/state names stay as data; only the
+  // fallbacks are translated.
+  const scopeLabel = (s: InsightScope): string =>
+    s === 'district' ? (profile.district || t('ai.scopeDistrict'))
+    : s === 'state'  ? (profile.state || t('ai.scopeState'))
+    : t('ai.scopeGlobal');
 
   const refreshBusy = loading || trendLoading;
   const actionColor = isDark ? colors.primary : colors.primaryDark;
   const trendScopeLabel = DISTRICT_SCOPED_ROLES.includes(profile.role) && profile.district
-    ? `${profile.district} district trend (last 14 days)`
-    : 'All districts trend (last 14 days)';
+    ? t('ai.trendScopeDistrict', { district: profile.district })
+    : t('ai.trendScopeAll');
 
   return (
     <View style={styles.section}>
       {/* Eyebrow section header + Refresh action link */}
       <View style={styles.sectionHeader}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]} numberOfLines={1}>
-          AI Health Insights
+          {t('ai.insightsTitle')}
         </Text>
         <Pressable
           onPress={refreshPanel}
           disabled={refreshBusy}
           accessibilityRole="button"
-          accessibilityLabel="Refresh insights"
+          accessibilityLabel={t('ai.refreshA11y')}
           accessibilityState={{ disabled: refreshBusy }}
           hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
         >
           <Text style={[styles.sectionAction, { color: refreshBusy ? colors.textTertiary : actionColor }]}>
-            Refresh
+            {t('ai.refresh')}
           </Text>
         </Pressable>
       </View>
@@ -292,7 +298,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
           <SkeletonBlock width="82%" height={14} style={{ marginTop: spacing.sm }} />
         </View>
       ) : insightError ? (
-        <ErrorCard message="Couldn't load insights — check connection" onRetry={loadInsights} />
+        <ErrorCard message={t('ai.insightsError')} onRetry={loadInsights} />
       ) : insight ? (
         <View
           style={[
@@ -305,7 +311,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
           <View style={styles.badgeRow}>
             <View style={[styles.aiBadge, { backgroundColor: colors.aiBg }]}>
               <Text style={[styles.aiBadgeText, { color: colors.ai }]} maxFontSizeMultiplier={1.3}>
-                AI
+                {t('ai.badge')}
               </Text>
             </View>
             <View style={[styles.scopeBadge, { backgroundColor: colors.surfaceVariant }]}>
@@ -315,7 +321,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
                 numberOfLines={1}
                 maxFontSizeMultiplier={1.3}
               >
-                {SCOPE_LABEL[scope](profile.district, profile.state)}
+                {scopeLabel(scope)}
               </Text>
             </View>
           </View>
@@ -345,12 +351,12 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
           <Pressable
             onPress={toggleExpand}
             accessibilityRole="button"
-            accessibilityLabel={expanded ? 'Show less' : 'Read more'}
+            accessibilityLabel={expanded ? t('ai.showLess') : t('ai.readMore')}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             style={styles.expandBtn}
           >
             <Text style={[styles.expandText, { color: actionColor }]}>
-              {expanded ? 'Show less' : 'Read more'}
+              {expanded ? t('ai.showLess') : t('ai.readMore')}
             </Text>
             <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={actionColor} />
           </Pressable>
@@ -360,7 +366,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
             <View style={styles.asOfRow}>
               <Ionicons name="time-outline" size={16} color={colors.textTertiary} />
               <Text style={[styles.asOfText, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                {`Saved on phone · ${formatShortDateTime(cachedAt)}`}
+                {t('ai.savedOnPhone', { when: formatShortDateTime(cachedAt) })}
               </Text>
             </View>
           )}
@@ -369,8 +375,8 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
         <EmptyState
           icon="checkmark-circle-outline"
           color={colors.success}
-          title="All quiet — no insights right now"
-          subtitle="Tap Refresh to check again."
+          title={t('ai.emptyTitle')}
+          subtitle={t('ai.emptySubtitle')}
         />
       )}
 
@@ -387,7 +393,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
             <Ionicons name="stats-chart-outline" size={24} color={colors.primary} />
           </View>
           <View style={styles.trendTitleWrap}>
-            <Text style={[styles.trendTitle, { color: colors.text }]}>Disease Trend</Text>
+            <Text style={[styles.trendTitle, { color: colors.text }]}>{t('ai.trendTitle')}</Text>
             <Text style={[styles.trendSubtitle, { color: colors.textSecondary }]}>{trendScopeLabel}</Text>
           </View>
         </View>
@@ -398,7 +404,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
             <SkeletonBlock width="60%" height={12} style={{ marginTop: spacing.sm }} />
           </View>
         ) : trendError ? (
-          <ErrorCard message="Couldn't load trend data — check connection" onRetry={loadTrendData} />
+          <ErrorCard message={t('ai.trendError')} onRetry={loadTrendData} />
         ) : (
           /* TrendChart renders its own quiet zero when there are no points */
           <TrendChart data={trendData} maxPoints={10} />

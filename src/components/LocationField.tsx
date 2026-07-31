@@ -8,8 +8,14 @@
 //
 // "Prakash" restyle: token-driven, Ionicons only, inline
 // validation messages (no Alert.alert), labels above fields.
+//
+// District registry suggestions: typing ≥2 chars in District or
+// State shows up to 6 canonical "District, State" rows from
+// public.districts; tapping one fills BOTH fields. Free text
+// stays valid — the registry steers, it never gates — and the
+// list degrades silently to nothing when the lookup fails.
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -21,6 +27,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Theme } from '../../lib/ThemeContext';
 import { useLocation } from '../hooks/useLocation';
+import { districtsService, DistrictEntry } from '../../lib/services/districts';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -60,9 +67,60 @@ export function LocationField({
   const [lngError, setLngError] = useState<string | null>(null);
   const [focusedField, setFocusedField] = useState<string | null>(null);
 
+  // ── Registry suggestions state ─────────────────────────────────────────
+  // Which text field the open suggestion list belongs to. Deliberately NOT
+  // closed on blur: in forms without keyboardShouldPersistTaps the tap that
+  // dismisses the keyboard blurs the input first, and a blur-close would
+  // eat the row tap. The list closes on pick, on <2 chars, on GPS autofill,
+  // or when another field gains focus.
+  const [suggestField, setSuggestField] = useState<'district' | 'state' | null>(null);
+  const [suggestions, setSuggestions] = useState<DistrictEntry[]>([]);
+  // The steering caption shows only the first time the list appears.
+  const [hintRetired, setHintRetired] = useState(false);
+  const searchSeq = useRef(0);
+  const listWasVisible = useRef(false);
+
+  const suggestionsVisible = suggestField !== null && suggestions.length > 0;
+  useEffect(() => {
+    if (listWasVisible.current && !suggestionsVisible) setHintRetired(true);
+    listWasVisible.current = suggestionsVisible;
+  }, [suggestionsVisible]);
+
+  const closeSuggestions = () => {
+    searchSeq.current++; // invalidate any in-flight search
+    setSuggestField(null);
+    setSuggestions([]);
+  };
+
+  const runSuggestions = (field: 'district' | 'state', text: string) => {
+    if (text.trim().length < 2) {
+      closeSuggestions();
+      return;
+    }
+    const id = ++searchSeq.current;
+    setSuggestField(field);
+    districtsService
+      .search(text)
+      .then((rows) => {
+        if (searchSeq.current !== id) return;
+        setSuggestions(rows.slice(0, 6));
+      })
+      .catch(() => {
+        // Service already degrades to [] — this is belt-and-braces.
+        if (searchSeq.current === id) setSuggestions([]);
+      });
+  };
+
+  const applySuggestion = (entry: DistrictEntry) => {
+    onChange({ ...value, district: entry.district, state: entry.state });
+    closeSuggestions();
+  };
+
   // Sync GPS + geocoded result back to parent
   useEffect(() => {
     if (coords && (status === 'success' || status === 'manual')) {
+      // Fields were just filled programmatically — drop any open list.
+      closeSuggestions();
       onChange({
         latitude: coords.latitude,
         longitude: coords.longitude,
@@ -120,6 +178,38 @@ export function LocationField({
     focusedField === fieldKey && { borderColor: colors.inputFocusBorder, borderWidth: 2 },
     !!error && { borderColor: colors.inputErrorBorder, borderWidth: 2 },
   ]);
+
+  // ── Registry suggestion list (renders under District / State) ──────────
+
+  const renderSuggestions = (field: 'district' | 'state') => {
+    if (suggestField !== field || suggestions.length === 0) return null;
+    return (
+      <View style={[styles.suggestBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        {suggestions.map((entry, i) => (
+          <TouchableOpacity
+            key={entry.id}
+            style={[styles.suggestRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderLight }]}
+            onPress={() => applySuggestion(entry)}
+            accessibilityRole="button"
+            accessibilityLabel={`Use ${entry.district}, ${entry.state}`}
+          >
+            <Text style={[styles.suggestText, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+              {entry.district}
+              <Text style={[styles.suggestState, { color: colors.textSecondary }]}>, {entry.state}</Text>
+            </Text>
+          </TouchableOpacity>
+        ))}
+        {!hintRetired && (
+          <Text
+            style={[styles.suggestHint, { color: colors.textSecondary, borderTopColor: colors.borderLight }]}
+            maxFontSizeMultiplier={1.3}
+          >
+            Pick from the list when you can — it keeps your reports on the district map
+          </Text>
+        )}
+      </View>
+    );
+  };
 
   // ── Status badge ────────────────────────────────────────────────────────
 
@@ -237,7 +327,7 @@ export function LocationField({
               style={inputStyle('manualLat', latError)}
               value={manualLat}
               onChangeText={(t) => { setManualLat(t); if (latError) setLatError(null); }}
-              onFocus={() => setFocusedField('manualLat')}
+              onFocus={() => { setFocusedField('manualLat'); closeSuggestions(); }}
               onBlur={() => setFocusedField(null)}
               keyboardType="numeric"
               placeholder="e.g. 25.5941"
@@ -256,7 +346,7 @@ export function LocationField({
               style={inputStyle('manualLng', lngError)}
               value={manualLng}
               onChangeText={(t) => { setManualLng(t); if (lngError) setLngError(null); }}
-              onFocus={() => setFocusedField('manualLng')}
+              onFocus={() => { setFocusedField('manualLng'); closeSuggestions(); }}
               onBlur={() => setFocusedField(null)}
               keyboardType="numeric"
               placeholder="e.g. 85.1376"
@@ -287,7 +377,7 @@ export function LocationField({
           style={inputStyle('locationName')}
           value={value.locationName}
           onChangeText={(t) => handleFieldChange('locationName', t)}
-          onFocus={() => setFocusedField('locationName')}
+          onFocus={() => { setFocusedField('locationName'); closeSuggestions(); }}
           onBlur={() => setFocusedField(null)}
           placeholder="Village, ward, or area name"
           placeholderTextColor={colors.placeholder}
@@ -306,13 +396,14 @@ export function LocationField({
         <TextInput
           style={inputStyle('district')}
           value={value.district}
-          onChangeText={(t) => handleFieldChange('district', t)}
-          onFocus={() => setFocusedField('district')}
+          onChangeText={(t) => { handleFieldChange('district', t); runSuggestions('district', t); }}
+          onFocus={() => { setFocusedField('district'); runSuggestions('district', value.district); }}
           onBlur={() => setFocusedField(null)}
           placeholder="District name"
           placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
         />
+        {renderSuggestions('district')}
       </View>
 
       {/* State — auto-filled from GPS, editable */}
@@ -326,13 +417,14 @@ export function LocationField({
         <TextInput
           style={inputStyle('state')}
           value={value.state}
-          onChangeText={(t) => handleFieldChange('state', t)}
-          onFocus={() => setFocusedField('state')}
+          onChangeText={(t) => { handleFieldChange('state', t); runSuggestions('state', t); }}
+          onFocus={() => { setFocusedField('state'); runSuggestions('state', value.state); }}
           onBlur={() => setFocusedField(null)}
           placeholder="State name"
           placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
         />
+        {renderSuggestions('state')}
       </View>
     </View>
   );
@@ -418,5 +510,15 @@ const styles = StyleSheet.create({
   fieldInput: {
     borderWidth: 1.5, borderRadius: 12, minHeight: 52,
     paddingHorizontal: 14, paddingVertical: 12, fontSize: 15,
+  },
+  // Registry suggestion list
+  suggestBox: { borderWidth: 1, borderRadius: 12, marginTop: 6, overflow: 'hidden' },
+  suggestRow: { minHeight: 44, paddingHorizontal: 14, paddingVertical: 8, justifyContent: 'center' },
+  suggestText: { fontSize: 15, lineHeight: 22, fontWeight: '600' },
+  suggestState: { fontWeight: '500' },
+  suggestHint: {
+    fontSize: 12, lineHeight: 16, fontWeight: '600',
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
 });

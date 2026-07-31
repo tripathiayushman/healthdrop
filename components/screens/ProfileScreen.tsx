@@ -91,6 +91,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [showSignOutModal, setShowSignOutModal] = useState(false);
   const [infoDoc, setInfoDoc] = useState<{ title: string; body: string } | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  // Danger zone — account deletion
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
 
@@ -221,6 +226,81 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       onSignOut(); // Still call onSignOut to reset the app state
     } finally {
       setSigningOut(false);
+    }
+  };
+
+  const openDeleteAccount = () => {
+    setDeleteConfirmText('');
+    setDeleteError('');
+    setShowDeleteAccount(true);
+  };
+
+  // Permanently delete the caller's account via the delete-account edge
+  // function. Server side: auth user + profile/tokens/acks/participation are
+  // removed; health reports are KEPT with identity detached. A 409 means the
+  // caller is the last active super admin — surfaced inline, never a popup.
+  const confirmDeleteAccount = async () => {
+    if (deleteConfirmText.trim() !== 'DELETE' || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError('');
+    try {
+      const { error } = await supabase.functions.invoke('delete-account', {
+        body: { confirm: 'DELETE' },
+      });
+
+      if (error) {
+        // FunctionsHttpError carries the Response in error.context — read the
+        // status and body defensively (shape varies by platform/version).
+        const ctx: any = (error as any)?.context;
+        const status: number | undefined =
+          typeof ctx?.status === 'number' ? ctx.status : undefined;
+        let serverMsg = '';
+        try {
+          if (ctx && typeof ctx.json === 'function') {
+            const body = await ctx.json();
+            serverMsg = String(body?.error ?? body?.message ?? '');
+          }
+        } catch {
+          /* body unreadable — fall back to status/message below */
+        }
+        if (status === 409 || /last\s+(active\s+)?super[\s_-]?admin/i.test(serverMsg)) {
+          setDeleteError(
+            serverMsg ||
+              'You are the last active super admin — assign another super admin before deleting this account.',
+          );
+        } else {
+          setDeleteError(serverMsg || error.message || "Couldn't delete account — check connection and try again.");
+        }
+        return;
+      }
+
+      // Server-side deletion succeeded — clear this device's local traces.
+      try {
+        const offlineSync: any = require('../../src/services/offlineSync');
+        if (typeof offlineSync?.clearQueueForUser === 'function') {
+          await offlineSync.clearQueueForUser(profile.id);
+        }
+      } catch (queueError) {
+        console.warn('Failed to clear offline queue after account deletion:', queueError);
+      }
+      try {
+        await AsyncStorage.removeItem('healthdrop:cachedProfile:' + profile.id);
+      } catch (cacheError) {
+        console.warn('Failed to clear cached profile after account deletion:', cacheError);
+      }
+      try {
+        await supabase.auth.signOut();
+      } catch (signOutError) {
+        // The auth user no longer exists — a failed remote sign-out is
+        // expected; the local session is still discarded.
+        console.warn('Sign-out after account deletion:', signOutError);
+      }
+      setShowDeleteAccount(false);
+      onSignOut();
+    } catch (error: any) {
+      setDeleteError(error?.message || "Couldn't delete account — check connection and try again.");
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -684,6 +764,41 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
         </Pressable>
       </View>
 
+      {/* Danger Zone — irreversible account deletion */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.danger }]}>Danger Zone</Text>
+        <View
+          style={[
+            styles.menuCard,
+            { backgroundColor: colors.card, borderColor: colors.danger },
+            !isDark && styles.cardShadow,
+          ]}
+        >
+          <Pressable
+            style={({ pressed }) => [
+              styles.menuItem,
+              pressed && { backgroundColor: colors.cardHover },
+            ]}
+            onPress={openDeleteAccount}
+            accessibilityRole="button"
+            accessibilityLabel="Delete my account"
+          >
+            <View style={styles.menuItemLeft}>
+              <Ionicons name="trash-outline" size={22} color={colors.danger} />
+              <View style={styles.menuTextWrap}>
+                <Text style={[styles.menuLabel, { color: colors.danger, fontWeight: '700' }]}>
+                  Delete my account
+                </Text>
+                <Text style={[styles.menuCaption, { color: colors.textTertiary }]}>
+                  Permanent — reports you filed stay in the health record without your name
+                </Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.danger} />
+          </Pressable>
+        </View>
+      </View>
+
       {/* App Info */}
       <View style={styles.appInfo}>
         <Text style={[styles.appName, { color: colors.textSecondary }]}>Health Drop Surveillance</Text>
@@ -1131,6 +1246,98 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
           </View>
         </View>
       </Modal>
+
+      {/* Delete Account Confirmation Modal — type DELETE to enable */}
+      <Modal
+        visible={showDeleteAccount}
+        animationType={reduceMotion ? 'none' : 'slide'}
+        transparent={true}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={true}
+        onRequestClose={() => { if (!deleteBusy) setShowDeleteAccount(false); }}
+      >
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="trash-outline" size={24} color={colors.danger} />
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Delete my account</Text>
+            </View>
+
+            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              {/* Plain statements of what happens — no euphemisms */}
+              {[
+                {
+                  icon: 'document-text-outline' as const,
+                  color: colors.textSecondary,
+                  text: 'Reports you filed remain in the health record — without your name.',
+                },
+                {
+                  icon: 'trash-outline' as const,
+                  color: colors.danger,
+                  text: 'Your sign-in, notifications and participation are permanently deleted.',
+                },
+                {
+                  icon: 'warning-outline' as const,
+                  color: colors.danger,
+                  text: 'This cannot be undone.',
+                },
+              ].map((row, i) => (
+                <View key={i} style={styles.deleteFactRow}>
+                  <Ionicons name={row.icon} size={18} color={row.color} />
+                  <Text style={[styles.deleteFactText, { color: colors.text }]}>{row.text}</Text>
+                </View>
+              ))}
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary }]}>
+                Type DELETE to confirm
+              </Text>
+              <TextInput
+                style={getInputStyle('deleteConfirm')}
+                placeholder="DELETE"
+                placeholderTextColor={colors.placeholder}
+                value={deleteConfirmText}
+                onChangeText={setDeleteConfirmText}
+                onFocus={() => setFocusedField('deleteConfirm')}
+                onBlur={() => setFocusedField(null)}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                accessibilityLabel="Type DELETE to confirm account deletion"
+              />
+
+              <InlineError message={deleteError} />
+            </ScrollView>
+
+            {/* One-Hand Action Bar — confirm stays disabled until DELETE is typed */}
+            <View style={styles.actionBar}>
+              <TouchableOpacity
+                onPress={() => { if (!deleteBusy) { setShowDeleteAccount(false); setDeleteError(''); } }}
+                style={styles.cancelLink}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel account deletion"
+                hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}
+              >
+                <Text style={[styles.cancelLinkText, { color: isDark ? colors.primary : colors.primaryDark }]}>Cancel</Text>
+              </TouchableOpacity>
+              <Pressable
+                onPress={confirmDeleteAccount}
+                disabled={deleteBusy || deleteConfirmText.trim() !== 'DELETE'}
+                accessibilityRole="button"
+                accessibilityLabel="Permanently delete my account"
+                accessibilityState={{ disabled: deleteBusy || deleteConfirmText.trim() !== 'DELETE' }}
+                style={[
+                  styles.primaryBtn,
+                  { backgroundColor: colors.danger },
+                  (deleteBusy || deleteConfirmText.trim() !== 'DELETE') && { opacity: 0.4 },
+                ]}
+              >
+                <Text style={[styles.primaryBtnText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>
+                  {deleteBusy ? 'Deleting…' : 'Delete my account'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };
@@ -1409,6 +1616,19 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   infoBody: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+  },
+  /* Delete-account modal */
+  deleteFactRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  deleteFactText: {
+    flex: 1,
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '500',

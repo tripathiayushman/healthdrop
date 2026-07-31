@@ -18,6 +18,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
+import { formatDateTime, formatTime } from '../../lib/format';
 import { SkeletonBlock, ErrorCard, EmptyState, SyncPebble, VerifiedStamp, ROLE_ACCENT } from '../dashboards/DashboardShared';
 import { Profile } from '../../types';
 
@@ -64,18 +65,6 @@ const KIND_ICON: Record<SubmissionKind, keyof typeof Ionicons.glyphMap> = {
   water:   'water-outline',
   alert:   'alert-circle-outline',
 };
-
-const formatShortDateTime = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const date = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
-  return `${date} ${time}`;
-};
-
-const formatTimeOnly = (d: Date): string =>
-  d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 // Defensive readers — rejection_reason and approval_status are selected via
 // select('*') and may be absent on older schemas.
@@ -315,7 +304,7 @@ export default function MySubmissionsScreen({
     const paybackInfo = approved && item.kind === 'disease' ? payback[item.id] : undefined;
     const canRefile =
       rejected && !!onRefile && !!item.id && (item.kind === 'disease' || item.kind === 'water');
-    const decidedAt = formatShortDateTime(item.approved_at ?? item.updated_at);
+    const decidedAt = formatDateTime(item.approved_at ?? item.updated_at);
 
     return (
       <View style={[ms.card, { backgroundColor: colors.card, borderColor: colors.border }, !isDark && ms.cardShadow]}>
@@ -333,7 +322,7 @@ export default function MySubmissionsScreen({
         </View>
 
         <Text style={[ms.cardDate, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-          Submitted {formatShortDateTime(item.created_at) || '—'}
+          Submitted {formatDateTime(item.created_at) || '—'}
         </Text>
 
         {/* ── A·06 — the WHY: the officer's exact words, name and time ── */}
@@ -375,7 +364,7 @@ export default function MySubmissionsScreen({
           <View style={ms.paybackBox}>
             <VerifiedStamp
               verifierName={item.approver_name ?? 'Reviewing officer'}
-              timestamp={formatShortDateTime(item.approved_at) || undefined}
+              timestamp={formatDateTime(item.approved_at) || undefined}
             />
             <Text style={[ms.paybackCaption, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
               {`Counted toward the ${paybackInfo.district} ${paybackInfo.disease.toLowerCase()} outbreak signal${paybackInfo.alertSent ? ' → district alert issued' : ''}`}
@@ -453,7 +442,7 @@ export default function MySubmissionsScreen({
                     </Text>
                     {asOf && (
                       <Text style={[ms.asOf, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                        As of {formatTimeOnly(asOf)}
+                        As of {formatTime(asOf)}
                       </Text>
                     )}
                   </View>

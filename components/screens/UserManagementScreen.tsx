@@ -17,6 +17,10 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
 import { ROLE_ACCENT, SkeletonBlock, ErrorCard, EmptyState } from '../dashboards/DashboardShared';
+import {
+  listInvitations, createInvitation, revokeInvitation, verifyRole,
+  RoleInvitation, InvitableRole,
+} from '../../lib/services/provisioning';
 
 interface Props { profile: Profile; onBack: () => void }
 
@@ -24,6 +28,7 @@ interface User {
   id: string; email: string; full_name: string; role: string;
   phone: string; district: string; state: string;
   created_at: string; is_active: boolean;
+  role_verified?: boolean;
 }
 
 const ROLES = ['super_admin','health_admin','district_officer','clinic','asha_worker','volunteer'];
@@ -37,6 +42,11 @@ const ROLE_DISPLAY: Record<string,string> = {
   district_officer: 'District Officer', clinic: 'Clinic',
   asha_worker: 'ASHA Worker', volunteer: 'Volunteer',
 };
+
+/** Self-signup roles that need admin confirmation before full access. */
+const VERIFIABLE_ROLES = ['clinic', 'asha_worker'];
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface ConfirmAction {
   title: string;
@@ -64,6 +74,26 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
 
+  // Provisioning — invitations + invite sheet
+  const canProvision = profile.role === 'super_admin' || profile.role === 'health_admin';
+  const [invitations, setInvitations] = useState<RoleInvitation[]>([]);
+  const [invLoading, setInvLoading]   = useState(true);
+  const [invError, setInvError]       = useState<string | null>(null);
+  const [invExpanded, setInvExpanded] = useState(false);
+  const [showInviteSheet, setShowInviteSheet] = useState(false);
+  const [inviteEmail, setInviteEmail]       = useState('');
+  const [inviteRole, setInviteRole]         = useState<InvitableRole | null>(null);
+  const [inviteDistrict, setInviteDistrict] = useState('');
+  const [inviteState, setInviteState]       = useState('');
+  const [inviteError, setInviteError]       = useState('');
+  const [inviteBusy, setInviteBusy]         = useState(false);
+  const [inviteFocus, setInviteFocus]       = useState<string | null>(null);
+
+  // health_admin may only provision the three lower roles; super_admin also health_admin
+  const inviteRoles: InvitableRole[] = profile.role === 'super_admin'
+    ? ['health_admin', 'district_officer', 'clinic', 'asha_worker']
+    : ['district_officer', 'clinic', 'asha_worker'];
+
   const showNotice = (title: string, message: string, type: 'danger' | 'warning' = 'warning') => {
     setConfirmAction({ title, message, type, notice: true, onConfirm: async () => setConfirmModal(false) });
     setConfirmModal(true);
@@ -81,9 +111,94 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
     } finally { setLoading(false); setRefreshing(false); }
   };
 
-  useEffect(() => { load(); }, []);
+  const loadInvitations = async () => {
+    setInvLoading(true);
+    const { data, error } = await listInvitations();
+    if (error || !data) {
+      setInvError("Couldn't load invitations — check connection");
+    } else {
+      setInvitations(data);
+      setInvError(null);
+    }
+    setInvLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+    if (canProvision) loadInvitations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openInvites = invitations.filter(i => !i.claimed_at);
+  // "Recently claimed" — the latest few, newest claim first (service pre-sorts)
+  const claimedInvites = invitations.filter(i => !!i.claimed_at).slice(0, 5);
 
   // ── Actions ──────────────────────────────────────────────────────────────
+  const resetInviteForm = () => {
+    setInviteEmail(''); setInviteRole(null);
+    setInviteDistrict(''); setInviteState('');
+    setInviteError(''); setInviteFocus(null);
+  };
+
+  const submitInvite = async () => {
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email || !EMAIL_RE.test(email)) {
+      setInviteError('Enter a valid email address');
+      return;
+    }
+    if (!inviteRole) {
+      setInviteError('Choose the role this person will hold');
+      return;
+    }
+    setInviteError('');
+    setInviteBusy(true);
+    const { error } = await createInvitation({
+      email,
+      role: inviteRole,
+      district: inviteDistrict.trim() || null,
+      state: inviteState.trim() || null,
+    });
+    setInviteBusy(false);
+    if (error) {
+      setInviteError(error);
+      return;
+    }
+    resetInviteForm();
+    setShowInviteSheet(false);
+    setInvExpanded(true);
+    loadInvitations();
+  };
+
+  const confirmRevokeInvite = (inv: RoleInvitation) => {
+    setConfirmAction({
+      title: 'Revoke Invitation',
+      message: `Remove the open invitation for ${inv.email}? If they sign up afterwards they will NOT receive the ${ROLE_DISPLAY[inv.role] ?? inv.role} role.`,
+      type: 'danger',
+      onConfirm: async () => {
+        const { error } = await revokeInvitation(inv.id);
+        if (error) throw new Error(error);
+        setConfirmModal(false);
+        loadInvitations();
+      },
+    });
+    setConfirmModal(true);
+  };
+
+  const confirmVerifyRole = (u: User) => {
+    setConfirmAction({
+      title: 'Verify Role',
+      message: `Mark ${u.full_name || u.email} as a verified ${ROLE_DISPLAY[u.role] ?? u.role}? This unlocks district-wide access for their account.`,
+      type: 'warning',
+      onConfirm: async () => {
+        const { error } = await verifyRole(u.id);
+        if (error) throw new Error(error);
+        setConfirmModal(false);
+        setShowModal(false);
+        load();
+      },
+    });
+    setConfirmModal(true);
+  };
   const changeRole = (userId: string, newRole: string) => {
     if (profile.role !== 'super_admin') {
       showNotice('Permission Denied', 'Only Super Administrators can change roles.');
@@ -163,6 +278,7 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
   const renderUser = ({ item: u }: { item: User }) => {
     const rc = ROLE_ACCENT[u.role] ?? colors.textSecondary;
     const ri = ROLE_ICON[u.role] ?? 'person-outline';
+    const unverified = VERIFIABLE_ROLES.includes(u.role) && u.role_verified === false;
     return (
       <Pressable
         style={({ pressed }) => [
@@ -174,7 +290,7 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
         ]}
         onPress={() => { setSelectedUser(u); setShowModal(true); }}
         accessibilityRole="button"
-        accessibilityLabel={`${u.full_name || 'Unnamed user'}, role ${ROLE_DISPLAY[u.role] ?? u.role}${u.is_active === false ? ', inactive' : ''}`}
+        accessibilityLabel={`${u.full_name || 'Unnamed user'}, role ${ROLE_DISPLAY[u.role] ?? u.role}${unverified ? ', role not yet verified' : ''}${u.is_active === false ? ', inactive' : ''}`}
       >
         <View style={[s.avatar, { backgroundColor: rc + '14' }]}>
           <Ionicons name={ri} size={20} color={rc} />
@@ -195,6 +311,15 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
               {(ROLE_DISPLAY[u.role] ?? u.role)?.toUpperCase()}
             </Text>
           </View>
+          {unverified && (
+            <View style={[s.rolePill, { backgroundColor: colors.warningBg }]}>
+              {/* amber always pairs with an icon — never a bare dot */}
+              <Ionicons name="alert-circle" size={12} color={colors.warning} />
+              <Text style={[s.rolePillText, { color: colors.warning }]} maxFontSizeMultiplier={1.3}>
+                UNVERIFIED
+              </Text>
+            </View>
+          )}
           {u.is_active === false && (
             <View style={[s.rolePill, { backgroundColor: colors.dangerBg }]}>
               <View style={[s.pillDot, { backgroundColor: colors.danger }]} />
@@ -213,6 +338,19 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
   const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
 
   const selectedActive = selectedUser?.is_active !== false;
+  const selectedUnverified =
+    !!selectedUser && VERIFIABLE_ROLES.includes(selectedUser.role) && selectedUser.role_verified === false;
+
+  // Invite-sheet input styling — 1.5px at rest, 2px focus, no glow
+  const inviteInputStyle = (field: string) => [
+    s.invInput,
+    {
+      backgroundColor: colors.inputBackground,
+      borderColor: inviteFocus === field ? colors.inputFocusBorder : colors.inputBorder,
+      borderWidth: inviteFocus === field ? 2 : 1.5,
+      color: colors.text,
+    },
+  ];
 
   return (
     <View style={[s.container, { backgroundColor: colors.background }]}>
@@ -265,6 +403,27 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
         )}
       </View>
 
+      {/* Invite official — provisioning entry point (super/health admin only) */}
+      {canProvision && (
+        <Pressable
+          style={({ pressed }) => [
+            s.inviteBtn,
+            {
+              backgroundColor: pressed ? colors.cardHover : colors.card,
+              borderColor: colors.inputBorder,
+            },
+          ]}
+          onPress={() => { resetInviteForm(); setShowInviteSheet(true); }}
+          accessibilityRole="button"
+          accessibilityLabel="Invite official"
+        >
+          <Ionicons name="person-add-outline" size={18} color={isDark ? colors.primary : colors.primaryDark} />
+          <Text style={[s.inviteBtnText, { color: isDark ? colors.primary : colors.primaryDark }]} maxFontSizeMultiplier={1.3}>
+            Invite official
+          </Text>
+        </Pressable>
+      )}
+
       {/* Role filter chips — selected = solid fill + check, never tint alone */}
       <ScrollView
         horizontal
@@ -296,6 +455,108 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
           );
         })}
       </ScrollView>
+
+      {/* ── INVITATIONS section — collapsible eyebrow header + 4-state region ── */}
+      {canProvision && (
+        <>
+          <Pressable
+            style={({ pressed }) => [
+              s.tableHead,
+              s.invHead,
+              {
+                backgroundColor: pressed ? colors.cardHover : colors.surfaceVariant,
+                borderBottomColor: colors.border,
+              },
+            ]}
+            onPress={() => setInvExpanded(v => !v)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: invExpanded }}
+            accessibilityLabel={`Invitations, ${openInvites.length} open. ${invExpanded ? 'Collapse' : 'Expand'}`}
+            hitSlop={{ top: 8, bottom: 8 }}
+          >
+            <Text style={[s.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+              INVITATIONS
+              {!invLoading && !invError && (
+                <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${openInvites.length}`}</Text>
+              )}
+            </Text>
+            <Ionicons
+              name={invExpanded ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={colors.textSecondary}
+            />
+          </Pressable>
+          {invExpanded && (
+            <View style={[s.invBody, { borderBottomColor: colors.border }]}>
+              {invLoading ? (
+                <View style={{ padding: spacing.lg, gap: spacing.md }} accessibilityElementsHidden>
+                  <SkeletonBlock height={56} radius={radii.sm} />
+                  <SkeletonBlock height={56} radius={radii.sm} />
+                </View>
+              ) : invError ? (
+                <View style={{ padding: spacing.lg }}>
+                  <ErrorCard message={invError} onRetry={loadInvitations} />
+                </View>
+              ) : openInvites.length === 0 && claimedInvites.length === 0 ? (
+                <View style={s.invEmpty}>
+                  <Ionicons name="mail-open-outline" size={20} color={colors.textSecondary} />
+                  <Text style={[s.invEmptyText, { color: colors.textSecondary }]}>
+                    No invitations yet — invited officials appear here until they sign up.
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView style={{ maxHeight: 264 }} nestedScrollEnabled>
+                  {openInvites.map(inv => (
+                    <View
+                      key={inv.id}
+                      style={[s.invRow, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[s.name, { color: colors.text }]} numberOfLines={1}>{inv.email}</Text>
+                        <Text style={[s.email, { color: colors.textSecondary }]} numberOfLines={1}>
+                          {(ROLE_DISPLAY[inv.role] ?? inv.role)}
+                          {inv.district ? ` · ${inv.district}` : ' · Any district'}
+                        </Text>
+                      </View>
+                      <View style={[s.rolePill, { backgroundColor: colors.infoBg }]}>
+                        <View style={[s.pillDot, { backgroundColor: colors.info }]} />
+                        <Text style={[s.rolePillText, { color: colors.info }]} maxFontSizeMultiplier={1.3}>OPEN</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={s.invRevoke}
+                        onPress={() => confirmRevokeInvite(inv)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Revoke invitation for ${inv.email}`}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {claimedInvites.map(inv => (
+                    <View
+                      key={inv.id}
+                      style={[s.invRow, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[s.name, { color: colors.text }]} numberOfLines={1}>{inv.email}</Text>
+                        <Text style={[s.email, { color: colors.textSecondary }]} numberOfLines={1}>
+                          {(ROLE_DISPLAY[inv.role] ?? inv.role)}
+                          {inv.claimed_at ? ` · claimed ${format(new Date(inv.claimed_at), 'd MMM')}` : ''}
+                        </Text>
+                      </View>
+                      <View style={[s.rolePill, { backgroundColor: colors.successBg }]}>
+                        <View style={[s.pillDot, { backgroundColor: colors.success }]} />
+                        <Text style={[s.rolePillText, { color: colors.success }]} maxFontSizeMultiplier={1.3}>CLAIMED</Text>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          )}
+        </>
+      )}
 
       {/* Column-header eyebrow row */}
       <View style={[s.tableHead, { backgroundColor: colors.surfaceVariant, borderBottomColor: colors.border }]}>
@@ -384,6 +645,14 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
                       {selectedActive ? 'ACTIVE' : 'INACTIVE'}
                     </Text>
                   </View>
+                  {selectedUnverified && (
+                    <View style={[s.rolePill, { backgroundColor: colors.warningBg }]}>
+                      <Ionicons name="alert-circle" size={12} color={colors.warning} />
+                      <Text style={[s.rolePillText, { color: colors.warning }]} maxFontSizeMultiplier={1.3}>
+                        UNVERIFIED
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
                 {/* Info rows */}
@@ -397,6 +666,30 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
                     <Text style={[s.infoText, { color: colors.text }]}>{row.label}</Text>
                   </View>
                 ))}
+
+                {/* Role verification — clinic/ASHA self-signups awaiting admin confirmation */}
+                {canProvision && selectedUnverified && (
+                  <View style={{ marginTop: spacing.lg }}>
+                    <Text style={[s.sectionLabel, { color: colors.textSecondary }]}>ROLE VERIFICATION</Text>
+                    <Text style={[s.verifyCaption, { color: colors.textSecondary }]}>
+                      Confirm this person really is a clinic/ASHA worker before verifying — verification unlocks district-wide access.
+                    </Text>
+                    <Pressable
+                      style={({ pressed }) => [
+                        s.verifyBtn,
+                        { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                      ]}
+                      onPress={() => confirmVerifyRole(selectedUser)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Verify role of ${selectedUser.full_name || selectedUser.email}`}
+                    >
+                      <Ionicons name="shield-checkmark-outline" size={18} color={colors.onPrimary} />
+                      <Text style={[s.verifyBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                        Verify role
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
 
                 {/* Role change — super_admin only */}
                 {profile.role === 'super_admin' && (
@@ -466,6 +759,164 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
               </View>
             </View>
           )}
+        </View>
+      </Modal>
+
+      {/* ── Invite Official Sheet ── */}
+      <Modal
+        visible={showInviteSheet}
+        animationType={reduceMotion ? 'none' : 'slide'}
+        transparent
+        onRequestClose={() => setShowInviteSheet(false)}
+      >
+        <View style={[s.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[s.modalSheet, { backgroundColor: colors.card }]}>
+            <View style={[s.modalHeader, { borderBottomColor: colors.borderLight }]}>
+              <View style={[s.modalAvatar, { borderColor: colors.primary, backgroundColor: colors.surface }]}>
+                <Ionicons name="person-add-outline" size={26} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1, marginLeft: spacing.md }}>
+                <Text style={[s.modalName, { color: colors.text }]}>Invite official</Text>
+                <Text style={[s.modalEmail, { color: colors.textSecondary }]}>
+                  Pre-assign a role to a trusted email
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowInviteSheet(false)}
+                style={[s.closeBtn, { backgroundColor: colors.surfaceVariant }]}
+                accessibilityRole="button"
+                accessibilityLabel="Close invite sheet"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ paddingHorizontal: spacing.lg }} keyboardShouldPersistTaps="handled">
+              <Text style={[s.sectionLabel, { color: colors.textSecondary, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+                EMAIL
+              </Text>
+              <TextInput
+                style={inviteInputStyle('email')}
+                placeholder="official@example.gov.in"
+                placeholderTextColor={colors.placeholder}
+                value={inviteEmail}
+                onChangeText={setInviteEmail}
+                onFocus={() => setInviteFocus('email')}
+                onBlur={() => setInviteFocus(null)}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+              />
+
+              <Text style={[s.sectionLabel, { color: colors.textSecondary, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+                ROLE
+              </Text>
+              <View style={s.roleGrid}>
+                {inviteRoles.map(r => {
+                  const active = inviteRole === r;
+                  const rc = ROLE_ACCENT[r] ?? colors.primary;
+                  return (
+                    <TouchableOpacity
+                      key={r}
+                      style={[
+                        s.roleBtn,
+                        active
+                          ? { backgroundColor: rc, borderColor: rc }
+                          : { backgroundColor: colors.card, borderColor: colors.border },
+                      ]}
+                      onPress={() => setInviteRole(r)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`Invite as ${ROLE_DISPLAY[r] ?? r}`}
+                    >
+                      {active && <Ionicons name="checkmark" size={14} color={colors.textInverse} />}
+                      <Text
+                        style={[s.roleBtnText, { color: active ? colors.textInverse : colors.text }]}
+                        numberOfLines={1}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        {ROLE_DISPLAY[r] ?? r}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={[s.sectionLabel, { color: colors.textSecondary, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+                DISTRICT
+              </Text>
+              <TextInput
+                style={inviteInputStyle('district')}
+                placeholder="e.g. Lucknow"
+                placeholderTextColor={colors.placeholder}
+                value={inviteDistrict}
+                onChangeText={setInviteDistrict}
+                onFocus={() => setInviteFocus('district')}
+                onBlur={() => setInviteFocus(null)}
+              />
+
+              <Text style={[s.sectionLabel, { color: colors.textSecondary, marginTop: spacing.lg, marginBottom: spacing.sm }]}>
+                STATE
+              </Text>
+              <TextInput
+                style={inviteInputStyle('state')}
+                placeholder="e.g. Uttar Pradesh"
+                placeholderTextColor={colors.placeholder}
+                value={inviteState}
+                onChangeText={setInviteState}
+                onFocus={() => setInviteFocus('state')}
+                onBlur={() => setInviteFocus(null)}
+              />
+
+              {/* Honest mechanism caption — no email is sent by the app */}
+              <View style={s.invCaptionRow}>
+                <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                <Text style={[s.invCaptionText, { color: colors.textSecondary }]}>
+                  They sign up with this email and arrive with the role already assigned and verified.
+                </Text>
+              </View>
+
+              {inviteError ? (
+                <View style={s.invCaptionRow}>
+                  <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+                  <Text style={[s.invCaptionText, { color: colors.danger, fontWeight: '600' }]}>
+                    {inviteError}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={{ height: spacing.lg }} />
+            </ScrollView>
+
+            {/* One-Hand Action Bar */}
+            <View style={[s.actionBar, { borderTopColor: colors.borderLight, backgroundColor: colors.card }]}>
+              <TouchableOpacity
+                onPress={() => setShowInviteSheet(false)}
+                style={s.invCancelLink}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel invitation"
+                hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}
+              >
+                <Text style={[s.invCancelText, { color: isDark ? colors.primary : colors.primaryDark }]}>Cancel</Text>
+              </TouchableOpacity>
+              <Pressable
+                style={({ pressed }) => [
+                  s.actionBtn,
+                  { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                  inviteBusy && { opacity: 0.4 },
+                ]}
+                onPress={submitInvite}
+                disabled={inviteBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Create invite"
+              >
+                <Ionicons name="person-add-outline" size={18} color={colors.onPrimary} />
+                <Text style={[s.actionBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                  {inviteBusy ? 'Creating…' : 'Create invite'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       </Modal>
 
@@ -607,7 +1058,7 @@ const s = StyleSheet.create({
   modalName: { fontSize: 16, lineHeight: 22, fontWeight: '800' },
   modalEmail: { fontSize: 13, lineHeight: 18, marginTop: 2 },
   closeBtn: { width: 44, height: 44, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginLeft: spacing.sm },
-  statusRow: { flexDirection: 'row', marginTop: spacing.lg, marginBottom: spacing.xs },
+  statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.lg, marginBottom: spacing.xs },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 48, borderBottomWidth: 1 },
   infoText: { fontSize: 15, lineHeight: 22, fontWeight: '500', flexShrink: 1 },
   sectionLabel: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: spacing.md },
@@ -629,6 +1080,46 @@ const s = StyleSheet.create({
     minHeight: 56, borderRadius: radii.md,
   },
   actionBtnText: { fontSize: 16, fontWeight: '700' },
+  /* Invite official button — 48dp secondary action in the gutter */
+  inviteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    marginHorizontal: spacing.lg, marginBottom: spacing.md,
+    minHeight: 48, borderRadius: radii.md, borderWidth: 1.5,
+  },
+  inviteBtnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  /* Invitations section */
+  invHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 },
+  invBody: { borderBottomWidth: StyleSheet.hairlineWidth },
+  invEmpty: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.lg,
+  },
+  invEmptyText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  invRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    minHeight: 56, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  invRevoke: { width: 44, height: 44, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
+  /* Role verification (detail modal) */
+  verifyCaption: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: spacing.md },
+  verifyBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    minHeight: 48, borderRadius: radii.md,
+  },
+  verifyBtnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  /* Invite sheet */
+  invInput: {
+    minHeight: 52, borderRadius: radii.md,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md, fontSize: 15,
+  },
+  invCaptionRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xs,
+    marginTop: spacing.lg,
+  },
+  invCaptionText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  invCancelLink: { minHeight: 48, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.sm },
+  invCancelText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
   /* Confirm modal */
   confirmOverlay: { flex: 1, justifyContent: 'center', padding: spacing.xl },
   confirmSheet: { borderRadius: radii.lg, borderWidth: 1, padding: spacing.xl, alignItems: 'center' },

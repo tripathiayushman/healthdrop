@@ -12,6 +12,7 @@
 
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { supabase } from '../../../lib/supabase';
+import { log } from '../../../lib/logger';
 import { syncQueue, QueueItem, SyncCounts } from './SyncQueue';
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -160,7 +161,7 @@ class OfflineSyncService {
             this.handleNetworkChange.bind(this)
         );
 
-        console.log('[OfflineSync] Service started');
+        log.info('OfflineSync', 'service started');
     }
 
     /** Stop monitoring. Call on app logout / cleanup. */
@@ -168,7 +169,7 @@ class OfflineSyncService {
         this.unsubscribeNetInfo?.();
         this.unsubscribeNetInfo = null;
         if (this.syncDebounceTimer) clearTimeout(this.syncDebounceTimer);
-        console.log('[OfflineSync] Service stopped');
+        log.info('OfflineSync', 'service stopped');
     }
 
     /**
@@ -181,12 +182,12 @@ class OfflineSyncService {
             if (!this.isSyncing) {
                 const reset = await syncQueue.resetStuckSyncing();
                 if (reset > 0) {
-                    console.log(`[OfflineSync] Recovered ${reset} item(s) stuck in 'syncing'`);
+                    log.info('OfflineSync', `recovered ${reset} item(s) stuck in 'syncing'`);
                 }
             }
             await syncQueue.removeSynced(); // purge stale tombstones + synced rows
         } catch (err) {
-            console.warn('[OfflineSync] Stale-item recovery failed:', err);
+            log.warn('OfflineSync', 'stale-item recovery failed', err);
         }
     }
 
@@ -228,7 +229,11 @@ class OfflineSyncService {
             // Debounce: wait briefly to let the connection stabilise
             if (this.syncDebounceTimer) clearTimeout(this.syncDebounceTimer);
             this.syncDebounceTimer = setTimeout(() => {
-                this.syncAll();
+                // Floating promise — catch so a storage/network blow-up in an
+                // automatic pass never becomes an unhandled rejection.
+                this.syncAll().catch((err) => {
+                    log.error('OfflineSync', 'automatic sync pass failed', err);
+                });
             }, SYNC_DEBOUNCE_MS);
         }
     }
@@ -243,7 +248,7 @@ class OfflineSyncService {
      */
     async syncAll(): Promise<SyncResult> {
         if (this.isSyncing) {
-            console.log('[OfflineSync] Sync already in progress — skipping');
+            log.debug('OfflineSync', 'sync already in progress — skipping');
             return { synced: 0, failed: 0, busy: true };
         }
 
@@ -261,7 +266,7 @@ class OfflineSyncService {
             const pending = await syncQueue.getPendingItems(MAX_ATTEMPTS);
             if (pending.length === 0) return { synced: 0, failed: 0 };
 
-            console.log(`[OfflineSync] Starting sync of ${pending.length} items`);
+            log.info('OfflineSync', `starting sync of ${pending.length} item(s)`);
 
             let synced = 0;
             let failed = 0;
@@ -277,7 +282,7 @@ class OfflineSyncService {
             await syncQueue.removeSynced();
             await this.notifyListeners();
 
-            console.log(`[OfflineSync] Sync complete. synced=${synced} failed=${failed}`);
+            log.info('OfflineSync', `sync complete — synced=${synced} failed=${failed}`);
             return { synced, failed };
         } finally {
             this.isSyncing = false;
@@ -303,14 +308,16 @@ class OfflineSyncService {
         // before uploading and skip if it is gone or tombstoned.
         const fresh = await syncQueue.getItem(item.localId);
         if (!fresh || fresh.status === 'cancelled') {
-            console.log(`[OfflineSync] Skipped ${item.type} (deleted before upload, localId: ${item.localId})`);
+            log.info('OfflineSync', `skipped ${item.type} — deleted before upload`, {
+                localId: item.localId,
+            });
             return 'skipped';
         }
 
         try {
             await uploadItem(fresh);
             await syncQueue.updateItem(fresh.localId, { status: 'synced' });
-            console.log(`[OfflineSync] ✅ Synced ${fresh.type} (localId: ${fresh.localId})`);
+            log.info('OfflineSync', `synced ${fresh.type}`, { localId: fresh.localId });
             return 'synced';
         } catch (err) {
             const newAttempts = fresh.attempts + 1;
@@ -322,8 +329,12 @@ class OfflineSyncService {
                 error: String(err),
             });
 
-            console.warn(
-                `[OfflineSync] ❌ Failed ${fresh.type} (attempt ${newAttempts}/${MAX_ATTEMPTS})`,
+            // Out-of-retries failures go to log.error so they land in the
+            // persisted 'healthdrop:lastErrors' trail for field diagnosis.
+            const report = permanentlyFailed ? log.error : log.warn;
+            report(
+                'OfflineSync',
+                `upload failed for ${fresh.type} (attempt ${newAttempts}/${MAX_ATTEMPTS})`,
                 err
             );
             return 'failed';
