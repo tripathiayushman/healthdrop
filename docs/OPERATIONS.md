@@ -60,7 +60,26 @@ Verified live components:
 
 ## 4. Backup posture
 
-**There are currently no database backups.** The project runs on the Supabase free tier: no automated backups, no PITR. A destructive migration or trigger bug is unrecoverable today. This is a known launch blocker with an owner decision attached (upgrade to Pro for daily backups, plus an interim nightly-dump workflow) — see item 38 in [PRODUCTION_READINESS.md](../PRODUCTION_READINESS.md). Until that lands, treat every `apply_migration` against the live project as irreversible and prefer additive, idempotent SQL.
+The project runs on the Supabase **free tier**: no managed backups, no PITR. The paid tier was ruled out, so backups run from CI instead — [`.github/workflows/db-backup.yml`](../.github/workflows/db-backup.yml) dumps `public` + `auth` daily at 02:17 UTC, encrypts the dump with AES-256, and stores it as a 30-day GitHub artifact.
+
+**Encryption is mandatory, not defensive polish:** this repository is public, and Actions artifacts on a public repo are downloadable by anyone. An unencrypted dump would publish every health report, reporter identity, and GPS coordinate.
+
+**Activation** (until both secrets exist the job logs a warning and skips):
+
+| Secret | Where to get it |
+|---|---|
+| `SUPABASE_DB_URL` | Supabase → **Connect** → **Session pooler** string. Use the pooler, not the direct host — that one is IPv6-only and GitHub runners can't reach it. |
+| `BACKUP_PASSPHRASE` | Any long random phrase. **Without it the backups cannot be decrypted.** Store it outside this repo. |
+
+**Restoring:**
+
+```bash
+gpg --batch --decrypt --passphrase '<BACKUP_PASSPHRASE>' \
+  -o restore.dump healthdrop-<stamp>.dump.gpg
+pg_restore --no-owner --no-privileges -d "<target-db-url>" restore.dump
+```
+
+Restore into a **scratch project first** and inspect before pointing anything at production. Note the window: a daily dump means up to 24 hours of data loss in the worst case, so still treat every `apply_migration` against the live project as high-stakes and prefer additive, idempotent SQL.
 
 ## 5. Release rollback
 

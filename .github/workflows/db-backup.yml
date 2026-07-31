@@ -1,0 +1,82 @@
+name: Encrypted DB Backup
+
+# Free replacement for Supabase's paid backup tier.
+# Dumps the database daily, encrypts it, and stores it as a build artifact.
+#
+# ENCRYPTION IS NOT OPTIONAL: this repository is public, and GitHub Actions
+# artifacts on a public repo are downloadable by anyone. An unencrypted dump
+# would publish every health report, reporter identity and GPS coordinate.
+#
+# Requires two repository secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL    — Supabase → Connect → "Session pooler" connection string
+#                        (the IPv4-capable one; GitHub runners cannot reach the
+#                        IPv6-only direct host)
+#   BACKUP_PASSPHRASE  — any long random phrase. WITHOUT IT THE BACKUPS ARE
+#                        UNRECOVERABLE. Store it somewhere outside this repo.
+
+on:
+  schedule:
+    - cron: "17 2 * * *" # 02:17 UTC daily (~07:47 IST)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that secrets are configured
+        id: guard
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$DB_URL" ] || [ -z "$PASSPHRASE" ]; then
+            echo "::warning::SUPABASE_DB_URL and/or BACKUP_PASSPHRASE not set — skipping backup."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install PostgreSQL 17 client
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+
+      - name: Dump and encrypt
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%d-%H%M)
+          # Custom format (-Fc) is compressed and restores selectively with pg_restore.
+          pg_dump "$DB_URL" \
+            --no-owner --no-privileges \
+            --schema=public --schema=auth \
+            -Fc -f "healthdrop-$STAMP.dump"
+          gpg --batch --yes --symmetric --cipher-algo AES256 \
+            --passphrase "$PASSPHRASE" \
+            -o "healthdrop-$STAMP.dump.gpg" "healthdrop-$STAMP.dump"
+          rm -f "healthdrop-$STAMP.dump"
+          ls -lh healthdrop-*.dump.gpg
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+
+      - name: Upload encrypted backup
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthdrop-db-${{ env.STAMP }}
+          path: healthdrop-*.dump.gpg
+          retention-days: 30
+          if-no-files-found: error
