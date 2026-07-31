@@ -1,11 +1,12 @@
 // =====================================================
-// OPENROUTER AI SERVICE - Proxy-first (Supabase Edge
-// Function 'openrouter-proxy'), direct API fallback
+// OPENROUTER AI SERVICE — server-side only. Every call
+// goes through the 'openrouter-proxy' Supabase Edge
+// Function, which holds OPENROUTER_API_KEY. No API key
+// is bundled into the app.
 // =====================================================
 
 import { supabase } from '../supabase';
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
 
 function normalizeModel(model?: string): string {
@@ -17,7 +18,6 @@ function normalizeModel(model?: string): string {
 }
 
 const OPENROUTER_MODEL = normalizeModel(process.env.EXPO_PUBLIC_OPENROUTER_MODEL);
-const OPENROUTER_API_KEY = String(process.env.EXPO_PUBLIC_OPENROUTER_API_KEY ?? '').trim();
 
 // -- Types --------------------------------------------------------------------
 export type InsightScope = 'district' | 'state' | 'global';
@@ -169,73 +169,18 @@ async function callProxy(
     return content;
 }
 
-/** Fallback transport: direct OpenRouter call using the client-side key. */
-async function callOpenRouterDirect(
-    messages: ORMessage[],
-    temperature = 0.7,
-    max_tokens = 350,
-): Promise<string> {
-    if (!OPENROUTER_API_KEY) {
-        throw new Error('EXPO_PUBLIC_OPENROUTER_API_KEY is missing.');
-    }
-
-    const response = await fetch(OPENROUTER_API_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-            'HTTP-Referer': 'https://healthdrop.local',
-            'X-Title': 'HealthDrop Surveillance System',
-        },
-        body: JSON.stringify({
-            model: OPENROUTER_MODEL,
-            messages,
-            temperature,
-            max_tokens,
-            stream: false,
-        }),
-    });
-
-    let payload: OpenRouterResponse = {};
-    const rawText = await response.text();
-
-    try {
-        payload = rawText ? JSON.parse(rawText) : {};
-    } catch {
-        throw new Error(`OpenRouter returned invalid JSON: ${rawText.slice(0, 200)}`);
-    }
-
-    if (!response.ok) {
-        const err = payload?.error?.message || `HTTP ${response.status}`;
-        throw new Error(`OpenRouter request failed: ${err}`);
-    }
-
-    const content = extractResponseText(payload);
-    if (!content) {
-        throw new Error('OpenRouter returned empty content.');
-    }
-
-    return content;
-}
-
 /**
- * Proxy-first dispatcher: try the Supabase Edge Function, fall back to the
- * direct OpenRouter call when the proxy errors or is not configured.
+ * Sole transport: the Supabase Edge Function. There is deliberately no
+ * direct-to-OpenRouter path — a client-side fallback would mean shipping the
+ * API key inside every APK, where anyone can extract it. Callers already
+ * degrade to non-AI content when this throws.
  */
 async function callOpenRouter(
     messages: ORMessage[],
     temperature = 0.7,
     max_tokens = 350,
 ): Promise<string> {
-    try {
-        return await callProxy(messages, temperature, max_tokens);
-    } catch (proxyError) {
-        if (!OPENROUTER_API_KEY) {
-            // No direct fallback available — surface the proxy failure.
-            throw proxyError;
-        }
-        return callOpenRouterDirect(messages, temperature, max_tokens);
-    }
+    return callProxy(messages, temperature, max_tokens);
 }
 
 // -- getAIInsights ------------------------------------------------------------

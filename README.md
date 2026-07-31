@@ -69,7 +69,7 @@ npx expo start
 `.env` (see [.env.example](.env.example) for the commented version):
 
 - **Required:** `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY` (the `sb_publishable_...` key; the legacy `EXPO_PUBLIC_SUPABASE_ANON_KEY` name still works as a fallback)
-- **Optional (AI):** `EXPO_PUBLIC_OPENROUTER_API_KEY`, `EXPO_PUBLIC_OPENROUTER_MODEL` — only used as a direct-API fallback when the `openrouter-proxy` edge function isn't configured; AI panels degrade gracefully without them
+- **Optional (AI):** `EXPO_PUBLIC_OPENROUTER_MODEL` — model override only. The AI **key is never in the app**: every call goes through the `openrouter-proxy` edge function, which holds `OPENROUTER_API_KEY` as a Supabase edge secret. AI panels degrade gracefully if the proxy is unreachable.
 - **Optional (flag):** `EXPO_PUBLIC_OFFLINE_SYNC_ENABLED` (default `true`)
 
 Run on a device with Expo Go or a development build. Note: remote push tokens do not register in Expo Go on this SDK — use an APK build to test push.
