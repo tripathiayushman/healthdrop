@@ -7,7 +7,7 @@
 // Preserves the exact existing submission payload +
 // offline queue via diseaseReportsService.create().
 // =====================================================
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -23,11 +23,17 @@ import { useTheme, getSeverityColor, spacing, radii, Theme } from '../../lib/The
 import { diseaseReportsService } from '../../lib/services/diseaseReports';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
-import { DiseaseType, Severity, TreatmentStatus } from '../../types';
+import { DiseaseReport, DiseaseType, Severity, TreatmentStatus } from '../../types';
 
 interface DiseaseReportFormProps {
   onSuccess: () => void;
   onCancel: () => void;
+  /**
+   * A·06 refile flow — prefill the wizard from the user's earlier (rejected)
+   * report. Submission still files a brand-new report; the old row is never
+   * mutated.
+   */
+  refillReportId?: string;
 }
 
 // ── Vocabulary ───────────────────────────────────────────────────────────────
@@ -172,6 +178,7 @@ const CountStepper: React.FC<{
 export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   onSuccess,
   onCancel,
+  refillReportId,
 }) => {
   const { colors, isDark, reduceMotion } = useTheme();
   const netInfo = useNetInfo();
@@ -218,6 +225,78 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     district: '',
     state: '',
   });
+
+  // ── A·06 — refile context: fetch the rejected report once, prefill ──
+  const [refillLoading, setRefillLoading] = useState(!!refillReportId);
+  const [refillError, setRefillError] = useState<string | null>(null);
+  const [refillInfo, setRefillInfo] = useState<{ shortId: string; reason: string | null } | null>(null);
+
+  const loadRefill = async () => {
+    if (!refillReportId) return;
+    setRefillLoading(true);
+    setRefillError(null);
+    const res = await diseaseReportsService.getById(refillReportId);
+    if (res.error || !res.data) {
+      setRefillError("Couldn't load the earlier report — you can still file a fresh one.");
+      setRefillLoading(false);
+      return;
+    }
+    const r = res.data as DiseaseReport & { rejection_reason?: string | null };
+
+    // Disease chip — pick the matching chip, else Other… + typed name.
+    const knownDisease = DISEASE_OPTIONS.find(
+      (o) => o !== 'Other…' && o.toLowerCase() === (r.disease_name ?? '').trim().toLowerCase()
+    );
+    if (knownDisease) {
+      setDisease(knownDisease);
+      setCustomDisease('');
+    } else if ((r.disease_name ?? '').trim()) {
+      setDisease('Other…');
+      setCustomDisease(r.disease_name.trim());
+    }
+
+    setCasesCount(Math.max(1, r.cases_count ?? 1));
+    setDeathsCount(Math.max(0, r.deaths_count ?? 0));
+    if (r.severity) setSeverity(r.severity);
+
+    // Symptoms — split the stored text back into chips + free text.
+    const parts = String(r.symptoms ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    const canonical: string[] = [];
+    const others: string[] = [];
+    for (const p of parts) {
+      const match = SYMPTOM_OPTIONS.find((o) => o.toLowerCase() === p.toLowerCase());
+      if (match) {
+        if (!canonical.includes(match)) canonical.push(match);
+      } else {
+        others.push(p);
+      }
+    }
+    setSelectedSymptoms(canonical);
+    setOtherSymptoms(others.join(', '));
+
+    setNotes(r.notes ?? '');
+    setLocation({
+      latitude: r.latitude ?? null,
+      longitude: r.longitude ?? null,
+      location_name: r.location_name ?? '',
+      district: r.district ?? '',
+      state: r.state ?? '',
+    });
+
+    setRefillInfo({
+      shortId: String(r.id ?? '').slice(0, 8).toUpperCase(),
+      reason:
+        typeof r.rejection_reason === 'string' && r.rejection_reason.trim().length > 0
+          ? r.rejection_reason.trim()
+          : null,
+    });
+    setRefillLoading(false);
+  };
+
+  useEffect(() => {
+    loadRefill();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refillReportId]);
 
   const scrollRef = useRef<ScrollView>(null);
   const fieldYRef = useRef<Record<string, number>>({});
@@ -351,6 +430,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
   const handleReportAnother = () => {
     // Keep location — she is likely still in the same village; GPS refreshes on mount.
+    // A fresh report is no longer a refile — drop the amber context card.
+    setRefillInfo(null);
+    setRefillError(null);
     setSavedResult(null);
     setStep(1);
     setErrors({});
@@ -581,6 +663,53 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
       >
         {step === 1 ? (
           <>
+            {/* ── A·06 — refile context card (amber: waiting on a fix, not wrong) ── */}
+            {refillReportId && (
+              refillLoading ? (
+                <View
+                  style={[styles.refileSkeleton, { backgroundColor: colors.skeleton }]}
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                />
+              ) : refillError ? (
+                <View style={styles.refileErrorRow}>
+                  <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                  <Text style={[styles.refileErrorText, { color: colors.textSecondary }]}>
+                    {refillError}
+                  </Text>
+                  <Pressable
+                    onPress={loadRefill}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry loading the earlier report"
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  >
+                    <Text style={[styles.refileRetry, { color: colors.primary }]}>Retry</Text>
+                  </Pressable>
+                </View>
+              ) : refillInfo ? (
+                <View
+                  style={[styles.refileCard, { backgroundColor: colors.warningBg }]}
+                  accessible
+                  accessibilityLabel={`Refiling report ${refillInfo.shortId}. ${refillInfo.reason ?? 'The earlier report was not accepted.'}`}
+                >
+                  <View style={styles.refileHead}>
+                    <Ionicons name="refresh-circle-outline" size={18} color={colors.warning} />
+                    <Text style={[styles.refileEyebrow, { color: colors.warning }]} maxFontSizeMultiplier={1.3}>
+                      {`REFILING #${refillInfo.shortId}`}
+                    </Text>
+                  </View>
+                  <Text style={[styles.refileReason, { color: colors.text }]}>
+                    {refillInfo.reason
+                      ? `“${refillInfo.reason}”`
+                      : 'The earlier report was not accepted — fix it below and save again.'}
+                  </Text>
+                  <Text style={[styles.refileMeta, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                    Saving files a new report — the earlier one stays unchanged.
+                  </Text>
+                </View>
+              ) : null
+            )}
+
             {/* Which sickness? */}
             <View style={styles.section} onLayout={onFieldLayout('disease_name')}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>Which sickness?</Text>
@@ -728,7 +857,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                   });
                   if (loc.locationName && loc.district && loc.state) clearError('location');
                 }}
-                autoFetch={true}
+                autoFetch={!refillReportId}
               />
               <Text style={[styles.helpText, { color: colors.textSecondary, marginTop: spacing.sm }]}>
                 GPS works without network
@@ -847,6 +976,24 @@ const styles = StyleSheet.create({
   chipLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
+
+  /* ── A·06 refile context — amber card + quiet loading/error rows ── */
+  refileCard: {
+    borderRadius: radii.md, padding: spacing.lg, gap: spacing.xs, marginTop: spacing.xl,
+  },
+  refileHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  refileEyebrow: {
+    fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6,
+    textTransform: 'uppercase', flexShrink: 1,
+  },
+  refileReason: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  refileMeta: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  refileSkeleton: { height: 72, borderRadius: radii.md, marginTop: spacing.xl },
+  refileErrorRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xl,
+  },
+  refileErrorText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  refileRetry: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
 
   /* Steppers */
   stepperBlock: { marginBottom: spacing.lg },

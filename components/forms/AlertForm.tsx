@@ -1,8 +1,14 @@
 // =====================================================
-// HEALTH ALERT FORM — Send Urgent Health Alerts
-// Prakash design: flat header, labels-above 52dp inputs,
-// 44dp selection chips, inline errors + scroll-to-first-error,
-// One-Hand Action Bar. Zero hex literals.
+// HEALTH ALERT FORM — Bharosa directive-first composer.
+// Move 02: directive first, disease second. The composer
+// IS the poster — compose on top ("What should people
+// DO?"), a live B·03 poster preview below that updates
+// as they type. Taxonomy lives in a collapsed DETAILS
+// section because a scared family needs what to do, not
+// epidemiology. Submission machinery is unchanged:
+// getSession-first auth, tolerant NetInfo check, offline
+// syncQueue, role-honest approval copy, same payload
+// columns (metadata gains directive_hindi).
 // =====================================================
 import React, { useRef, useState } from 'react';
 import {
@@ -16,9 +22,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
-import { useTheme, getSeverityColor, Theme } from '../../lib/ThemeContext';
+import { useTheme, getSeverityColor, Theme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { SubmissionModal } from '../shared';
+import { SubmissionModal, StatusBadge } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { Profile } from '../../types';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
@@ -72,7 +78,41 @@ const FieldError: React.FC<{ message?: string; colors: Theme }> = ({ message, co
   );
 };
 
-const FIELD_ORDER = ['title', 'description', 'location'];
+/**
+ * B·03 "DO THESE THREE THINGS" — mirrors the parser in
+ * AllAlertsScreen so the preview shows exactly what field
+ * workers will see: split on newlines & semicolons, strip
+ * manual numbering, keep the first 3, dedupe.
+ */
+const parseDirectiveSteps = (
+  ...sources: (string | null | undefined)[]
+): string[] => {
+  const steps: string[] = [];
+  for (const source of sources) {
+    if (typeof source !== 'string' || !source.trim()) continue;
+    const parts = source
+      .split(/[\n;]+/)
+      .map((s) => s.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, '').trim())
+      .filter(Boolean);
+    if (parts.length === 0) parts.push(source.trim());
+    for (const p of parts) {
+      if (!steps.some((s) => s.toLowerCase() === p.toLowerCase())) steps.push(p);
+      if (steps.length >= 3) return steps;
+    }
+  }
+  return steps;
+};
+
+const stepsHeading = (n: number): string =>
+  n >= 3 ? 'DO THESE THREE THINGS' : n === 2 ? 'DO THESE TWO THINGS' : 'DO THIS ONE THING';
+
+const FIELD_ORDER = ['title', 'description', 'steps', 'location'];
+
+const DO_STEP_PLACEHOLDERS = [
+  'Boil water for 1 minute, or use chlorine tablets',
+  'Wash hands with soap before eating',
+  'Loose motion + vomiting → clinic same day',
+];
 
 export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profile }) => {
   const { colors, isDark, reduceMotion } = useTheme();
@@ -82,6 +122,7 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
   const [modalVisible, setModalVisible] = useState(false);
   const [modalType, setModalType] = useState<'success' | 'error'>('success');
   const [modalMessage, setModalMessage] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const sectionYRef = useRef<Record<string, number>>({});
@@ -93,9 +134,15 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     alert_type: 'disease_outbreak',
     urgency_level: 'high',
 
-    // Alert Details
+    // The directive — the loudest sentence in the system
     title: '',
+    directive_hindi: '',
     description: '',
+
+    // THREE THINGS TO DO → joined with newlines into precautionary_measures
+    do_step_1: '',
+    do_step_2: '',
+    do_step_3: '',
 
     // Affected Area
     location_name: '',
@@ -103,24 +150,20 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     state: '',
     affected_population: '',
 
-    // Health Details
+    // Health Details (taxonomy — comes last)
     disease_or_issue: '',
     custom_disease: '',
     symptoms_to_watch: '',
     cases_reported: '',
     deaths_reported: '',
 
-    // Precautions & Actions
+    // Staff-facing actions (also joins the poster do-list when short)
     immediate_actions: '',
-    precautionary_measures: '',
 
     // Contact Info
     contact_person: '',
     contact_phone: '',
     emergency_helpline: '',
-
-    // Notification scope: 'officials' = district officials/clinics/ASHA workers, 'all' = all users
-    notify_scope: 'officials' as 'officials' | 'all',
   });
 
   const alertTypes = [
@@ -144,6 +187,12 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     'Cholera', 'Typhoid', 'Malaria', 'Dengue', 'Chikungunya',
     'COVID-19', 'Influenza', 'Hepatitis', 'Diarrhea', 'Gastroenteritis', 'Other',
   ];
+
+  // THREE THINGS TO DO, joined for precautionary_measures (payload-identical column)
+  const joinedPrecautions = [formData.do_step_1, formData.do_step_2, formData.do_step_3]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join('\n');
 
   // ── Layout tracking for scroll-to-first-error ─────────────────────────────
   const onSectionLayout = (section: string) => (e: LayoutChangeEvent) => {
@@ -171,6 +220,14 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     });
   };
 
+  const setDoStep = (key: 'do_step_1' | 'do_step_2' | 'do_step_3', text: string) => {
+    const next = { ...formData, [key]: text };
+    setFormData(next);
+    if ([next.do_step_1, next.do_step_2, next.do_step_3].some((s) => s.trim())) {
+      clearError('steps');
+    }
+  };
+
   const getInputStyle = (fieldName: string) => [
     styles.input,
     {
@@ -189,8 +246,9 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
   const validateForm = (): Record<string, string> => {
     const errs: Record<string, string> = {};
-    if (!formData.title.trim()) errs.title = 'Enter an alert title';
-    if (!formData.description.trim()) errs.description = 'Describe the health emergency';
+    if (!formData.title.trim()) errs.title = 'Write the directive — what should people do?';
+    if (!formData.description.trim()) errs.description = 'Describe what is happening';
+    if (!joinedPrecautions) errs.steps = 'Add at least one thing people should do';
     if (!formData.location_name.trim() || !formData.district.trim() || !formData.state) {
       errs.location = 'Enter location, district and state';
     }
@@ -247,16 +305,18 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         symptoms_to_watch: formData.symptoms_to_watch,
         cases_reported: parseInt(formData.cases_reported) || 0,
         immediate_actions: formData.immediate_actions,
-        precautionary_measures: formData.precautionary_measures,
+        precautionary_measures: joinedPrecautions,
         contact_person: formData.contact_person,
         contact_phone: formData.contact_phone,
         status: 'active',
         // health_alerts has no deaths_reported / emergency_helpline columns in the
         // live schema — persist them in the metadata jsonb column instead of
-        // silently dropping what the worker typed.
+        // silently dropping what the worker typed. directive_hindi is the
+        // Devanagari poster headline read by AllAlertsScreen's B·03 poster.
         metadata: {
           deaths_reported: parseInt(formData.deaths_reported) || 0,
           emergency_helpline: formData.emergency_helpline.trim() || null,
+          directive_hindi: formData.directive_hindi.trim() || null,
         },
       };
 
@@ -317,11 +377,24 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     }
   };
 
-  const selectedAlertType = alertTypes.find(a => a.value === formData.alert_type);
   const selectedUrgency = urgencyLevels.find(u => u.value === formData.urgency_level);
   const urgencyColorFor = (value: string) => getSeverityColor(value, colors);
   const headerText = isDark ? colors.text : colors.textInverse;
   const isAsha = profile?.role === 'asha_worker';
+
+  const showDiseaseFields =
+    formData.alert_type === 'disease_outbreak' || formData.alert_type === 'food_poisoning';
+
+  // ── Live poster derivations — same inputs the B·03 renderer reads ─────────
+  const previewHindi = formData.directive_hindi.trim();
+  const previewTitle = formData.title.trim();
+  const previewDescription = formData.description.trim();
+  const previewSteps = parseDirectiveSteps(joinedPrecautions, formData.immediate_actions);
+  const previewPhone = formData.contact_phone.trim();
+  const previewPerson = formData.contact_person.trim();
+  const previewDisease = (
+    formData.disease_or_issue === 'Other' ? formData.custom_disease : formData.disease_or_issue
+  ).trim();
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -347,7 +420,7 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         </Pressable>
         <Text style={[styles.headerTitle, { color: headerText }]}>Send Health Alert</Text>
         <Text style={[styles.headerSubtitle, { color: headerText }]}>
-          Notify authorities about health emergencies
+          The alert is a poster — write what people should do
         </Text>
       </View>
 
@@ -357,28 +430,136 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
-        {/* Alert Type */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Alert Type</Text>
-          <Text style={[styles.sectionDesc, { color: colors.textSecondary }]}>
-            What type of health emergency?
+        {/* ═══ COMPOSE — directive first, disease second (Move 02) ═══ */}
+
+        {/* What should people DO? */}
+        <View style={styles.section} onLayout={onSectionLayout('directive')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+            What should people do?
           </Text>
-          <View style={styles.chipWrap}>
-            {alertTypes.map((type) => (
-              <SelectChip
-                key={type.value}
-                label={type.label}
-                selected={formData.alert_type === type.value}
-                onPress={() => setFormData({ ...formData, alert_type: type.value })}
-                colors={colors}
-              />
-            ))}
+
+          <View onLayout={onFieldLayout('directive', 'title')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Directive — English *</Text>
+            <Text style={[styles.help, { color: colors.textSecondary }]}>
+              Verbs a 10-year-old can relay — "Boil water before drinking"
+            </Text>
+            <TextInput
+              style={getInputStyle('title')}
+              placeholder="Boil water before drinking"
+              placeholderTextColor={colors.inputPlaceholderColor}
+              value={formData.title}
+              onChangeText={(text) => { setFormData({ ...formData, title: text }); clearError('title'); }}
+              onFocus={() => setFocusedField('title')}
+              onBlur={() => setFocusedField(null)}
+            />
+            <FieldError message={errors.title} colors={colors} />
+          </View>
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Directive — Hindi · optional</Text>
+          <Text style={[styles.help, { color: colors.textSecondary }]}>
+            Devanagari first — the audience is the public
+          </Text>
+          <TextInput
+            style={[...getInputStyle('directive_hindi'), styles.hindiInput]}
+            placeholder="पानी उबालकर पिएँ"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.directive_hindi}
+            onChangeText={(text) => setFormData({ ...formData, directive_hindi: text })}
+            onFocus={() => setFocusedField('directive_hindi')}
+            onBlur={() => setFocusedField(null)}
+          />
+        </View>
+
+        {/* What is happening */}
+        <View style={styles.section} onLayout={onSectionLayout('happening')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+            What is happening
+          </Text>
+          <View onLayout={onFieldLayout('happening', 'description')}>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Description *</Text>
+            <TextInput
+              style={getTextAreaStyle('description')}
+              placeholder="One or two plain sentences — what, where, since when"
+              placeholderTextColor={colors.inputPlaceholderColor}
+              value={formData.description}
+              onChangeText={(text) => { setFormData({ ...formData, description: text }); clearError('description'); }}
+              onFocus={() => setFocusedField('description')}
+              onBlur={() => setFocusedField(null)}
+              multiline
+              numberOfLines={4}
+            />
+            <FieldError message={errors.description} colors={colors} />
           </View>
         </View>
 
-        {/* Urgency Level */}
+        {/* Three things to do */}
+        <View style={styles.section} onLayout={onSectionLayout('steps')}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+            Three things to do
+          </Text>
+          <Text style={[styles.sectionDesc, { color: colors.textSecondary }]}>
+            Short, sayable steps — at least one. They become the poster's numbered list.
+          </Text>
+          <View onLayout={onFieldLayout('steps', 'steps')}>
+            {(['do_step_1', 'do_step_2', 'do_step_3'] as const).map((key, i) => (
+              <View key={key} style={styles.stepInputRow}>
+                <View style={[styles.stepInputNum, { borderColor: colors.inputBorder }]}>
+                  <Text style={[styles.stepInputNumText, { color: colors.textSecondary }]}>
+                    {i + 1}
+                  </Text>
+                </View>
+                <TextInput
+                  style={[...(errors.steps ? getInputStyle('steps') : getInputStyle(key)), styles.stepInput]}
+                  placeholder={DO_STEP_PLACEHOLDERS[i]}
+                  placeholderTextColor={colors.inputPlaceholderColor}
+                  value={formData[key]}
+                  onChangeText={(text) => setDoStep(key, text)}
+                  onFocus={() => setFocusedField(key)}
+                  onBlur={() => setFocusedField(null)}
+                />
+              </View>
+            ))}
+            <FieldError message={errors.steps} colors={colors} />
+          </View>
+        </View>
+
+        {/* Helpline & contact */}
         <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Urgency Level</Text>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+            Helpline & contact
+          </Text>
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Helpline Phone</Text>
+          <Text style={[styles.help, { color: colors.textSecondary }]}>
+            Shown big on the poster with a Call button
+          </Text>
+          <TextInput
+            style={getInputStyle('contact_phone')}
+            placeholder="e.g., 104"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.contact_phone}
+            onChangeText={(text) => setFormData({ ...formData, contact_phone: text.replace(/[^0-9]/g, '') })}
+            onFocus={() => setFocusedField('contact_phone')}
+            onBlur={() => setFocusedField(null)}
+            keyboardType="phone-pad"
+            maxLength={10}
+          />
+
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Contact Person</Text>
+          <TextInput
+            style={getInputStyle('contact_person')}
+            placeholder="Your name"
+            placeholderTextColor={colors.inputPlaceholderColor}
+            value={formData.contact_person}
+            onChangeText={(text) => setFormData({ ...formData, contact_person: text })}
+            onFocus={() => setFocusedField('contact_person')}
+            onBlur={() => setFocusedField(null)}
+          />
+        </View>
+
+        {/* How urgent? — severity chips, shape-coded */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>How urgent?</Text>
           <View style={styles.chipWrap}>
             {urgencyLevels.map((level) => (
               <SelectChip
@@ -399,90 +580,7 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
           )}
         </View>
 
-        {/* Alert Details */}
-        <View style={styles.section} onLayout={onSectionLayout('details')}>
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Alert Details</Text>
-
-          <View onLayout={onFieldLayout('details', 'title')}>
-            <Text style={[styles.label, { color: colors.textSecondary }]}>Alert Title *</Text>
-            <TextInput
-              style={getInputStyle('title')}
-              placeholder="Brief title for the alert"
-              placeholderTextColor={colors.inputPlaceholderColor}
-              value={formData.title}
-              onChangeText={(text) => { setFormData({ ...formData, title: text }); clearError('title'); }}
-              onFocus={() => setFocusedField('title')}
-              onBlur={() => setFocusedField(null)}
-            />
-            <FieldError message={errors.title} colors={colors} />
-          </View>
-
-          <View onLayout={onFieldLayout('details', 'description')}>
-            <Text style={[styles.label, { color: colors.textSecondary }]}>Description *</Text>
-            <TextInput
-              style={getTextAreaStyle('description')}
-              placeholder="Describe the health emergency in detail..."
-              placeholderTextColor={colors.inputPlaceholderColor}
-              value={formData.description}
-              onChangeText={(text) => { setFormData({ ...formData, description: text }); clearError('description'); }}
-              onFocus={() => setFocusedField('description')}
-              onBlur={() => setFocusedField(null)}
-              multiline
-              numberOfLines={4}
-            />
-            <FieldError message={errors.description} colors={colors} />
-          </View>
-
-          {/* Quick Disease Selection */}
-          {(formData.alert_type === 'disease_outbreak' || formData.alert_type === 'food_poisoning') && (
-            <>
-              <Text style={[styles.label, { color: colors.textSecondary }]}>Disease / Issue</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.chipScrollContent}
-              >
-                {commonDiseases.map((disease) => (
-                  <SelectChip
-                    key={disease}
-                    label={disease}
-                    selected={formData.disease_or_issue === disease}
-                    onPress={() => setFormData({ ...formData, disease_or_issue: disease })}
-                    colors={colors}
-                  />
-                ))}
-              </ScrollView>
-
-              {formData.disease_or_issue === 'Other' && (
-                <>
-                  <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Disease / Issue</Text>
-                  <TextInput
-                    style={getInputStyle('custom_disease')}
-                    placeholder="Disease or issue name"
-                    placeholderTextColor={colors.inputPlaceholderColor}
-                    value={formData.custom_disease}
-                    onChangeText={(text) => setFormData({ ...formData, custom_disease: text })}
-                    onFocus={() => setFocusedField('custom_disease')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </>
-              )}
-
-              <Text style={[styles.label, { color: colors.textSecondary }]}>Symptoms to Watch</Text>
-              <TextInput
-                style={getInputStyle('symptoms')}
-                placeholder="e.g., fever, vomiting, diarrhea..."
-                placeholderTextColor={colors.inputPlaceholderColor}
-                value={formData.symptoms_to_watch}
-                onChangeText={(text) => setFormData({ ...formData, symptoms_to_watch: text })}
-                onFocus={() => setFocusedField('symptoms')}
-                onBlur={() => setFocusedField(null)}
-              />
-            </>
-          )}
-        </View>
-
-        {/* Location & Impact */}
+        {/* Affected area */}
         <View style={styles.section} onLayout={onSectionLayout('location')}>
           <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Affected Area</Text>
 
@@ -509,218 +607,283 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
             />
             <FieldError message={errors.location} colors={colors} />
           </View>
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Population Affected</Text>
-          <TextInput
-            style={getInputStyle('population')}
-            placeholder="Approx. number"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.affected_population}
-            onChangeText={(text) => setFormData({ ...formData, affected_population: text.replace(/[^0-9]/g, '') })}
-            onFocus={() => setFocusedField('population')}
-            onBlur={() => setFocusedField(null)}
-            keyboardType="numeric"
-          />
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Cases Reported</Text>
-          <TextInput
-            style={getInputStyle('cases')}
-            placeholder="Number of cases"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.cases_reported}
-            onChangeText={(text) => setFormData({ ...formData, cases_reported: text.replace(/[^0-9]/g, '') })}
-            onFocus={() => setFocusedField('cases')}
-            onBlur={() => setFocusedField(null)}
-            keyboardType="numeric"
-          />
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Deaths (If Any)</Text>
-          <TextInput
-            style={getInputStyle('deaths')}
-            placeholder="0"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.deaths_reported}
-            onChangeText={(text) => setFormData({ ...formData, deaths_reported: text.replace(/[^0-9]/g, '') })}
-            onFocus={() => setFocusedField('deaths')}
-            onBlur={() => setFocusedField(null)}
-            keyboardType="numeric"
-          />
         </View>
 
-        {/* Actions & Precautions */}
+        {/* DETAILS · optional — taxonomy comes last */}
         <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Actions & Precautions</Text>
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Immediate Actions Recommended</Text>
-          <TextInput
-            style={getTextAreaStyle('actions')}
-            placeholder="What immediate steps should be taken?"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.immediate_actions}
-            onChangeText={(text) => setFormData({ ...formData, immediate_actions: text })}
-            onFocus={() => setFocusedField('actions')}
-            onBlur={() => setFocusedField(null)}
-            multiline
-            numberOfLines={3}
-          />
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Precautionary Measures for Public</Text>
-          <TextInput
-            style={getTextAreaStyle('precautions')}
-            placeholder="What precautions should people take?"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.precautionary_measures}
-            onChangeText={(text) => setFormData({ ...formData, precautionary_measures: text })}
-            onFocus={() => setFocusedField('precautions')}
-            onBlur={() => setFocusedField(null)}
-            multiline
-            numberOfLines={3}
-          />
-        </View>
-
-        {/* Contact Information */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Contact Information</Text>
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Contact Person</Text>
-          <TextInput
-            style={getInputStyle('contact_person')}
-            placeholder="Your name"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.contact_person}
-            onChangeText={(text) => setFormData({ ...formData, contact_person: text })}
-            onFocus={() => setFocusedField('contact_person')}
-            onBlur={() => setFocusedField(null)}
-          />
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Phone Number</Text>
-          <TextInput
-            style={getInputStyle('contact_phone')}
-            placeholder="Contact number"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.contact_phone}
-            onChangeText={(text) => setFormData({ ...formData, contact_phone: text.replace(/[^0-9]/g, '') })}
-            onFocus={() => setFocusedField('contact_phone')}
-            onBlur={() => setFocusedField(null)}
-            keyboardType="phone-pad"
-            maxLength={10}
-          />
-
-          <Text style={[styles.label, { color: colors.textSecondary }]}>Emergency Helpline</Text>
-          <TextInput
-            style={getInputStyle('emergency_helpline')}
-            placeholder="e.g., 108"
-            placeholderTextColor={colors.inputPlaceholderColor}
-            value={formData.emergency_helpline}
-            onChangeText={(text) => setFormData({ ...formData, emergency_helpline: text.replace(/[^0-9]/g, '') })}
-            onFocus={() => setFocusedField('emergency_helpline')}
-            onBlur={() => setFocusedField(null)}
-            keyboardType="phone-pad"
-            maxLength={15}
-          />
-        </View>
-
-        {/* Notification Options */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Notification Options</Text>
-          <Text style={[styles.sectionDesc, { color: colors.textSecondary }]}>
-            Who should receive push notifications for this alert?
-          </Text>
-
-          {/* Option 1 — officials */}
           <Pressable
-            onPress={() => setFormData({ ...formData, notify_scope: 'officials' })}
+            onPress={() => setDetailsOpen((o) => !o)}
             accessibilityRole="button"
-            accessibilityState={{ selected: formData.notify_scope === 'officials' }}
+            accessibilityState={{ expanded: detailsOpen }}
+            accessibilityLabel="Details, optional — disease, counts, symptoms"
             style={({ pressed }) => [
-              styles.notifyCard,
+              styles.detailsToggle,
               {
                 backgroundColor: pressed ? colors.cardHover : colors.card,
-                borderColor: formData.notify_scope === 'officials' ? colors.primary : colors.border,
-                borderWidth: formData.notify_scope === 'officials' ? 2 : 1,
+                borderColor: colors.border,
               },
             ]}
           >
-            <View style={[styles.notifyIconWrap, { backgroundColor: colors.primary + '14' }]}>
-              <Ionicons name="shield-checkmark-outline" size={24} color={colors.primary} />
-            </View>
-            <View style={styles.notifyBody}>
-              <Text style={[styles.notifyTitle, { color: colors.text }]}>
-                District Officials, Clinics & ASHA Workers
-              </Text>
-              <Text style={[styles.notifyDesc, { color: colors.textSecondary }]}>
-                Targeted notification to health professionals in the district
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.radioOuter,
-                { borderColor: formData.notify_scope === 'officials' ? colors.primary : colors.border },
-              ]}
-            >
-              {formData.notify_scope === 'officials' && (
-                <View style={[styles.radioInner, { backgroundColor: colors.primary }]} />
-              )}
-            </View>
+            <Text style={[styles.sectionLabel, styles.detailsToggleLabel, { color: colors.textSecondary }]}>
+              Details · optional
+            </Text>
+            <Ionicons
+              name={detailsOpen ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={colors.textSecondary}
+            />
           </Pressable>
+          <Text style={[styles.sectionDesc, styles.detailsDesc, { color: colors.textSecondary }]}>
+            Disease name, counts, symptoms — the poster leads with the directive.
+          </Text>
 
-          {/* Option 2 — everyone */}
-          <Pressable
-            onPress={() => setFormData({ ...formData, notify_scope: 'all' })}
-            accessibilityRole="button"
-            accessibilityState={{ selected: formData.notify_scope === 'all' }}
-            style={({ pressed }) => [
-              styles.notifyCard,
-              styles.notifyCardSpacing,
-              {
-                backgroundColor: pressed ? colors.cardHover : colors.card,
-                borderColor: formData.notify_scope === 'all' ? colors.danger : colors.border,
-                borderWidth: formData.notify_scope === 'all' ? 2 : 1,
-              },
-            ]}
-          >
-            <View style={[styles.notifyIconWrap, { backgroundColor: colors.danger + '14' }]}>
-              <Ionicons name="megaphone-outline" size={24} color={colors.danger} />
-            </View>
-            <View style={styles.notifyBody}>
-              <Text style={[styles.notifyTitle, { color: colors.text }]}>All App Users</Text>
-              <Text style={[styles.notifyDesc, { color: colors.textSecondary }]}>
-                Broadcast to everyone on the HealthDrop platform
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.radioOuter,
-                { borderColor: formData.notify_scope === 'all' ? colors.danger : colors.border },
-              ]}
-            >
-              {formData.notify_scope === 'all' && (
-                <View style={[styles.radioInner, { backgroundColor: colors.danger }]} />
+          {detailsOpen && (
+            <View>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Alert Type</Text>
+              <View style={styles.chipWrap}>
+                {alertTypes.map((type) => (
+                  <SelectChip
+                    key={type.value}
+                    label={type.label}
+                    selected={formData.alert_type === type.value}
+                    onPress={() => setFormData({ ...formData, alert_type: type.value })}
+                    colors={colors}
+                  />
+                ))}
+              </View>
+
+              {showDiseaseFields && (
+                <>
+                  <Text style={[styles.label, { color: colors.textSecondary }]}>Disease / Issue</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.chipScrollContent}
+                  >
+                    {commonDiseases.map((disease) => (
+                      <SelectChip
+                        key={disease}
+                        label={disease}
+                        selected={formData.disease_or_issue === disease}
+                        onPress={() => setFormData({ ...formData, disease_or_issue: disease })}
+                        colors={colors}
+                      />
+                    ))}
+                  </ScrollView>
+
+                  {formData.disease_or_issue === 'Other' && (
+                    <>
+                      <Text style={[styles.label, { color: colors.textSecondary }]}>Specify Disease / Issue</Text>
+                      <TextInput
+                        style={getInputStyle('custom_disease')}
+                        placeholder="Disease or issue name"
+                        placeholderTextColor={colors.inputPlaceholderColor}
+                        value={formData.custom_disease}
+                        onChangeText={(text) => setFormData({ ...formData, custom_disease: text })}
+                        onFocus={() => setFocusedField('custom_disease')}
+                        onBlur={() => setFocusedField(null)}
+                      />
+                    </>
+                  )}
+
+                  <Text style={[styles.label, { color: colors.textSecondary }]}>Symptoms to Watch</Text>
+                  <TextInput
+                    style={getInputStyle('symptoms')}
+                    placeholder="e.g., fever, vomiting, diarrhea..."
+                    placeholderTextColor={colors.inputPlaceholderColor}
+                    value={formData.symptoms_to_watch}
+                    onChangeText={(text) => setFormData({ ...formData, symptoms_to_watch: text })}
+                    onFocus={() => setFocusedField('symptoms')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </>
               )}
+
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Cases Reported</Text>
+              <TextInput
+                style={getInputStyle('cases')}
+                placeholder="Number of cases"
+                placeholderTextColor={colors.inputPlaceholderColor}
+                value={formData.cases_reported}
+                onChangeText={(text) => setFormData({ ...formData, cases_reported: text.replace(/[^0-9]/g, '') })}
+                onFocus={() => setFocusedField('cases')}
+                onBlur={() => setFocusedField(null)}
+                keyboardType="numeric"
+              />
+
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Population Affected</Text>
+              <TextInput
+                style={getInputStyle('population')}
+                placeholder="Approx. number"
+                placeholderTextColor={colors.inputPlaceholderColor}
+                value={formData.affected_population}
+                onChangeText={(text) => setFormData({ ...formData, affected_population: text.replace(/[^0-9]/g, '') })}
+                onFocus={() => setFocusedField('population')}
+                onBlur={() => setFocusedField(null)}
+                keyboardType="numeric"
+              />
+
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Deaths (If Any)</Text>
+              <TextInput
+                style={getInputStyle('deaths')}
+                placeholder="0"
+                placeholderTextColor={colors.inputPlaceholderColor}
+                value={formData.deaths_reported}
+                onChangeText={(text) => setFormData({ ...formData, deaths_reported: text.replace(/[^0-9]/g, '') })}
+                onFocus={() => setFocusedField('deaths')}
+                onBlur={() => setFocusedField(null)}
+                keyboardType="numeric"
+              />
+
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Immediate Actions Recommended</Text>
+              <Text style={[styles.help, { color: colors.textSecondary }]}>
+                For field staff — short lines also join the poster's do-list
+              </Text>
+              <TextInput
+                style={getTextAreaStyle('actions')}
+                placeholder="What immediate steps should be taken?"
+                placeholderTextColor={colors.inputPlaceholderColor}
+                value={formData.immediate_actions}
+                onChangeText={(text) => setFormData({ ...formData, immediate_actions: text })}
+                onFocus={() => setFocusedField('actions')}
+                onBlur={() => setFocusedField(null)}
+                multiline
+                numberOfLines={3}
+              />
+
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Emergency Helpline</Text>
+              <TextInput
+                style={getInputStyle('emergency_helpline')}
+                placeholder="e.g., 108"
+                placeholderTextColor={colors.inputPlaceholderColor}
+                value={formData.emergency_helpline}
+                onChangeText={(text) => setFormData({ ...formData, emergency_helpline: text.replace(/[^0-9]/g, '') })}
+                onFocus={() => setFocusedField('emergency_helpline')}
+                onBlur={() => setFocusedField(null)}
+                keyboardType="phone-pad"
+                maxLength={15}
+              />
             </View>
-          </Pressable>
+          )}
         </View>
 
-        {/* Summary Preview */}
-        <View
-          style={[
-            styles.summaryCard,
-            {
-              backgroundColor: colors.card,
-              borderColor: colors.border,
-              borderLeftColor: urgencyColorFor(formData.urgency_level),
-            },
-          ]}
-        >
-          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Alert Preview</Text>
-          <Text style={[styles.summaryText, { color: colors.text }]}>
-            Type: {selectedAlertType?.label || '-'}{'\n'}
-            Urgency: {selectedUrgency?.label || '-'}{'\n'}
-            Title: {formData.title || '-'}{'\n'}
-            Location: {formData.location_name}, {formData.district}, {formData.state}
-            {formData.cases_reported ? `\nCases: ${formData.cases_reported}` : ''}
-            {formData.deaths_reported ? `\nDeaths: ${formData.deaths_reported}` : ''}
+        {/* ═══ LIVE POSTER PREVIEW — the composer IS the poster (B·03) ═══ */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+            Live poster preview
           </Text>
+
+          {/* Severity pill row — word + shape, never color alone */}
+          <View style={styles.previewPillRow}>
+            <StatusBadge status={formData.urgency_level} type="severity" size="medium" />
+            <Text style={[styles.previewTypeText, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+              {formData.alert_type.replace(/_/g, ' ').toUpperCase()}
+            </Text>
+          </View>
+
+          {/* THE POSTER — full-strength 2px ink border, same anatomy the
+              field worker sees in AllAlertsScreen's B·03 detail */}
+          <View style={[styles.poster, { borderColor: colors.text, backgroundColor: colors.card }]}>
+            {previewHindi ? (
+              <>
+                <Text
+                  style={[styles.posterDirective, styles.posterDirectiveHindi, { color: colors.text }]}
+                  maxFontSizeMultiplier={1.3}
+                >
+                  {previewHindi}
+                </Text>
+                <Text
+                  style={[
+                    styles.posterEnglish,
+                    { color: previewTitle ? colors.text : colors.textTertiary },
+                  ]}
+                  maxFontSizeMultiplier={1.3}
+                >
+                  {previewTitle || 'English directive appears here'}
+                </Text>
+              </>
+            ) : (
+              <Text
+                style={[
+                  styles.posterDirective,
+                  styles.posterDirectiveLatin,
+                  { color: previewTitle ? colors.text : colors.textTertiary },
+                ]}
+                maxFontSizeMultiplier={1.3}
+              >
+                {previewTitle || 'Your directive appears here'}
+              </Text>
+            )}
+
+            <Text
+              style={[
+                styles.posterBody,
+                { color: previewDescription ? colors.textSecondary : colors.textTertiary },
+              ]}
+            >
+              {previewDescription || 'What is happening appears here.'}
+            </Text>
+
+            <View style={styles.stepsBlock}>
+              <Text
+                style={[
+                  styles.stepsHeading,
+                  { color: previewSteps.length > 0 ? colors.text : colors.textTertiary },
+                ]}
+                maxFontSizeMultiplier={1.3}
+              >
+                {previewSteps.length > 0 ? stepsHeading(previewSteps.length) : 'DO THESE THREE THINGS'}
+              </Text>
+              {previewSteps.length > 0 ? (
+                previewSteps.map((step, i) => (
+                  <View key={i} style={styles.stepRow}>
+                    <View style={[styles.stepNum, { borderColor: colors.text }]}>
+                      <Text style={[styles.stepNumText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                        {i + 1}
+                      </Text>
+                    </View>
+                    <Text style={[styles.stepText, { color: colors.text }]}>{step}</Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={[styles.posterBody, styles.stepsPlaceholder, { color: colors.textTertiary }]}>
+                  Your numbered steps appear here.
+                </Text>
+              )}
+            </View>
+
+            <View style={[styles.helplineRow, { borderTopColor: colors.borderStrong }]}>
+              {previewPhone ? (
+                <>
+                  <View style={styles.helplineBody}>
+                    <Text style={[styles.helplinePhone, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {previewPhone}
+                    </Text>
+                    <Text style={[styles.helplineMeta, { color: colors.textSecondary }]} numberOfLines={1}>
+                      {previewPerson ? `${previewPerson} · helpline` : 'health helpline'}
+                    </Text>
+                  </View>
+                  {/* Static in the preview — the real poster's Call button */}
+                  <View style={[styles.callBtn, { backgroundColor: colors.primary }]}>
+                    <Ionicons name="call" size={16} color={colors.onPrimary} />
+                    <Text style={[styles.callBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                      Call
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <Text style={[styles.helplineMeta, { color: colors.textTertiary }]}>
+                  Helpline number appears here.
+                </Text>
+              )}
+            </View>
+
+            {/* Provenance — disease taxonomy is literally the last line */}
+            <Text style={[styles.posterProvenance, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+              Preview — how field workers will see it
+              {previewDisease ? ` · ${previewDisease}` : ''}
+            </Text>
+          </View>
         </View>
       </ScrollView>
 
@@ -770,57 +933,101 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 const styles = StyleSheet.create({
   container: { flex: 1 },
   // Header — flat band, no radius, no gradient
-  header: { paddingTop: 50, paddingBottom: 16, paddingHorizontal: 16 },
-  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: 12 },
+  header: { paddingTop: 50, paddingBottom: spacing.lg, paddingHorizontal: spacing.lg },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: spacing.md },
   backText: { fontSize: 16, fontWeight: '500' },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSubtitle: { fontSize: 15, lineHeight: 22, fontWeight: '500', marginTop: 2 },
   content: { flex: 1 },
-  contentContainer: { paddingHorizontal: 16, paddingBottom: 24 },
-  section: { marginTop: 24 },
+  contentContainer: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  section: { marginTop: spacing.xl },
   sectionLabel: {
     fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6,
-    textTransform: 'uppercase', marginBottom: 12,
+    textTransform: 'uppercase', marginBottom: spacing.md,
   },
-  sectionDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: 12, marginTop: -4 },
+  sectionDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: spacing.md, marginTop: -4 },
   label: {
     fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.5,
-    textTransform: 'uppercase', marginBottom: 6, marginTop: 16,
+    textTransform: 'uppercase', marginBottom: 6, marginTop: spacing.lg,
   },
-  input: { minHeight: 52, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15 },
+  // Field help — sits between the label and its input
+  help: { fontSize: 13, lineHeight: 18, fontWeight: '400', marginBottom: 6, marginTop: -2 },
+  input: { minHeight: 52, borderRadius: radii.md, paddingHorizontal: spacing.lg, paddingVertical: 14, fontSize: 15 },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
+  // Devanagari-friendly — bigger glyphs, extra vertical headroom for matras
+  hindiInput: { minHeight: 56, fontSize: 18 },
+  // THREE THINGS TO DO — numbered short inputs
+  stepInputRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md },
+  stepInputNum: {
+    width: 28, height: 28, borderRadius: 14, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  stepInputNumText: { fontSize: 12, lineHeight: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  stepInput: { flex: 1 },
   // Selection chips — 44dp, pill, solid fill + checkmark when selected
-  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chipScrollContent: { gap: 8, paddingVertical: 4 },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  chipScrollContent: { gap: spacing.sm, paddingVertical: spacing.xs },
   chip: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    minHeight: 44, borderRadius: 999, borderWidth: 1.5, paddingHorizontal: 16, paddingVertical: 8,
+    minHeight: 44, borderRadius: radii.pill, borderWidth: 1.5, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
   },
   chipLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
-  hintText: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 8 },
+  hintText: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: spacing.sm },
   // Inline field errors
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
-  // Notification radio cards
-  notifyCard: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, gap: 12 },
-  notifyCardSpacing: { marginTop: 12 },
-  notifyIconWrap: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  notifyBody: { flex: 1 },
-  notifyTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', marginBottom: 2 },
-  notifyDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
-  radioOuter: { width: 22, height: 22, borderRadius: 999, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  radioInner: { width: 12, height: 12, borderRadius: 999 },
-  // Summary preview — card with 3px severity left edge
-  summaryCard: { padding: 16, borderRadius: 12, borderWidth: 1, borderLeftWidth: 3, marginTop: 24 },
-  summaryText: { fontSize: 15, lineHeight: 22, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  // DETAILS · optional — collapsed disclosure, 48dp target
+  detailsToggle: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    minHeight: 48, borderRadius: radii.md, borderWidth: 1.5,
+    paddingHorizontal: spacing.lg,
+  },
+  detailsToggleLabel: { marginBottom: 0 },
+  detailsDesc: { marginTop: spacing.sm, marginBottom: 0 },
+
+  /* ── LIVE POSTER PREVIEW — mirrors AllAlertsScreen's B·03 styles ── */
+  previewPillRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md, flexWrap: 'wrap' },
+  previewTypeText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6 },
+  poster: { borderWidth: 2, borderRadius: radii.md, padding: spacing.lg },
+  posterDirective: { fontSize: 24, fontWeight: '700', letterSpacing: -0.3 },
+  // Devanagari gets ~1.4× line-height headroom; Latin sits tighter
+  posterDirectiveHindi: { lineHeight: 34 },
+  posterDirectiveLatin: { lineHeight: 30 },
+  posterEnglish: { fontSize: 17, lineHeight: 22, fontWeight: '600', marginTop: spacing.xs },
+  posterBody: { fontSize: 15, lineHeight: 22, fontWeight: '400', marginTop: spacing.md },
+  stepsBlock: { marginTop: spacing.lg },
+  stepsHeading: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: spacing.sm },
+  stepsPlaceholder: { marginTop: 0 },
+  stepRow: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start', marginTop: spacing.sm },
+  stepNum: {
+    width: 24, height: 24, borderRadius: 12, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center', marginTop: 1,
+  },
+  stepNumText: { fontSize: 12, lineHeight: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  stepText: { flex: 1, fontSize: 15, lineHeight: 22, fontWeight: '600' },
+  helplineRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    borderTopWidth: 1, marginTop: spacing.lg, paddingTop: spacing.lg,
+  },
+  helplineBody: { flex: 1 },
+  helplinePhone: { fontSize: 20, lineHeight: 26, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  helplineMeta: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 1 },
+  callBtn: {
+    minHeight: 48, minWidth: 88, borderRadius: radii.md,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, paddingHorizontal: spacing.lg,
+  },
+  callBtnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  posterProvenance: { fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: spacing.lg },
+
   // One-Hand Action Bar
   actionBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1,
   },
-  cancelLink: { minWidth: 88, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  cancelLink: { minWidth: 88, minHeight: 48, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
   cancelText: { fontSize: 16, fontWeight: '700' },
-  submitBtn: { flex: 1, minHeight: 56, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  submitBtn: { flex: 1, minHeight: 56, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
   submitText: { fontSize: 16, fontWeight: '700' },
 });
 

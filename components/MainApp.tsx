@@ -161,6 +161,8 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const [approvalQueueInitialTab, setApprovalQueueInitialTab] = useState<'disease' | 'water' | 'campaigns' | 'alerts'>('disease');
   const [reportFocus, setReportFocus] = useState<{ type: 'disease' | 'water'; id: string } | null>(null);
   const [waterPrefillSourceId, setWaterPrefillSourceId] = useState<string | null>(null);
+  // A·06 — "Fix & refile": prefill a fresh form from a rejected report.
+  const [refileReportId, setRefileReportId] = useState<string | null>(null);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
 
   const availableCreateActions = CREATE_ACTIONS.filter(action =>
@@ -316,6 +318,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const goBackToTabs = () => {
     setShowCreateMenu(false);
     setWaterPrefillSourceId(null);
+    setRefileReportId(null);
     setCurrentScreen('tabs');
   };
 
@@ -323,7 +326,11 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   if (currentScreen === 'new-disease-report') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <DiseaseReportForm onSuccess={goBackToTabs} onCancel={goBackToTabs} />
+        <DiseaseReportForm
+          onSuccess={goBackToTabs}
+          onCancel={goBackToTabs}
+          refillReportId={refileReportId ?? undefined}
+        />
       </SafeAreaView>
     );
   }
@@ -334,6 +341,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
           onSuccess={goBackToTabs}
           onCancel={goBackToTabs}
           prefillSourceId={waterPrefillSourceId ?? undefined}
+          refillReportId={refileReportId ?? undefined}
         />
       </SafeAreaView>
     );
@@ -444,7 +452,21 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   if (currentScreen === 'my-submissions') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <MySubmissionsScreen profile={profile} onBack={goBackToTabs} />
+        <MySubmissionsScreen
+          profile={profile}
+          onBack={goBackToTabs}
+          onRefile={(type, reportId) => {
+            // A·06 — Fix & refile: open a fresh form prefilled from the
+            // rejected report. Files a NEW report; the old row is untouched.
+            const target = type === 'disease' ? 'new-disease-report' : 'new-water-report';
+            if (!canCreateOnRole(profile.role, target)) {
+              console.warn('[MainApp] refile blocked — role cannot create', target);
+              return;
+            }
+            setRefileReportId(reportId);
+            setCurrentScreen(target);
+          }}
+        />
       </SafeAreaView>
     );
   }

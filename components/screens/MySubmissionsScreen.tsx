@@ -1,34 +1,56 @@
 // =====================================================
-// MY SUBMISSIONS SCREEN ("Prakash" design)
+// MY REPORTS — Bharosa A·06 (status & the WHY)
 // Personal timeline of everything the signed-in user
 // has filed — disease reports (reporter_id), water
 // quality reports (reporter_id) and health alerts
-// (created_by) — merged, newest first, with the
-// approval status and, when rejected, the reviewer's
-// reason in plain language. 4-state data region.
-// No resubmit flow yet (roadmap).
+// (created_by) — merged, newest first. Rejection is
+// "Not accepted" + the officer's exact words, name and
+// time — and always a path forward (Fix & refile).
+// Approval pays her back: the stamp, and — when the
+// report fell inside an outbreak window — proof it
+// became protection. 4-state data region.
 // =====================================================
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, Pressable,
   RefreshControl, Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
-import { SkeletonBlock, ErrorCard, EmptyState, SyncPebble, ROLE_ACCENT } from '../dashboards/DashboardShared';
+import { SkeletonBlock, ErrorCard, EmptyState, SyncPebble, VerifiedStamp, ROLE_ACCENT } from '../dashboards/DashboardShared';
 import { Profile } from '../../types';
 
 type SubmissionKind = 'disease' | 'water' | 'alert';
 
 interface SubmissionRow {
   key: string;
+  id: string;
   kind: SubmissionKind;
   title: string;
   meta: string;
   created_at: string;
+  updated_at: string | null;
   approval_status: string | null;
   rejection_reason: string | null;
+  approver_name: string | null;
+  approved_at: string | null;
+}
+
+/** A·06 payback — the approved disease report fed an outbreak window. */
+interface OutbreakPayback {
+  district: string;
+  disease: string;
+  alertSent: boolean;
+}
+
+interface OutbreakLite {
+  disease_name: string | null;
+  district: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  alert_sent: boolean | null;
+  triggered_by_report_id: string | null;
 }
 
 const KIND_LABEL: Record<SubmissionKind, string> = {
@@ -62,8 +84,17 @@ const str = (row: Record<string, unknown>, key: string): string | null => {
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
 };
 
+const approverNameOf = (row: Record<string, unknown>): string | null => {
+  const a = row.approver as { full_name?: unknown } | null | undefined;
+  return a && typeof a.full_name === 'string' && a.full_name.trim().length > 0
+    ? a.full_name.trim()
+    : null;
+};
+
 const buildMeta = (row: Record<string, unknown>): string =>
   [str(row, 'location_name'), str(row, 'district')].filter(Boolean).join(', ');
+
+const norm = (v: string | null | undefined): string => (v ?? '').trim().toLowerCase();
 
 // ─────────────────────────────────────────────────────
 //  Approval pill — dot + UPPERCASE label on *Bg token
@@ -82,7 +113,7 @@ const ApprovalPill: React.FC<{ status: string | null }> = ({ status }) => {
   } else if (s === 'approved') {
     bg = colors.successBg; fg = colors.success; label = 'APPROVED'; spoken = 'approved';
   } else if (s === 'rejected') {
-    bg = colors.dangerBg; fg = colors.danger; label = 'REJECTED'; spoken = 'sent back by the reviewer';
+    bg = colors.dangerBg; fg = colors.danger; label = 'NOT ACCEPTED'; spoken = 'not accepted';
   }
 
   return (
@@ -96,11 +127,21 @@ const ApprovalPill: React.FC<{ status: string | null }> = ({ status }) => {
 // ─────────────────────────────────────────────────────
 //  Screen
 // ─────────────────────────────────────────────────────
-export default function MySubmissionsScreen({ profile, onBack }: { profile: Profile; onBack: () => void }) {
+export default function MySubmissionsScreen({
+  profile,
+  onBack,
+  onRefile,
+}: {
+  profile: Profile;
+  onBack: () => void;
+  /** A·06 — "Fix & refile" on rejected disease/water reports. */
+  onRefile?: (type: 'disease' | 'water', reportId: string) => void;
+}) {
   const { colors, isDark, reduceMotion } = useTheme();
   const accent = ROLE_ACCENT[profile.role] ?? ROLE_ACCENT.volunteer;
 
   const [rows, setRows] = useState<SubmissionRow[]>([]);
+  const [payback, setPayback] = useState<Record<string, OutbreakPayback>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [failedSources, setFailedSources] = useState<string[]>([]);
@@ -116,34 +157,58 @@ export default function MySubmissionsScreen({ profile, onBack }: { profile: Prof
   const load = useCallback(async () => {
     const failures: string[] = [];
     const collected: SubmissionRow[] = [];
+    let paybackNext: Record<string, OutbreakPayback> = {};
+
+    // Approver join (WHY — the officer's name); falls back to plain columns
+    // on older schemas without the approved_by relationship.
+    const queryOwn = async (
+      table: 'disease_reports' | 'water_quality_reports' | 'health_alerts',
+      ownerCol: string,
+    ) => {
+      const withApprover = await supabase.from(table)
+        .select('*, approver:profiles!approved_by(full_name)')
+        .eq(ownerCol, profile.id)
+        .order('created_at', { ascending: false }).limit(100);
+      if (!withApprover.error) return withApprover;
+      return supabase.from(table)
+        .select('*')
+        .eq(ownerCol, profile.id)
+        .order('created_at', { ascending: false }).limit(100);
+    };
 
     try {
       const [diseaseRes, waterRes, alertRes] = await Promise.all([
-        supabase.from('disease_reports').select('*')
-          .eq('reporter_id', profile.id)
-          .order('created_at', { ascending: false }).limit(100),
-        supabase.from('water_quality_reports').select('*')
-          .eq('reporter_id', profile.id)
-          .order('created_at', { ascending: false }).limit(100),
-        supabase.from('health_alerts').select('*')
-          .eq('created_by', profile.id)
-          .order('created_at', { ascending: false }).limit(100),
+        queryOwn('disease_reports', 'reporter_id'),
+        queryOwn('water_quality_reports', 'reporter_id'),
+        queryOwn('health_alerts', 'created_by'),
       ]);
+
+      const pushRow = (
+        r: Record<string, unknown>,
+        kind: SubmissionKind,
+        title: string,
+      ) => {
+        collected.push({
+          key: `${kind}-${String(r.id ?? collected.length)}`,
+          id: String(r.id ?? ''),
+          kind,
+          title,
+          meta: buildMeta(r),
+          created_at: str(r, 'created_at') ?? '',
+          updated_at: str(r, 'updated_at'),
+          approval_status: str(r, 'approval_status'),
+          rejection_reason: str(r, 'rejection_reason'),
+          approver_name: approverNameOf(r),
+          approved_at: str(r, 'approved_at'),
+        });
+      };
 
       if (diseaseRes.error) {
         console.error('[MySubmissions] disease query failed:', diseaseRes.error);
         failures.push('disease reports');
       } else {
         for (const r of (diseaseRes.data ?? []) as Record<string, unknown>[]) {
-          collected.push({
-            key: `disease-${String(r.id ?? collected.length)}`,
-            kind: 'disease',
-            title: str(r, 'disease_name') ?? 'Disease report',
-            meta: buildMeta(r),
-            created_at: str(r, 'created_at') ?? '',
-            approval_status: str(r, 'approval_status'),
-            rejection_reason: str(r, 'rejection_reason'),
-          });
+          pushRow(r, 'disease', str(r, 'disease_name') ?? 'Disease report');
         }
       }
 
@@ -152,15 +217,7 @@ export default function MySubmissionsScreen({ profile, onBack }: { profile: Prof
         failures.push('water reports');
       } else {
         for (const r of (waterRes.data ?? []) as Record<string, unknown>[]) {
-          collected.push({
-            key: `water-${String(r.id ?? collected.length)}`,
-            kind: 'water',
-            title: str(r, 'source_name') ?? 'Water quality report',
-            meta: buildMeta(r),
-            created_at: str(r, 'created_at') ?? '',
-            approval_status: str(r, 'approval_status'),
-            rejection_reason: str(r, 'rejection_reason'),
-          });
+          pushRow(r, 'water', str(r, 'source_name') ?? 'Water quality report');
         }
       }
 
@@ -169,16 +226,58 @@ export default function MySubmissionsScreen({ profile, onBack }: { profile: Prof
         failures.push('health alerts');
       } else {
         for (const r of (alertRes.data ?? []) as Record<string, unknown>[]) {
-          collected.push({
-            key: `alert-${String(r.id ?? collected.length)}`,
-            kind: 'alert',
-            title: str(r, 'title') ?? 'Health alert',
-            meta: buildMeta(r),
-            created_at: str(r, 'created_at') ?? '',
-            approval_status: str(r, 'approval_status'),
-            rejection_reason: str(r, 'rejection_reason'),
-          });
+          pushRow(r, 'alert', str(r, 'title') ?? 'Health alert');
         }
+      }
+
+      // ── A·06 payback — did an approved disease report feed an outbreak
+      // window? One batched outbreaks query, matched client-side; degrades
+      // silently when nothing matches or the table is unreachable.
+      try {
+        if (!diseaseRes.error) {
+          const approvedDisease = ((diseaseRes.data ?? []) as Record<string, unknown>[])
+            .filter((r) => norm(str(r, 'approval_status')) === 'approved');
+          const districts = Array.from(new Set(
+            approvedDisease.map((r) => str(r, 'district')).filter((d): d is string => !!d),
+          ));
+
+          if (approvedDisease.length > 0 && districts.length > 0) {
+            const { data: outbreaks, error: obError } = await supabase
+              .from('outbreaks')
+              .select('disease_name, district, window_start, window_end, alert_sent, triggered_by_report_id')
+              .in('district', districts)
+              .order('created_at', { ascending: false })
+              .limit(100);
+
+            if (!obError && outbreaks) {
+              for (const r of approvedDisease) {
+                const id = String(r.id ?? '');
+                if (!id) continue;
+                const reportTime = new Date(str(r, 'created_at') ?? '').getTime();
+                const match = (outbreaks as OutbreakLite[]).find((o) => {
+                  if (o.triggered_by_report_id && String(o.triggered_by_report_id) === id) return true;
+                  if (norm(o.disease_name) !== norm(str(r, 'disease_name'))) return false;
+                  if (norm(o.district) !== norm(str(r, 'district'))) return false;
+                  if (!Number.isFinite(reportTime)) return false;
+                  const start = o.window_start ? new Date(o.window_start).getTime() : -Infinity;
+                  const end = o.window_end ? new Date(o.window_end).getTime() : Infinity;
+                  return reportTime >= start && reportTime <= end;
+                });
+                if (match) {
+                  paybackNext[id] = {
+                    district: (match.district ?? str(r, 'district') ?? '').trim(),
+                    disease: (match.disease_name ?? str(r, 'disease_name') ?? '').trim(),
+                    alertSent: match.alert_sent === true,
+                  };
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // Payback is a bonus, never a blocker.
+        console.error('[MySubmissions] outbreak payback check failed:', err);
+        paybackNext = {};
       }
     } catch (err) {
       console.error('[MySubmissions] load failed:', err);
@@ -193,6 +292,7 @@ export default function MySubmissionsScreen({ profile, onBack }: { profile: Prof
     });
 
     setRows(collected);
+    setPayback(paybackNext);
     setFailedSources(failures);
     setAsOf(new Date());
     setLoading(false);
@@ -209,7 +309,14 @@ export default function MySubmissionsScreen({ profile, onBack }: { profile: Prof
 
   // ── Row ──
   const renderItem = ({ item }: { item: SubmissionRow }) => {
-    const rejected = (item.approval_status ?? '').toLowerCase() === 'rejected';
+    const statusLower = (item.approval_status ?? '').toLowerCase();
+    const rejected = statusLower === 'rejected';
+    const approved = statusLower === 'approved';
+    const paybackInfo = approved && item.kind === 'disease' ? payback[item.id] : undefined;
+    const canRefile =
+      rejected && !!onRefile && !!item.id && (item.kind === 'disease' || item.kind === 'water');
+    const decidedAt = formatShortDateTime(item.approved_at ?? item.updated_at);
+
     return (
       <View style={[ms.card, { backgroundColor: colors.card, borderColor: colors.border }, !isDark && ms.cardShadow]}>
         <View style={ms.cardRow}>
@@ -229,17 +336,49 @@ export default function MySubmissionsScreen({ profile, onBack }: { profile: Prof
           Submitted {formatShortDateTime(item.created_at) || '—'}
         </Text>
 
+        {/* ── A·06 — the WHY: the officer's exact words, name and time ── */}
         {rejected && (
           <View style={[ms.rejectBox, { backgroundColor: colors.dangerBg }]}>
-            <View style={ms.rejectHead}>
-              <Ionicons name="arrow-undo-outline" size={16} color={colors.danger} />
-              <Text style={[ms.rejectTitle, { color: colors.text }]}>Sent back — needs changes</Text>
-            </View>
-            <Text style={[ms.rejectReason, { color: colors.text }]}>
-              {item.rejection_reason ?? 'No reason was recorded — ask your supervisor for details.'}
+            <Text style={[ms.whyEyebrow, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+              {`WHY — ${(item.approver_name ?? 'Reviewing officer').toUpperCase()}${decidedAt ? ` · ${decidedAt}` : ''}`}
             </Text>
-            <Text style={[ms.rejectFootnote, { color: colors.textSecondary }]}>
-              Fixing and resubmitting from here is coming soon.
+            <Text style={[ms.rejectReason, { color: colors.text }]}>
+              {item.rejection_reason
+                ? `“${item.rejection_reason}”`
+                : 'No reason was recorded — ask your reviewing officer for details.'}
+            </Text>
+            {canRefile && (
+              <Pressable
+                onPress={() => {
+                  if (item.kind === 'disease' || item.kind === 'water') {
+                    onRefile?.(item.kind, item.id);
+                  }
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Fix and refile this ${KIND_LABEL[item.kind].toLowerCase()}`}
+                style={({ pressed }) => [
+                  ms.refileBtn,
+                  { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+                ]}
+              >
+                <Ionicons name="create-outline" size={18} color={colors.onPrimary} />
+                <Text style={[ms.refileBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                  Fix &amp; refile
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
+        {/* ── A·06 — the payback: stamp + proof the report became protection ── */}
+        {paybackInfo && (
+          <View style={ms.paybackBox}>
+            <VerifiedStamp
+              verifierName={item.approver_name ?? 'Reviewing officer'}
+              timestamp={formatShortDateTime(item.approved_at) || undefined}
+            />
+            <Text style={[ms.paybackCaption, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+              {`Counted toward the ${paybackInfo.district} ${paybackInfo.disease.toLowerCase()} outbreak signal${paybackInfo.alertSent ? ' → district alert issued' : ''}`}
             </Text>
           </View>
         )}
@@ -402,10 +541,18 @@ const ms = StyleSheet.create({
   pillDot: { width: 6, height: 6, borderRadius: 3 },
   pillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
 
-  /* Rejection framing — plain language, soft dangerBg (no flood fill) */
-  rejectBox: { borderRadius: radii.sm, padding: spacing.md, marginTop: spacing.md, gap: spacing.xs },
-  rejectHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  rejectTitle: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  /* A·06 WHY card — the officer's exact words, then a path forward */
+  rejectBox: { borderRadius: radii.sm, padding: spacing.md, marginTop: spacing.md, gap: spacing.sm },
+  whyEyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase' },
   rejectReason: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
-  rejectFootnote: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  refileBtn: {
+    minHeight: 48, borderRadius: radii.md,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, marginTop: spacing.xs,
+  },
+  refileBtnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+
+  /* A·06 payback — stamp + "counted toward the signal" caption */
+  paybackBox: { marginTop: spacing.md, gap: spacing.sm, alignItems: 'flex-start' },
+  paybackCaption: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
 });

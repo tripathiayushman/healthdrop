@@ -20,6 +20,10 @@ import {
   ROLE_ACCENT, SkeletonBlock, ErrorCard, EmptyState,
   getSeverityColor, getWaterQualityColor,
 } from '../dashboards/DashboardShared';
+import {
+  reporterTrackRecord, reporterNames, feedsSignalBatch,
+  FeedsSignalResult, ReporterName, ReporterTrackRecord,
+} from '../../lib/services/approvalMeta';
 
 interface Props { profile: Profile; onBack: () => void; initialTab?: QueueTab }
 
@@ -27,13 +31,15 @@ type QueueTab = 'disease' | 'water' | 'campaigns' | 'alerts';
 
 interface DiseaseReport {
   id: string; disease_name: string; disease_type: string; severity: string;
-  cases_count: number; location_name: string; district: string; state: string;
+  cases_count: number; deaths_count?: number; location_name: string; district: string; state: string;
   symptoms: string; age_group: string; gender: string; treatment_status: string;
+  latitude?: number; longitude?: number;
   reporter_id: string; status: string; approval_status?: string; created_at: string;
 }
 interface WaterReport {
   id: string; source_name: string; source_type: string; location_name: string;
   district: string; state: string; overall_quality: string; contamination_type: string;
+  ph_level?: number; turbidity?: number; latitude?: number; longitude?: number;
   reporter_id: string; status: string; approval_status?: string; notes: string; created_at: string;
 }
 interface Campaign {
@@ -76,6 +82,39 @@ const severityKey = (s: string): string => {
   }
 };
 
+/** Short role word for the reporter evidence line ("ASHA Sunita Devi"). */
+const ROLE_LABEL: Record<string, string> = {
+  asha_worker: 'ASHA',
+  volunteer: 'Volunteer',
+  clinic: 'Clinic',
+  district_officer: 'District Officer',
+  health_admin: 'Health Admin',
+  super_admin: 'Admin',
+};
+
+/**
+ * C·03 common-reason templates. Tapping a chip FILLS the note box with an
+ * editable sentence — the reporter reads these words exactly as written.
+ */
+const REJECT_TEMPLATES: { id: string; label: string; text: string }[] = [
+  { id: 'duplicate', label: 'Duplicate',        text: 'This looks like a duplicate of an earlier report for the same place and dates. Refile only if this is a separate incident.' },
+  { id: 'more_info', label: 'Needs more info',  text: 'There is not enough detail to accept this yet. Please add the symptoms, dates, and exact location, then submit again.' },
+  { id: 'wrong_area', label: 'Wrong area',      text: 'The location does not match the area this report covers. Please correct the village and district, then submit again.' },
+  { id: 'numbers',   label: 'Numbers look off', text: 'The counts do not match what we would expect here. Please recheck the numbers, then submit again.' },
+];
+
+/** Waiting age from created_at — the honest metric of triage health. */
+const waitingAge = (iso: string): { label: string; hours: number } => {
+  const ms = Math.max(0, Date.now() - new Date(iso).getTime());
+  const hours = ms / 3_600_000;
+  const label = hours < 1
+    ? `waiting ${Math.max(1, Math.round(ms / 60_000))}m`
+    : hours < 48
+    ? `waiting ${Math.round(hours)}h`
+    : `waiting ${Math.round(hours / 24)}d`;
+  return { label, hours };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialTab }) => {
@@ -104,6 +143,11 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const [campaigns, setCampaigns]           = useState<Campaign[]>([]);
   const [alerts, setAlerts]                 = useState<HealthAlert[]>([]);
   const [pendingCounts, setPendingCounts]   = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0 });
+
+  // C·02 evidence meta — supplementary; the card never blocks on these.
+  const [reporterStats, setReporterStats] = useState<Map<string, ReporterTrackRecord>>(new Map());
+  const [reporterInfo, setReporterInfo]   = useState<Map<string, ReporterName>>(new Map());
+  const [signalMeta, setSignalMeta]       = useState<Map<string, FeedsSignalResult>>(new Map());
 
   const [selectedItem, setSelectedItem]   = useState<QueueItem | null>(null);
   const [selectedType, setSelectedType]   = useState<QueueTab>('disease');
@@ -154,6 +198,39 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   };
 
   useEffect(() => { load(); }, []);
+
+  // ── C·02 evidence meta — batch-loaded AFTER the lists render.
+  // Meta is supplementary: a failure only omits the evidence line,
+  // it never blocks or errors the queue (graceful absence by design).
+  useEffect(() => {
+    const pendingDisease = diseaseReports.filter(r => r.approval_status === 'pending_approval');
+    const pendingWater   = waterReports.filter(r => r.approval_status === 'pending_approval');
+    const reporterIds = [...pendingDisease, ...pendingWater].map(r => r.reporter_id).filter(Boolean);
+
+    if (reporterIds.length > 0) {
+      reporterTrackRecord(reporterIds)
+        .then(setReporterStats)
+        .catch(e => console.warn('approval meta: track record unavailable', e?.message ?? e));
+      reporterNames(reporterIds)
+        .then(setReporterInfo)
+        .catch(e => console.warn('approval meta: reporter names unavailable', e?.message ?? e));
+    }
+
+    if (pendingDisease.length > 0) {
+      feedsSignalBatch(pendingDisease)
+        .then(results => {
+          const next = new Map<string, FeedsSignalResult>();
+          pendingDisease.forEach((r, i) => {
+            const res = results[i];
+            if (res?.feeds) next.set(r.id, res);
+          });
+          setSignalMeta(next);
+        })
+        .catch(e => console.warn('approval meta: signal check unavailable', e?.message ?? e));
+    } else {
+      setSignalMeta(new Map());
+    }
+  }, [diseaseReports, waterReports]);
 
   const loadDiseaseReports = async () => {
     let q = supabase.from('disease_reports').select('*').order('created_at', { ascending: false });
@@ -300,11 +377,16 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const fAlerts    = alerts.filter(r => !q || r.title?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
 
   // ── Flat row renderer — surface bg, hairline divider ─────────────────────
+  // Pending rows carry the C·02 evidence a 30-second decision needs:
+  // waiting age, reporter + track record, GPS, snippet, feeds-signal.
   const renderRow = (item: QueueItem, type: QueueTab) => {
     let iconColor: string = colors.textSecondary;
     let iconName: keyof typeof Ionicons.glyphMap = 'document-text-outline';
     let titleText = '';
     let subtitleText = '';
+    let reporterId: string | undefined;
+    let snippetText = '';
+    let hasGps = false;
 
     switch (type) {
       case 'disease': {
@@ -312,7 +394,11 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         iconColor = getSeverityColor(severityKey(diseaseItem.severity), colors);
         iconName = 'medkit-outline';
         titleText = diseaseItem.disease_name ?? 'Unknown Disease';
-        subtitleText = `Cases: ${diseaseItem.cases_count ?? 0} · ${diseaseItem.district}, ${diseaseItem.state}`;
+        const deaths = diseaseItem.deaths_count ?? 0;
+        subtitleText = `Cases: ${diseaseItem.cases_count ?? 0}${deaths > 0 ? ` · Deaths: ${deaths}` : ''} · ${diseaseItem.district}, ${diseaseItem.state}`;
+        reporterId = diseaseItem.reporter_id;
+        snippetText = diseaseItem.symptoms ? `symptoms: ${diseaseItem.symptoms}` : '';
+        hasGps = diseaseItem.latitude != null && diseaseItem.longitude != null;
         break;
       }
       case 'water': {
@@ -321,6 +407,13 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         iconName = 'water-outline';
         titleText = waterItem.source_name ?? 'Unknown Source';
         subtitleText = `${waterItem.source_type} · ${waterItem.district}, ${waterItem.state}`;
+        reporterId = waterItem.reporter_id;
+        const readings = [
+          waterItem.turbidity != null ? `turbidity ${waterItem.turbidity} NTU` : '',
+          waterItem.ph_level != null ? `pH ${waterItem.ph_level}` : '',
+        ].filter(Boolean).join(', ');
+        snippetText = readings || (waterItem.notes ? `note: "${waterItem.notes}"` : '');
+        hasGps = waterItem.latitude != null && waterItem.longitude != null;
         break;
       }
       case 'campaigns': {
@@ -341,6 +434,21 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       }
     }
 
+    const isPending = item.approval_status === 'pending_approval';
+
+    // Evidence meta — every piece renders only when available (graceful absence).
+    const reporter = reporterId ? reporterInfo.get(reporterId) : undefined;
+    const track = reporterId ? reporterStats.get(reporterId) : undefined;
+    const reporterLine = reporter
+      ? `${reporter.role && ROLE_LABEL[reporter.role] ? `${ROLE_LABEL[reporter.role]} ` : ''}${reporter.fullName}${
+          track ? ` · ${track.approved > 0 ? `${track.approved} approved before` : 'first report'}` : ''
+        }`
+      : '';
+    const signal = type === 'disease' ? signalMeta.get(item.id) : undefined;
+    const age = item.created_at ? waitingAge(item.created_at) : null;
+    const ageOverdue = (age?.hours ?? 0) > 6;
+    const ageColor = ageOverdue ? colors.warning : colors.textSecondary;
+
     return (
       <Pressable
         key={item.id}
@@ -353,7 +461,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         ]}
         onPress={() => { setSelectedItem(item); setSelectedType(type); setShowDetailModal(true); }}
         accessibilityRole="button"
-        accessibilityLabel={`${titleText}, status ${item.approval_status === 'pending_approval' ? 'pending' : item.approval_status ?? 'unknown'}`}
+        accessibilityLabel={`${titleText}, status ${isPending ? 'pending' : item.approval_status ?? 'unknown'}${isPending && age ? `, ${age.label}` : ''}`}
       >
         <View style={[qst.iconWrap, { backgroundColor: iconColor + '14' }]}>
           <Ionicons name={iconName} size={20} color={iconColor} />
@@ -361,16 +469,64 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         <View style={{ flex: 1 }}>
           <Text style={[qst.rowTitle, { color: colors.text }]} numberOfLines={1}>{titleText}</Text>
           <Text style={[qst.rowSub, { color: colors.textSecondary }]} numberOfLines={1}>{subtitleText}</Text>
-          <Text style={[qst.rowDate, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-            {item.created_at ? format(new Date(item.created_at), 'd MMM yyyy') : ''}
-          </Text>
+          {isPending && reporterLine !== '' && (
+            <Text style={[qst.rowSub, { color: colors.textSecondary }]} numberOfLines={1}>
+              {reporterLine}
+            </Text>
+          )}
+          {isPending && snippetText !== '' && (
+            <Text style={[qst.rowSnippet, { color: colors.textSecondary }]} numberOfLines={1}>
+              {snippetText}
+            </Text>
+          )}
+          {isPending && signal?.feeds && signal.label && (
+            <View style={qst.signalRow}>
+              <Ionicons name="pulse-outline" size={12} color={colors.info} />
+              <Text style={[qst.signalText, { color: colors.info }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>
+                {signal.label}
+              </Text>
+            </View>
+          )}
+          <View style={qst.metaRow}>
+            {isPending && age && (
+              <View style={[qst.metaChip, { backgroundColor: ageOverdue ? colors.warningBg : colors.surfaceVariant }]}>
+                <Ionicons name="time-outline" size={12} color={ageColor} />
+                <Text style={[qst.metaChipText, { color: ageColor }]} maxFontSizeMultiplier={1.3}>{age.label}</Text>
+              </View>
+            )}
+            {isPending && hasGps && (
+              <View
+                style={[qst.metaChip, { backgroundColor: colors.successBg }]}
+                accessibilityLabel="GPS location attached"
+              >
+                <Ionicons name="location-outline" size={12} color={colors.success} />
+                <Text style={[qst.metaChipText, { color: colors.success }]} maxFontSizeMultiplier={1.3}>GPS ✓</Text>
+              </View>
+            )}
+            <Text style={[qst.rowDate, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+              {item.created_at ? format(new Date(item.created_at), 'd MMM yyyy') : ''}
+            </Text>
+          </View>
         </View>
         {statusPill(item.approval_status)}
       </Pressable>
     );
   };
 
-  const currentData: QueueItem[] = tab === 'disease' ? fDisease : tab === 'water' ? fWater : tab === 'campaigns' ? fCampaigns : fAlerts;
+  // Default sort "Oldest first ↓" (C·02): pending items rise to the top,
+  // waiting-longest first — the honest triage order. Decided items follow
+  // as history, newest first.
+  const byQueueOrder = (a: QueueItem, b: QueueItem): number => {
+    const aPending = a.approval_status === 'pending_approval';
+    const bPending = b.approval_status === 'pending_approval';
+    if (aPending !== bPending) return aPending ? -1 : 1;
+    const aT = new Date(a.created_at).getTime();
+    const bT = new Date(b.created_at).getTime();
+    return aPending ? aT - bT : bT - aT;
+  };
+  const currentData: QueueItem[] =
+    [...(tab === 'disease' ? fDisease : tab === 'water' ? fWater : tab === 'campaigns' ? fCampaigns : fAlerts)]
+      .sort(byQueueOrder);
   const pendingOfTab  = tab === 'disease' ? pendingCounts.disease : tab === 'water' ? pendingCounts.water : tab === 'campaigns' ? pendingCounts.campaigns : pendingCounts.alerts;
   const totalPending  = pendingCounts.disease + pendingCounts.water + pendingCounts.campaigns + pendingCounts.alerts;
 
@@ -417,6 +573,18 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
 
   const showApproveBar = !!selectedItem && canApproveSelected &&
     (selectedItem.approval_status === 'pending_approval' || canReReviewSelected);
+
+  // C·03 — whose words are these? The rejection note goes to this person.
+  const reporterIdOf = (item: QueueItem | null): string | undefined => {
+    if (!item) return undefined;
+    if ('reporter_id' in item && item.reporter_id) return item.reporter_id;
+    if ('created_by' in item && item.created_by) return item.created_by;
+    return undefined;
+  };
+  const rejectRecipientId = reporterIdOf(selectedItem);
+  const rejectRecipientName = rejectRecipientId ? reporterInfo.get(rejectRecipientId)?.fullName : undefined;
+  const rejectRecipientFirst = rejectRecipientName ? rejectRecipientName.split(/\s+/)[0] : null;
+  const rejectNoteEmpty = !rejectReason.trim();
 
   // Header text: navy band in light mode → white; surface band in dark → ink.
   const headerText = isDark ? colors.text : colors.textInverse;
@@ -511,7 +679,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       {/* Column-header eyebrow row */}
       <View style={[qst.tableHead, { backgroundColor: colors.surfaceVariant, borderBottomColor: colors.border }]}>
         <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-          ITEMS
+          OLDEST FIRST ↓
           <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${currentData.length}`}</Text>
         </Text>
         <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
@@ -649,19 +817,55 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                   <DetailRow label="Location" value={`${selectedItem.location_name ?? ''}, ${selectedItem.district}, ${selectedItem.state}`} />
                 </>}
 
-                {/* Reject reason input */}
+                {/* C·03 — Reject with a reason. Templates FILL the note box
+                    with an editable sentence; the note itself is required. */}
                 {showRejectInput && (
                   <View style={{ marginTop: spacing.md }}>
-                    <Text style={[qst.rejectLabel, { color: colors.textSecondary }]}>REASON FOR REJECTION</Text>
+                    <Text style={[qst.rejectWhoReads, { color: colors.text }]}>
+                      {rejectRecipientFirst ?? 'The reporter'} will read your words exactly as written.
+                    </Text>
+                    <Text style={[qst.rejectLabel, { color: colors.textSecondary }]}>COMMON REASONS</Text>
+                    <View style={qst.templateRow}>
+                      {REJECT_TEMPLATES.map(t => {
+                        const active = rejectReason === t.text;
+                        return (
+                          <Pressable
+                            key={t.id}
+                            style={({ pressed }) => [
+                              qst.templateChip,
+                              active
+                                ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                                : { backgroundColor: pressed ? colors.cardHover : colors.card, borderColor: colors.border },
+                            ]}
+                            onPress={() => setRejectReason(t.text)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: active }}
+                            accessibilityLabel={`Fill note with template: ${t.label}`}
+                          >
+                            {active && <Ionicons name="checkmark" size={14} color={colors.onPrimary} />}
+                            <Text
+                              style={[qst.templateChipText, { color: active ? colors.onPrimary : colors.text }]}
+                              maxFontSizeMultiplier={1.3}
+                            >
+                              {t.label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <Text style={[qst.rejectLabel, { color: colors.textSecondary }]}>YOUR NOTE · REQUIRED</Text>
                     <TextInput
                       style={[qst.rejectInput, { backgroundColor: colors.inputBackground, borderColor: colors.inputErrorBorder, color: colors.text }]}
-                      placeholder="Optional rejection reason..."
+                      placeholder="Why this can't be accepted — they will read this."
                       placeholderTextColor={colors.placeholder}
                       value={rejectReason}
                       onChangeText={setRejectReason}
                       multiline
                       numberOfLines={3}
                     />
+                    <Text style={[qst.rejectCaption, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                      Templates fill this box — edit before sending. Logged to the audit trail.
+                    </Text>
                   </View>
                 )}
 
@@ -733,10 +937,10 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                           ]}
                           onPress={() => setShowRejectInput(true)}
                           accessibilityRole="button"
-                          accessibilityLabel="Reject"
+                          accessibilityLabel="Reject, opens the reason sheet"
                         >
                           <Ionicons name="close-circle-outline" size={18} color={colors.danger} />
-                          <Text style={[qst.actionBtnText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>Reject</Text>
+                          <Text style={[qst.actionBtnText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>Reject…</Text>
                         </Pressable>
                         <Pressable
                           style={({ pressed }) => [
@@ -775,18 +979,19 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                           style={({ pressed }) => [
                             qst.actionBtn,
                             { backgroundColor: colors.danger },
-                            (pressed || actionLoading) && { opacity: 0.4 },
+                            (pressed || actionLoading || rejectNoteEmpty) && { opacity: 0.4 },
                           ]}
                           onPress={() => reject(selectedItem.id, selectedType, rejectReason)}
-                          disabled={actionLoading}
+                          disabled={actionLoading || rejectNoteEmpty}
                           accessibilityRole="button"
-                          accessibilityLabel="Confirm reject"
+                          accessibilityState={{ disabled: actionLoading || rejectNoteEmpty }}
+                          accessibilityLabel={rejectNoteEmpty ? 'Reject and send reason, write a note first' : 'Reject and send reason'}
                         >
                           {actionLoading
                             ? <ActivityIndicator size={18} color={colors.textInverse} />
                             : <Ionicons name="close-circle-outline" size={18} color={colors.textInverse} />
                           }
-                          <Text style={[qst.actionBtnText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>Confirm Reject</Text>
+                          <Text style={[qst.actionBtnText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>Reject & send reason</Text>
                         </Pressable>
                       </>
                   }
@@ -921,6 +1126,17 @@ const qst = StyleSheet.create({
   rowTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
   rowSub: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
   rowDate: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  /* C·02 evidence — pending rows only */
+  rowSnippet: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontStyle: 'italic' },
+  signalRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 4, marginTop: 2 },
+  signalText: { fontSize: 12, lineHeight: 16, fontWeight: '600', flex: 1 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm, marginTop: 4 },
+  metaChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: spacing.sm, paddingVertical: 2,
+    borderRadius: radii.pill,
+  },
+  metaChipText: { fontSize: 12, lineHeight: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
   /* Pills */
   pill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -944,6 +1160,16 @@ const qst = StyleSheet.create({
   detailValue: { fontSize: 15, lineHeight: 22, fontWeight: '500', flex: 2, textAlign: 'right', fontVariant: ['tabular-nums'] },
   rejectLabel: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: spacing.xs },
   rejectInput: { borderWidth: 2, borderRadius: radii.md, padding: spacing.md, fontSize: 15, minHeight: 80, textAlignVertical: 'top' },
+  /* C·03 reject sheet */
+  rejectWhoReads: { fontSize: 15, lineHeight: 22, fontWeight: '700', marginBottom: spacing.md },
+  templateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
+  templateChip: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: 44, paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill, borderWidth: 1.5,
+  },
+  templateChipText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  rejectCaption: { fontSize: 12, lineHeight: 16, fontWeight: '600', marginTop: spacing.xs },
   secondaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     minHeight: 48, borderRadius: radii.md, borderWidth: 1.5,

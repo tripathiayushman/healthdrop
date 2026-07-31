@@ -25,13 +25,19 @@ import { waterQualityService } from '../../lib/services/waterQuality';
 import { WaterSourceRecord, waterSourcesService } from '../../lib/services/waterSources';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
-import { SourceType, WaterQuality } from '../../types';
+import { SourceType, WaterQuality, WaterQualityReport } from '../../types';
 
 interface WaterQualityReportFormProps {
   onSuccess: () => void;
   onCancel: () => void;
   /** E·02 retest flow — prefill from this tracked water source. */
   prefillSourceId?: string;
+  /**
+   * A·06 refile flow — prefill from the user's earlier (rejected) report.
+   * Wins over prefillSourceId when both are set. Submission still files a
+   * brand-new report; the old row is never mutated.
+   */
+  refillReportId?: string;
 }
 
 // ── Local building blocks ────────────────────────────────────────────────────
@@ -105,6 +111,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
   onSuccess,
   onCancel,
   prefillSourceId,
+  refillReportId,
 }) => {
   const { colors, isDark, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
@@ -140,12 +147,13 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
   });
 
   // ── E·02 — retest prefill: the task arrives with history ──
+  // A·06 refile wins over the retest prefill when both ids are set.
   const [prefillSource, setPrefillSource] = useState<WaterSourceRecord | null>(null);
-  const [prefillLoading, setPrefillLoading] = useState(!!prefillSourceId);
+  const [prefillLoading, setPrefillLoading] = useState(!!prefillSourceId && !refillReportId);
   const [prefillError, setPrefillError] = useState<string | null>(null);
 
   const loadPrefill = async () => {
-    if (!prefillSourceId) return;
+    if (!prefillSourceId || refillReportId) return;
     setPrefillLoading(true);
     setPrefillError(null);
     const res = await waterSourcesService.getById(prefillSourceId);
@@ -168,10 +176,90 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
     setPrefillLoading(false);
   };
 
+  // ── A·06 — refile: fetch the rejected report once, prefill everything ──
+  const [refillLoading, setRefillLoading] = useState(!!refillReportId);
+  const [refillError, setRefillError] = useState<string | null>(null);
+  const [refillInfo, setRefillInfo] = useState<{ shortId: string; reason: string | null } | null>(null);
+
+  const loadRefill = async () => {
+    if (!refillReportId) return;
+    setRefillLoading(true);
+    setRefillError(null);
+    const res = await waterQualityService.getById(refillReportId);
+    if (res.error || !res.data) {
+      setRefillError("Couldn't load the earlier report — you can still file a fresh one.");
+      setRefillLoading(false);
+      return;
+    }
+    const r = res.data as WaterQualityReport & { rejection_reason?: string | null };
+
+    // Notes round-trip — submit merges these lines into notes, so peel them
+    // back out into their own fields instead of doubling them up.
+    let households = '';
+    let contaminationLevel = '';
+    let customSourceType = '';
+    const noteLines: string[] = [];
+    for (const line of String(r.notes ?? '').split('\n')) {
+      const t = line.trim();
+      const hm = t.match(/^Households affected:\s*(\d+)$/i);
+      const cm = t.match(/^Contamination level:\s*(.+)$/i);
+      const sm = t.match(/^Custom source type:\s*(.+)$/i);
+      if (hm) households = hm[1];
+      else if (cm) contaminationLevel = cm[1];
+      else if (sm) customSourceType = sm[1];
+      else if (t) noteLines.push(t);
+    }
+
+    const knownSource = waterSourceOptions.some((o) => o.value === r.source_type);
+    const knownContam = r.contamination_type
+      ? contaminantOptions.some((o) => o.value === r.contamination_type)
+      : false;
+    const q = String(r.overall_quality ?? '');
+    const quality = ['safe', 'moderate', 'unsafe', 'critical'].includes(q)
+      ? q
+      : q === 'poor' ? 'moderate' : q === 'contaminated' ? 'unsafe' : 'moderate';
+
+    setFormData((prev) => ({
+      ...prev,
+      source_name: r.source_name ?? '',
+      source_type: knownSource ? r.source_type : 'other',
+      custom_source_type: knownSource ? '' : (customSourceType || String(r.source_type ?? '')),
+      location_name: r.location_name ?? '',
+      district: r.district ?? '',
+      state: r.state ?? '',
+      latitude: r.latitude ?? null,
+      longitude: r.longitude ?? null,
+      quality,
+      ph_level: r.ph_level != null ? String(r.ph_level) : '',
+      tds_level: r.tds_level != null ? String(r.tds_level) : '',
+      contamination_type: r.contamination_type
+        ? (knownContam ? r.contamination_type : 'other')
+        : prev.contamination_type,
+      custom_contamination: r.contamination_type && !knownContam ? r.contamination_type : '',
+      contamination_level: contaminationLevel,
+      households_affected: households || prev.households_affected,
+      notes: noteLines.join('\n'),
+    }));
+    if (r.ph_level != null || r.tds_level != null) setLabTested(true);
+
+    setRefillInfo({
+      shortId: String(r.id ?? '').slice(0, 8).toUpperCase(),
+      reason:
+        typeof r.rejection_reason === 'string' && r.rejection_reason.trim().length > 0
+          ? r.rejection_reason.trim()
+          : null,
+    });
+    setRefillLoading(false);
+  };
+
   useEffect(() => {
-    loadPrefill();
+    if (refillReportId) {
+      loadRefill();
+    } else {
+      loadPrefill();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefillSourceId]);
+  }, [prefillSourceId, refillReportId]);
 
   const waterSourceOptions = [
     { label: 'Well', value: 'well' },
@@ -401,8 +489,61 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
+        {/* ── A·06 — refile context card (amber: waiting on a fix, not wrong) ── */}
+        {refillReportId && (
+          refillLoading ? (
+            <View style={[styles.section, { marginTop: 16 }]}>
+              <View
+                style={[styles.refileSkeleton, { backgroundColor: colors.skeleton }]}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              />
+            </View>
+          ) : refillError ? (
+            <View style={[styles.section, { marginTop: 16 }]}>
+              <View style={styles.refileErrorRow}>
+                <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.refileErrorText, { color: colors.textSecondary }]}>
+                  {refillError}
+                </Text>
+                <Pressable
+                  onPress={loadRefill}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading the earlier report"
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Text style={[styles.refileRetry, { color: colors.primary }]}>Retry</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : refillInfo ? (
+            <View style={[styles.section, { marginTop: 16 }]}>
+              <View
+                style={[styles.refileCard, { backgroundColor: colors.warningBg }]}
+                accessible
+                accessibilityLabel={`Refiling report ${refillInfo.shortId}. ${refillInfo.reason ?? 'The earlier report was not accepted.'}`}
+              >
+                <View style={styles.refileHead}>
+                  <Ionicons name="refresh-circle-outline" size={18} color={colors.warning} />
+                  <Text style={[styles.refileEyebrow, { color: colors.warning }]} maxFontSizeMultiplier={1.3}>
+                    {`REFILING #${refillInfo.shortId}`}
+                  </Text>
+                </View>
+                <Text style={[styles.refileReason, { color: colors.text }]}>
+                  {refillInfo.reason
+                    ? `“${refillInfo.reason}”`
+                    : 'The earlier report was not accepted — fix it below and submit again.'}
+                </Text>
+                <Text style={[styles.refileMeta, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                  Submitting files a new report — the earlier one stays unchanged.
+                </Text>
+              </View>
+            </View>
+          ) : null
+        )}
+
         {/* ── E·02 — LAST TIME: she compares, not recalls ── */}
-        {prefillSourceId && (
+        {!refillReportId && prefillSourceId && (
           prefillLoading ? (
             <View style={[styles.section, { marginTop: 16 }]}>
               <View
@@ -561,7 +702,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
                 });
                 if (loc.locationName && loc.district && loc.state) clearError('location');
               }}
-              autoFetch={!prefillSourceId}
+              autoFetch={!prefillSourceId && !refillReportId}
             />
             <FieldError message={errors.location} colors={colors} />
           </View>
@@ -599,7 +740,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
           </View>
 
           {/* E·02 — fieldworker judgment outranks the strip kit */}
-          {prefillSourceId && (
+          {!refillReportId && prefillSourceId && (
             <Text style={[styles.sensesCaption, { color: colors.textSecondary }]}>
               Numbers suggest safe — but your eyes and nose overrule the strips. If it still smells,
               mark it unsafe.
@@ -843,6 +984,19 @@ const styles = StyleSheet.create({
   lastTimeRetry: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   /* ── E·02 senses caption ── */
   sensesCaption: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 12 },
+  /* ── A·06 refile context — amber card + quiet loading/error rows ── */
+  refileCard: { borderRadius: 12, padding: 16, gap: 4 },
+  refileHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  refileEyebrow: {
+    fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6,
+    textTransform: 'uppercase', flexShrink: 1,
+  },
+  refileReason: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  refileMeta: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  refileSkeleton: { height: 72, borderRadius: 12 },
+  refileErrorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  refileErrorText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  refileRetry: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   // Quality indicator — card with 3px left edge in the quality token
   indicatorCard: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
