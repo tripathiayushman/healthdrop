@@ -1,0 +1,74 @@
+name: Build APK on Push
+
+# Every push to main builds an APK on EAS and publishes it as a GitHub
+# Release with auto-generated notes. Skip by including [skip build] in the
+# commit message. Superseded queued runs are cancelled to save EAS credits.
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "database_structure/**"
+      - "mesc/**"
+      - ".gitignore"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: eas-build-main
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip build]')"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync versionCode for this build
+        run: node scripts/sync-version.cjs "${{ steps.version.outputs.version }}" "${{ github.run_number }}"
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build APK on EAS
+        run: npx eas build --platform android --profile preview --non-interactive --wait --json > eas-build.json
+
+      - name: Download APK artifact
+        run: |
+          APK_URL=$(node -e "const fs=require('fs');const raw=JSON.parse(fs.readFileSync('eas-build.json','utf8'));const item=Array.isArray(raw)?raw[0]:raw;const url=item?.artifacts?.buildUrl||'';if(!url){process.exit(1)};process.stdout.write(url);")
+          curl -L "$APK_URL" -o "HealthDrop-${{ steps.version.outputs.tag }}.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: HealthDrop ${{ steps.version.outputs.version }} (build ${{ github.run_number }})
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            HealthDrop-*.apk
