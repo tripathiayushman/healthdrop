@@ -4,18 +4,19 @@
 // Four-state data regions: skeleton / content / quiet-zero / error-with-retry.
 // =====================================================
 import React, { useState, useEffect } from 'react';
-import { ScrollView, View, StyleSheet, RefreshControl } from 'react-native';
+import { ScrollView, View, StyleSheet, RefreshControl, Pressable } from 'react-native';
 
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, QuickActionBtn,
-  ToolCard, SectionDivider, SkeletonBlock, ErrorCard,
+  ToolCard, SectionDivider, SkeletonBlock, ErrorCard, InfoBanner,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
+import { unverifiedCount } from '../../lib/services/provisioning';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -27,19 +28,20 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, pendingReports: 0 });
+  const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, pendingReports: 0, unverified: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
 
   const load = async () => {
     setError(null);
     try {
-      const [d, w, c, a, pendingDisease, pendingWater] = await Promise.allSettled([
+      const [d, w, c, a, pendingDisease, pendingWater, unverified] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }),
         supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active'),
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        unverifiedCount(),
       ]);
       const alertData = await supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(3);
 
@@ -50,12 +52,20 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
         return r.value.count ?? 0;
       };
 
+      // Role-verification banner is fail-soft: if the count errors the banner
+      // simply stays hidden — no number is displayed, so nothing lies as 0.
+      const unverifiedUsers =
+        unverified.status === 'fulfilled' && unverified.value.data !== null
+          ? unverified.value.data
+          : 0;
+
       setStats({
         disease: countOf(d),
         water: countOf(w),
         campaigns: countOf(c),
         alerts: countOf(a),
         pendingReports: countOf(pendingDisease) + countOf(pendingWater),
+        unverified: unverifiedUsers,
       });
       if (alertData.error) failed = true;
       setAlerts(alertData.data ?? []);
@@ -86,9 +96,21 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
         </View>
       )}
 
+      {/* Pending role-verification signal — tap routes to User Management */}
+      {!loading && !error && stats.unverified > 0 && (
+        <Pressable
+          onPress={() => onNavigate('user-management')}
+          accessibilityRole="button"
+          accessibilityLabel={`${stats.unverified} clinic or ASHA account${stats.unverified === 1 ? '' : 's'} awaiting role verification — opens user management`}
+          style={styles.bannerWrap}
+        >
+          <InfoBanner icon="shield-checkmark-outline" color={colors.warning} text={`${stats.unverified} clinic/ASHA account${stats.unverified === 1 ? '' : 's'} awaiting role verification`} />
+        </Pressable>
+      )}
+
       {isWidgetVisible('overview_stats') && (
         <>
-          <Section title="Health Overview" style={{ marginTop: spacing.lg }}>
+          <Section title="Health Overview" style={{ marginTop: stats.unverified > 0 ? spacing.xs : spacing.lg }}>
             {loading ? (
               <>
                 <View style={styles.statsRow}>
@@ -198,6 +220,7 @@ const styles = StyleSheet.create({
   skelStat: { flex: 1, width: 'auto' },
   skelGap: { marginBottom: spacing.md },
   errorWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.lg },
+  bannerWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.md },
 });
 
 export default HealthAdminDashboard;

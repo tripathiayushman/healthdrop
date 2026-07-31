@@ -8,6 +8,7 @@
 // =====================================================
 import { supabase } from '../supabase';
 import { ApiResponse } from '../../types';
+import { track, events } from './analytics';
 
 /** Field roles that count as "staff" for alert reach (D·02). */
 const FIELD_STAFF_ROLES = ['clinic', 'asha_worker', 'volunteer'] as const;
@@ -55,6 +56,7 @@ export const alertAcks = {
       // Some schemas surface the conflict instead of ignoring it —
       // a duplicate PK means the ack already exists: success.
       if (error && !isDuplicateKeyError(error)) throw error;
+      track(events.ALERT_ACKED);
       return { data: null, error: null };
     } catch (error: any) {
       console.error('Error acknowledging alert:', error);

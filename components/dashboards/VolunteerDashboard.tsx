@@ -4,8 +4,10 @@
 // Four-state data regions: skeleton / content / quiet-zero / error-with-retry.
 // =====================================================
 import React, { useState, useEffect } from 'react';
-import { ScrollView, View, Text, StyleSheet, RefreshControl } from 'react-native';
+import { ScrollView, View, Text, StyleSheet, RefreshControl, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
@@ -22,8 +24,26 @@ interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
 
+// First-run guidance — per-user dismissal flag on this phone.
+const firstRunKey = (userId: string) => `healthdrop:firstRunDismissed:${userId}`;
+
+// Three 48dp rows. Volunteers cannot create reports (MainApp
+// CREATE_PERMISSIONS excludes the role — the info banner below says so),
+// so the first row points at the district health score instead of a form.
+const FIRST_RUN_ROWS: Array<{
+  key: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  labelKey: string;
+  target: string;
+}> = [
+  { key: 'score',   icon: 'pulse-outline',          labelKey: 'firstRun.healthScore', target: 'health-score' },
+  { key: 'alerts',  icon: 'warning-outline',        labelKey: 'firstRun.seeAlerts',   target: 'all-alerts' },
+  { key: 'offline', icon: 'phone-portrait-outline', labelKey: 'firstRun.offlineFirst', target: 'sync-outbox' },
+];
+
 export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors, isDark } = useTheme();
+  const { t } = useTranslation();
   const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,6 +51,23 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
   const [stats, setStats] = useState({ alerts: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
   const [campaigns, setCampaigns] = useState<any[]>([]);
+  // null = storage not read yet — the card stays hidden until we know.
+  const [firstRunDismissed, setFirstRunDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(firstRunKey(profile.id))
+      .then(value => { if (mounted) setFirstRunDismissed(value === 'true'); })
+      .catch(() => { if (mounted) setFirstRunDismissed(false); });
+    return () => { mounted = false; };
+  }, [profile.id]);
+
+  const dismissFirstRun = () => {
+    setFirstRunDismissed(true);
+    AsyncStorage.setItem(firstRunKey(profile.id), 'true').catch(() => {
+      /* storage unavailable — stays hidden for this session */
+    });
+  };
 
   const load = async () => {
     setError(null);
@@ -63,6 +100,10 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
   const retry = () => { setLoading(true); load(); };
 
+  // Shown until dismissed. Volunteers have no own submissions to count
+  // (the role cannot create reports), so dismissal is the only auto-hide.
+  const showGettingStarted = firstRunDismissed === false && !loading;
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
@@ -76,6 +117,47 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
         <View style={styles.errorWrap}>
           <ErrorCard message={error} onRetry={retry} />
         </View>
+      )}
+
+      {/* GETTING STARTED — first-run guidance card. Quiet "Got it" dismisses
+          it for this user on this phone. */}
+      {showGettingStarted && (
+        <>
+          <Section
+            title={t('firstRun.title')}
+            style={{ marginTop: spacing.lg }}
+            action={{ label: t('firstRun.dismiss'), onPress: dismissFirstRun }}
+          >
+            <View
+              style={[
+                styles.firstRunCard,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                !isDark && styles.cardShadow,
+              ]}
+            >
+              {FIRST_RUN_ROWS.map((row, i, arr) => (
+                <Pressable
+                  key={row.key}
+                  onPress={() => onNavigate(row.target)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(row.labelKey)}
+                  style={({ pressed }) => [
+                    styles.firstRunRow,
+                    pressed && { backgroundColor: colors.cardHover },
+                    i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight },
+                  ]}
+                >
+                  <Ionicons name={row.icon} size={22} color={colors.textSecondary} />
+                  <Text style={[styles.firstRunText, { color: colors.text }]} numberOfLines={2}>
+                    {t(row.labelKey)}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                </Pressable>
+              ))}
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
       )}
 
       {isWidgetVisible('alerts_map') && (
@@ -203,6 +285,17 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  /* Getting-started card — 48dp icon rows, hairline dividers */
+  firstRunCard: { borderRadius: radii.md, borderWidth: 1, overflow: 'hidden' },
+  firstRunRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  firstRunText: { flex: 1, fontSize: 15, lineHeight: 22, fontWeight: '500' },
   campaignCard: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
     borderRadius: radii.md, borderWidth: 1, padding: spacing.lg, marginBottom: spacing.md,

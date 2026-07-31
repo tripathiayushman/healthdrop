@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTranslation } from 'react-i18next';
 
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
@@ -26,6 +27,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { ROLE_ACCENT } from '../dashboards/DashboardShared';
 import { clearExpoPushToken } from '../../lib/services/users';
+import { computeCompleteness } from '../../lib/services/profileCompleteness';
 import { setAppLanguage } from '../../lib/i18n';
 
 interface ProfileScreenProps {
@@ -77,6 +79,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onNavigateToForm,
 }) => {
   const { colors, isDark, toggleTheme, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [criticalOverride, setCriticalOverride] = useState(false);
   const [language, setLanguage] = useState<AppLanguage>('en');
@@ -184,8 +187,32 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     } catch (error) {
       console.warn('Failed to apply app language:', error);
     }
+    // Also persist to profiles.preferred_language so server-side surfaces
+    // (push notifications) can localize. Fail-soft: the on-device switch
+    // above already applied; a failed write only costs server localization.
+    supabase
+      .from('profiles')
+      .update({ preferred_language: lang })
+      .eq('id', profile.id)
+      .then(
+        ({ error }) => {
+          if (error) console.warn('Failed to save language preference to profile:', error.message);
+        },
+        (error: unknown) => {
+          console.warn('Failed to save language preference to profile:', error);
+        },
+      );
     setShowLanguageModal(false);
   };
+
+  // Profile completeness — pure compute from the prop; recomputes when the
+  // edit-profile / update-location modals push a new profile up via
+  // onProfileUpdate. Hidden entirely at 100%.
+  const completeness = computeCompleteness(profile);
+  const completenessCaption = t('completeness.caption', {
+    pct: completeness.pct,
+    missing: completeness.missing.map(field => t(`completeness.fields.${field}`)).join(', '),
+  });
 
   const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
   const roleLabel = ROLE_LABEL[profile.role] ?? profile.role;
@@ -683,6 +710,50 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </View>
       {/* Role Ribbon */}
       <View style={[styles.roleRibbon, { backgroundColor: accent }]} />
+
+      {/* Profile completeness — thin progress bar + caption; tapping opens
+          the edit-profile modal. Hidden once the profile reaches 100%. */}
+      {completeness.pct < 100 && (
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+            {t('completeness.title')}
+          </Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.completenessCard,
+              {
+                backgroundColor: pressed ? colors.cardHover : colors.card,
+                borderColor: colors.border,
+              },
+              !isDark && styles.cardShadow,
+            ]}
+            onPress={() => setShowEditProfile(true)}
+            accessibilityRole="button"
+            accessibilityLabel={completenessCaption}
+            accessibilityHint={t('completeness.a11yHint')}
+          >
+            {/* Thin token-colored progress bar — flex split avoids % widths */}
+            <View style={[styles.completenessTrack, { backgroundColor: colors.surfaceVariant }]}>
+              <View
+                style={[
+                  styles.completenessFill,
+                  { flex: completeness.pct, backgroundColor: colors.primary },
+                ]}
+              />
+              <View style={{ flex: 100 - completeness.pct }} />
+            </View>
+            <View style={styles.completenessCaptionRow}>
+              <Text
+                style={[styles.completenessCaption, { color: colors.textSecondary }]}
+                maxFontSizeMultiplier={1.3}
+              >
+                {completenessCaption}
+              </Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+            </View>
+          </Pressable>
+        </View>
+      )}
 
       {/* Menu Sections — eyebrow headers, flat cards */}
       {menuItems.map((section, sectionIndex) => (
@@ -1416,6 +1487,35 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     borderWidth: 1,
     overflow: 'hidden',
+  },
+  /* Profile completeness — thin bar + caption */
+  completenessCard: {
+    borderRadius: radii.md,
+    borderWidth: 1,
+    padding: spacing.lg,
+    gap: spacing.md,
+    minHeight: 48,
+  },
+  completenessTrack: {
+    flexDirection: 'row',
+    height: 6,
+    borderRadius: radii.pill,
+    overflow: 'hidden',
+  },
+  completenessFill: {
+    borderRadius: radii.pill,
+  },
+  completenessCaptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  completenessCaption: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   menuItem: {
     flexDirection: 'row',

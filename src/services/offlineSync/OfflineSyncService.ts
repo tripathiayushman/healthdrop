@@ -13,6 +13,7 @@
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { supabase } from '../../../lib/supabase';
 import { log } from '../../../lib/logger';
+import { track, events } from '../../../lib/services/analytics';
 import { syncQueue, QueueItem, SyncCounts } from './SyncQueue';
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -283,6 +284,9 @@ class OfflineSyncService {
             await this.notifyListeners();
 
             log.info('OfflineSync', `sync complete — synced=${synced} failed=${failed}`);
+            // First-party analytics: one event per pass that uploaded ≥1 item.
+            // Counts only, fire-and-forget — a failed insert never fails a sync.
+            if (synced > 0) track(events.SYNC_COMPLETED, { synced, failed });
             return { synced, failed };
         } finally {
             this.isSyncing = false;

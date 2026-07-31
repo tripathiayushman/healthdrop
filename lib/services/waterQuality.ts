@@ -6,6 +6,7 @@ import { WaterQualityReport, WaterQualityReportInput, WaterReportStatus, ApiResp
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 import { sanitizeSearchTerm } from './searchSanitize';
+import { track, events } from './analytics';
 
 const LEGACY_SCHEMA_FALLBACK_PATTERNS = [
   'client_idempotency_key',
@@ -132,6 +133,7 @@ export const waterQualityService = {
 
       if (!isOnline) {
         const localId = await syncQueue.enqueue('water_quality_report', payload);
+        track(events.REPORT_QUEUED, { kind: 'water' });
         return { data: null, error: null, queued: true, localId };
       }
 
@@ -156,6 +158,9 @@ export const waterQualityService = {
       }
 
       if (error) throw error;
+
+      // Fire-and-forget analytics — district + kind only, never readings.
+      track(events.REPORT_SUBMITTED, { kind: 'water', district: reportData.district });
 
       return { data: data as WaterQualityReport, error: null, queued: false };
     } catch (error: any) {

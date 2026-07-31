@@ -47,11 +47,16 @@ const SelectChip: React.FC<{
   selected: boolean;
   onPress: () => void;
   colors: Theme;
+  /** Leading pictogram — pairs with the word so recognition never depends on reading. */
+  icon?: keyof typeof Ionicons.glyphMap;
   fill?: string;
   selectedLabelColor?: string;
-}> = ({ label, selected, onPress, colors, fill, selectedLabelColor }) => {
+}> = ({ label, selected, onPress, colors, icon, fill, selectedLabelColor }) => {
   const bg = fill ?? colors.primary;
   const labelColor = selectedLabelColor ?? colors.onPrimary;
+  // The pictogram inherits the label color — selection stays conveyed by
+  // solid fill + checkmark + label, never by icon tint alone.
+  const contentColor = selected ? labelColor : colors.text;
   return (
     <Pressable
       onPress={onPress}
@@ -66,7 +71,8 @@ const SelectChip: React.FC<{
       ]}
     >
       {selected && <Ionicons name="checkmark" size={16} color={labelColor} />}
-      <Text style={[styles.chipLabel, { color: selected ? labelColor : colors.text }]}>
+      {icon && <Ionicons name={icon} size={18} color={contentColor} />}
+      <Text style={[styles.chipLabel, { color: contentColor }]}>
         {label}
       </Text>
     </Pressable>
@@ -98,6 +104,30 @@ const QUALITY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   moderate: 'alert-circle',
   unsafe: 'warning',
   critical: 'close-circle',
+};
+
+// ── Pictograms — recognition must not depend on reading ──────────────────────
+// Low-literacy support: selection chips pair a small Ionicons pictogram WITH
+// the word (never replacing it). All names verified against the Ionicons
+// glyphmap; outline variants at rest. Quality chips anchor on the droplet
+// StatusBadge puts on every water pill, then escalate through the same
+// glyph shapes the indicator card below teaches (QUALITY_ICONS).
+const QUALITY_CHIP_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  safe: 'water-outline',            // clean droplet — StatusBadge's water glyph
+  moderate: 'alert-circle-outline', // caution — mirrors QUALITY_ICONS.moderate
+  unsafe: 'warning-outline',        // warning — mirrors QUALITY_ICONS.unsafe
+  critical: 'close-circle-outline', // do not drink — mirrors QUALITY_ICONS.critical
+};
+
+const SOURCE_TYPE_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  well: 'disc-outline',                  // well mouth seen from above
+  borewell: 'arrow-down-circle-outline', // bored straight down
+  tap: 'home-outline',                   // household tap connection
+  river: 'boat-outline',                 // flowing water body
+  pond: 'fish-outline',                  // still water body
+  handpump: 'hand-left-outline',         // hand-operated
+  tank: 'server-outline',                // stacked-cylinder tank silhouette
+  other: 'help-circle-outline',
 };
 
 const shortDayDate = (iso?: string | null): string => {
@@ -657,6 +687,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
                 selected={formData.source_type === source.value}
                 onPress={() => setFormData({ ...formData, source_type: source.value })}
                 colors={colors}
+                icon={SOURCE_TYPE_ICONS[source.value]}
               />
             ))}
           </View>
@@ -733,6 +764,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
                 selected={formData.quality === quality.value}
                 onPress={() => setFormData({ ...formData, quality: quality.value })}
                 colors={colors}
+                icon={QUALITY_CHIP_ICONS[quality.value]}
                 fill={getWaterQualityColor(quality.value, colors)}
                 selectedLabelColor={colors.textInverse}
               />

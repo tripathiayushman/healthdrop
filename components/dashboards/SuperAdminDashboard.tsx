@@ -16,6 +16,7 @@ import {
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
+import { unverifiedCount } from '../../lib/services/provisioning';
 
 interface Props { profile: Profile; onNavigate: (s: string) => void }
 
@@ -27,13 +28,13 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, users: 0, pendingFeedback: 0, pendingApprovals: 0 });
+  const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, users: 0, pendingFeedback: 0, pendingApprovals: 0, unverified: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
 
   const load = async () => {
     setError(null);
     try {
-      const [d, w, c, a, u, f, pendingDisease, pendingWater, pendingCampaigns, pendingAlerts] = await Promise.allSettled([
+      const [d, w, c, a, u, f, pendingDisease, pendingWater, pendingCampaigns, pendingAlerts, unverified] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }),
@@ -44,6 +45,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
+        unverifiedCount(),
       ]);
       const alertData = await supabase.from('health_alerts').select('*').eq('status', 'active').eq('approval_status', 'approved').order('created_at', { ascending: false }).limit(3);
 
@@ -58,6 +60,13 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       const pendingApprovalsCount =
         countOf(pendingDisease) + countOf(pendingWater) + countOf(pendingCampaigns) + countOf(pendingAlerts);
 
+      // Role-verification badge is fail-soft: if the count errors the badge
+      // simply stays hidden — no number is displayed, so nothing lies as 0.
+      const unverifiedUsers =
+        unverified.status === 'fulfilled' && unverified.value.data !== null
+          ? unverified.value.data
+          : 0;
+
       setStats({
         disease: countOf(d),
         water: countOf(w),
@@ -66,6 +75,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         users: countOf(u),
         pendingFeedback: countOf(f),
         pendingApprovals: pendingApprovalsCount,
+        unverified: unverifiedUsers,
       });
       if (alertData.error) failed = true;
       setAlerts(alertData.data ?? []);
@@ -99,7 +109,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
       {isWidgetVisible('admin_panel') && (
         <>
           <Section title="Admin Panel" style={{ marginTop: spacing.lg }}>
-            <ToolCard icon="people-outline" iconColor={colors.primary} title="User Management" subtitle="Create, edit, deactivate users & manage roles" onPress={() => onNavigate('user-management')} />
+            <ToolCard icon="people-outline" iconColor={colors.primary} title="User Management" subtitle={stats.unverified > 0 ? `${stats.unverified} clinic/ASHA account${stats.unverified === 1 ? '' : 's'} awaiting role verification` : 'Create, edit, deactivate users & manage roles'} onPress={() => onNavigate('user-management')} badge={stats.unverified} />
             <ToolCard icon="shield-checkmark-outline" iconColor={colors.accent} title="Approval Queue" subtitle="Review pending reports & campaigns" onPress={() => onNavigate('approval-queue')} badge={stats.pendingApprovals} />
             {stats.pendingFeedback > 0 && (
               <ToolCard icon="chatbox-ellipses-outline" iconColor={colors.info} title="User Feedback" subtitle="Pending feedback awaiting review" onPress={() => onNavigate('approval-queue')} badge={stats.pendingFeedback} />

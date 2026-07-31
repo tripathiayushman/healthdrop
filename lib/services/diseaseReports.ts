@@ -6,6 +6,7 @@ import { DiseaseReport, DiseaseReportInput, ReportStatus, ApiResponse } from '..
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 import { sanitizeSearchTerm } from './searchSanitize';
+import { track, events } from './analytics';
 
 const LEGACY_SCHEMA_FALLBACK_PATTERNS = [
   'client_idempotency_key',
@@ -134,6 +135,7 @@ export const diseaseReportsService = {
       if (!isOnline) {
         // Queue for later sync
         const localId = await syncQueue.enqueue('disease_report', payload);
+        track(events.REPORT_QUEUED, { kind: 'disease' });
         return { data: null, error: null, queued: true, localId };
       }
 
@@ -159,6 +161,9 @@ export const diseaseReportsService = {
       }
 
       if (error) throw error;
+
+      // Fire-and-forget analytics — district + kind only, never health details.
+      track(events.REPORT_SUBMITTED, { kind: 'disease', district: reportData.district });
 
       return { data: data as DiseaseReport, error: null, queued: false };
     } catch (error: any) {

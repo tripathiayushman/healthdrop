@@ -177,5 +177,24 @@
     "trendScopeDistrict": "{{district}} district trend (last 14 days)",
     "trendScopeAll": "All districts trend (last 14 days)",
     "trendError": "Couldn't load trend data — check connection"
+  },
+  "firstRun": {
+    "title": "Getting Started",
+    "dismiss": "Got it",
+    "fileFirstReport": "File your first report",
+    "seeAlerts": "See alerts for your area",
+    "offlineFirst": "Reports save on your phone first",
+    "healthScore": "Check your district health score"
+  },
+  "completeness": {
+    "title": "Profile Completeness",
+    "caption": "Your profile is {{pct}}% complete — add {{missing}}",
+    "a11yHint": "Opens edit profile",
+    "fields": {
+      "full_name": "full name",
+      "phone": "phone number",
+      "district": "district",
+      "state": "state"
+    }
   }
 }

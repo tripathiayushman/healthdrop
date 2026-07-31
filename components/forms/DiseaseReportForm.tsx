@@ -75,6 +75,41 @@ const SEVERITY_LEVELS: Array<{ label: string; value: Severity }> = [
   { label: 'Critical', value: 'critical' },
 ];
 
+// ── Pictograms — recognition must not depend on reading ──────────────────────
+// Low-literacy support: every selection chip pairs a small Ionicons pictogram
+// WITH its word (never replacing it — labels stay, i18n untouched). Every
+// glyph name below is verified against the Ionicons glyphmap; a bad name
+// renders '?'. Ionicons only, outline variants at rest.
+
+const DISEASE_ICONS: Record<(typeof DISEASE_OPTIONS)[number], keyof typeof Ionicons.glyphMap> = {
+  Diarrhea: 'water-outline',        // watery — single drop
+  Cholera: 'rainy-outline',         // profuse watery purging — many drops
+  Typhoid: 'thermometer-outline',   // sustained fever
+  Dengue: 'bug-outline',            // mosquito-borne
+  Malaria: 'moon-outline',          // night-biting mosquito
+  Jaundice: 'eye-outline',          // yellow eyes — classic recognition sign
+  'Other…': 'help-circle-outline',
+};
+
+const SYMPTOM_ICONS: Record<(typeof SYMPTOM_OPTIONS)[number], keyof typeof Ionicons.glyphMap> = {
+  'Loose motion': 'water-outline',        // watery
+  Vomiting: 'arrow-up-circle-outline',    // coming up
+  Fever: 'thermometer-outline',
+  Weakness: 'battery-dead-outline',       // empty battery — no energy
+  'Stomach pain': 'sad-outline',          // pain face (pain-scale convention)
+};
+
+// No per-level glyph ladder exists in StatusBadge (only filled-critical pairs
+// with 'warning'), so the chips use the alert/triangle family scaled by
+// severity — topping out at the same filled 'warning' critical wears on its
+// StatusBadge pill. Filled-at-rest is critical's privilege alone.
+const SEVERITY_ICONS: Record<Severity, keyof typeof Ionicons.glyphMap> = {
+  low: 'information-circle-outline',
+  medium: 'alert-circle-outline',
+  high: 'warning-outline',
+  critical: 'warning',
+};
+
 // ── Local building blocks ────────────────────────────────────────────────────
 
 const SelectChip: React.FC<{
@@ -82,12 +117,17 @@ const SelectChip: React.FC<{
   selected: boolean;
   onPress: () => void;
   colors: Theme;
+  /** Leading pictogram — pairs with the word so recognition never depends on reading. */
+  icon?: keyof typeof Ionicons.glyphMap;
   fill?: string;
   selectedLabelColor?: string;
   disabled?: boolean;
-}> = ({ label, selected, onPress, colors, fill, selectedLabelColor, disabled = false }) => {
+}> = ({ label, selected, onPress, colors, icon, fill, selectedLabelColor, disabled = false }) => {
   const bg = fill ?? colors.primary;
   const labelColor = selectedLabelColor ?? colors.onPrimary;
+  // The pictogram inherits the label color — selection stays conveyed by
+  // solid fill + checkmark + label, never by icon tint alone.
+  const contentColor = selected ? labelColor : colors.text;
   return (
     <Pressable
       onPress={disabled ? undefined : onPress}
@@ -104,7 +144,8 @@ const SelectChip: React.FC<{
       ]}
     >
       {selected && <Ionicons name="checkmark" size={16} color={labelColor} />}
-      <Text style={[styles.chipLabel, { color: selected ? labelColor : colors.text }]}>
+      {icon && <Ionicons name={icon} size={18} color={contentColor} />}
+      <Text style={[styles.chipLabel, { color: contentColor }]}>
         {label}
       </Text>
     </Pressable>
@@ -802,6 +843,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                       clearError('disease_name');
                     }}
                     colors={colors}
+                    icon={DISEASE_ICONS[option]}
                   />
                 ))}
               </View>
@@ -864,6 +906,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                       selected={severity === level.value}
                       onPress={() => setSeverity(level.value)}
                       colors={colors}
+                      icon={SEVERITY_ICONS[level.value]}
                       fill={getSeverityColor(level.value, colors)}
                       selectedLabelColor={colors.textInverse}
                       disabled={lockedOut}
@@ -891,6 +934,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                     selected={selectedSymptoms.includes(symptom)}
                     onPress={() => toggleSymptom(symptom)}
                     colors={colors}
+                    icon={SYMPTOM_ICONS[symptom]}
                   />
                 ))}
               </View>

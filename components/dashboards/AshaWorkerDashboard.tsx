@@ -4,7 +4,10 @@
 // Four-state data regions: skeleton / content / quiet-zero / error-with-retry.
 // =====================================================
 import React, { useState, useEffect } from 'react';
-import { ScrollView, View, StyleSheet, RefreshControl } from 'react-native';
+import { ScrollView, View, Text, StyleSheet, RefreshControl, Pressable } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
@@ -21,14 +24,47 @@ interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
 
+// First-run guidance — per-user dismissal flag on this phone.
+const firstRunKey = (userId: string) => `healthdrop:firstRunDismissed:${userId}`;
+
+// Three 48dp rows: file a report, see area alerts, offline-first reassurance.
+const FIRST_RUN_ROWS: Array<{
+  key: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  labelKey: string;
+  target: string;
+}> = [
+  { key: 'report',  icon: 'medkit-outline',         labelKey: 'firstRun.fileFirstReport', target: 'new-disease-report' },
+  { key: 'alerts',  icon: 'warning-outline',        labelKey: 'firstRun.seeAlerts',       target: 'all-alerts' },
+  { key: 'offline', icon: 'phone-portrait-outline', labelKey: 'firstRun.offlineFirst',    target: 'sync-outbox' },
+];
+
 export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const { t } = useTranslation();
   const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ myReports: 0, myPending: 0, myApproved: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
+  // null = storage not read yet — the card stays hidden until we know.
+  const [firstRunDismissed, setFirstRunDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(firstRunKey(profile.id))
+      .then(value => { if (mounted) setFirstRunDismissed(value === 'true'); })
+      .catch(() => { if (mounted) setFirstRunDismissed(false); });
+    return () => { mounted = false; };
+  }, [profile.id]);
+
+  const dismissFirstRun = () => {
+    setFirstRunDismissed(true);
+    AsyncStorage.setItem(firstRunKey(profile.id), 'true').catch(() => {
+      /* storage unavailable — stays hidden for this session */
+    });
+  };
 
   const load = async () => {
     setError(null);
@@ -77,6 +113,11 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
   const retry = () => { setLoading(true); load(); };
 
+  // Shown until dismissed, and auto-hidden once the user has ≥1 submission
+  // (reuses stats.myReports from the existing load — no extra queries).
+  const showGettingStarted =
+    firstRunDismissed === false && !loading && !error && stats.myReports === 0;
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
@@ -97,6 +138,48 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         <View style={styles.bannerWrap}>
           <InfoBanner icon="time-outline" color={colors.warning} text={`${stats.myPending} of your report${stats.myPending > 1 ? 's are' : ' is'} awaiting clinic approval`} />
         </View>
+      )}
+
+      {/* GETTING STARTED — first-run guidance card. Quiet "Got it" dismisses
+          it for this user on this phone; it also disappears by itself after
+          the first submission. */}
+      {showGettingStarted && (
+        <>
+          <Section
+            title={t('firstRun.title')}
+            style={{ marginTop: spacing.lg }}
+            action={{ label: t('firstRun.dismiss'), onPress: dismissFirstRun }}
+          >
+            <View
+              style={[
+                styles.firstRunCard,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                !isDark && styles.cardShadow,
+              ]}
+            >
+              {FIRST_RUN_ROWS.map((row, i, arr) => (
+                <Pressable
+                  key={row.key}
+                  onPress={() => onNavigate(row.target)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(row.labelKey)}
+                  style={({ pressed }) => [
+                    styles.firstRunRow,
+                    pressed && { backgroundColor: colors.cardHover },
+                    i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight },
+                  ]}
+                >
+                  <Ionicons name={row.icon} size={22} color={colors.textSecondary} />
+                  <Text style={[styles.firstRunText, { color: colors.text }]} numberOfLines={2}>
+                    {t(row.labelKey)}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                </Pressable>
+              ))}
+            </View>
+          </Section>
+          <SectionDivider />
+        </>
       )}
 
       {isWidgetVisible('quick_actions') && (
@@ -190,6 +273,24 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
 };
 
 const styles = StyleSheet.create({
+  /* Light-mode-only shadow — the single recipe */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  /* Getting-started card — 48dp icon rows, hairline dividers */
+  firstRunCard: { borderRadius: radii.md, borderWidth: 1, overflow: 'hidden' },
+  firstRunRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  firstRunText: { flex: 1, fontSize: 15, lineHeight: 22, fontWeight: '500' },
   qaRow: { flexDirection: 'row', gap: spacing.sm },
   statsRow: { flexDirection: 'row', gap: spacing.sm },
   rowGap: { marginTop: spacing.sm },
