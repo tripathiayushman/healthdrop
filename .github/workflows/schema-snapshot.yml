@@ -1,0 +1,70 @@
+name: Schema Snapshot
+
+# Schema-as-code baseline (PRODUCTION_READINESS #41): a weekly schema-only
+# dump committed to supabase/schema.sql so the repo always holds a truthful,
+# reviewable definition of the live database — tables, RLS policies,
+# functions, triggers. Data is NEVER dumped here (public repo); the daily
+# encrypted backup workflow covers data.
+
+on:
+  schedule:
+    - cron: "41 3 * * 1" # Mondays 03:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secret
+        id: guard
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::warning::SUPABASE_DB_URL not set — skipping."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL 17 client
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Dump schema and commit if changed
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          DB_URL="$(printf '%s' "$DB_URL" | tr -d '\r\n')"
+          mkdir -p supabase
+          pg_dump "$DB_URL" --schema-only --no-owner --no-privileges \
+            --schema=public -f supabase/schema.sql
+          # Strip volatile header lines so diffs only show real changes.
+          sed -i '/^-- Dumped from database version/d;/^-- Dumped by pg_dump version/d' supabase/schema.sql
+          if git diff --quiet -- supabase/schema.sql; then
+            echo "Schema unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/schema.sql
+          git commit -m "chore(db): schema snapshot [skip build]"
+          git push

@@ -32,7 +32,6 @@
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
-    "sdkVersion": "54.0.0",
     "plugins": [
       "expo-secure-store",
       [
