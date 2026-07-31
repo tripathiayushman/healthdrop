@@ -1,9 +1,11 @@
 // =====================================================
-// SHARED DASHBOARD COMPONENTS — "Prakash" design system
-// Flat headerBg header + Role Ribbon, Big Number stat
+// SHARED DASHBOARD COMPONENTS — "Bharosa" design language
+// Flat headerBg masthead + Role Ribbon, Big Number stat
 // cards, eyebrow section headers, directive-first alert
-// cards, skeleton / error / quiet-zero states, Sync
-// Pebble — used by all role dashboards.
+// cards, skeleton / error / quiet-zero states, the §9.4
+// Sync Ledger (SyncPebble), and the two §9.6 provenance
+// marks: VerifiedStamp and AILabel/AICard. Borders do
+// the work — no elevation shadows, no gradients.
 // =====================================================
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -21,13 +23,16 @@ import { Profile } from '../../types';
 //  The role accent appears in exactly two places per
 //  screen: the 4px Role Ribbon and the avatar/badge ring.
 // ─────────────────────────────────────────────────────
+// Accents are drawn from the Bharosa ladders (dark-mode tier:
+// vivid enough on the ink masthead and on dark surfaces alike).
+// Violet is reserved for AI and may never be a role accent.
 export const ROLE_ACCENT: Record<string, string> = {
-  super_admin:      '#42A5F5',
-  health_admin:     '#26A69A',
-  clinic:           '#A78BFA',
-  asha_worker:      '#FB923C',
-  volunteer:        '#4ADE80',
-  district_officer: '#818CF8',
+  super_admin:      themes.dark.info,         // sky
+  health_admin:     themes.dark.primary,      // action teal
+  clinic:           themes.dark.waterSafe,    // cyan
+  asha_worker:      themes.dark.severityHigh, // warm ochre
+  volunteer:        themes.dark.success,      // green
+  district_officer: themes.dark.warning,      // amber
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -83,14 +88,23 @@ export function getWaterQualityColor(quality: string, themeColors?: Theme): stri
 export const urgencyColor = (u: string, themeColors?: Theme): string =>
   getSeverityColor(u, themeColors);
 
-/** Matching soft background for a severity level (solid fill is CRITICAL's privilege). */
-const severityBg = (level: string, t: Theme): string => {
+/** §9.1 — escalation is shape-coded: outline → tinted → filled (+icon). */
+type PillVariant = 'outline' | 'tinted' | 'filled';
+
+const severityVariant = (level: string): PillVariant => {
   switch (level?.toLowerCase()) {
-    case 'critical': return t.dangerBg;
-    case 'high':     return t.offlineBg;   // saffron family
-    case 'medium':   return t.warningBg;
-    case 'low':      return t.successBg;
-    default:         return t.surfaceVariant;
+    case 'critical': return 'filled';
+    case 'high':     return 'tinted';
+    default:         return 'outline'; // low / medium / unknown
+  }
+};
+
+/** Soft container for the tinted tier — sev-high wears its own hue family. */
+const severityTint = (level: string, t: Theme): string => {
+  switch (level?.toLowerCase()) {
+    case 'high':   return t.severityHighBg;
+    case 'medium': return t.warningBg;
+    default:       return t.surfaceVariant;
   }
 };
 
@@ -123,7 +137,9 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
     Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
   }, [reduceMotion]);
 
-  // Navy band in light mode → white text; surface band in dark mode → ink text.
+  // Ink masthead in light mode → white text; surface band in dark mode → ink text.
+  // Both modes end on a strong bottom border — the divider carries the meaning,
+  // never a shadow.
   const headerText = isDark ? colors.text : colors.textInverse;
   const headerSub  = isDark ? colors.textSecondary : colors.primaryLight;
 
@@ -132,14 +148,17 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.borderStrong,
+          },
         ]}
       >
         <Animated.View style={{ opacity: fadeAnim }}>
           {/* Role pill — Eyebrow type. Accent stays on the border/icon ring;
               the label renders in the guaranteed-contrast header ink (F17) —
-              several ROLE_ACCENT hues fall below 4.5:1 on the navy band. */}
+              several ROLE_ACCENT hues fall below 4.5:1 on the ink masthead. */}
           <View style={[styles.rolePill, { borderColor: accent }]}>
             <Ionicons name={ROLE_ICON[role]} size={12} color={accent} />
             <Text style={[styles.rolePillText, { color: headerText }]} maxFontSizeMultiplier={1.3}>
@@ -230,7 +249,7 @@ interface StatCardProps {
 }
 
 export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, iconFamily = 'ionicons', onPress }) => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
 
   return (
     <Pressable
@@ -246,7 +265,6 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
           borderColor: colors.border,
           borderTopColor: color,
         },
-        !isDark && styles.cardShadow,
       ]}
     >
       <View style={[styles.statIconWrap, { backgroundColor: color + '14' }]}>
@@ -281,7 +299,7 @@ interface QuickActionProps {
 }
 
 export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color, iconFamily = 'ionicons', onPress }) => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
 
   return (
     <Pressable
@@ -295,7 +313,6 @@ export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color,
           backgroundColor: pressed ? colors.cardHover : colors.card,
           borderColor: colors.border,
         },
-        !isDark && styles.cardShadow,
       ]}
     >
       <View style={[styles.qaIcon, { backgroundColor: color + '14' }]}>
@@ -310,22 +327,28 @@ export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color,
 };
 
 // ─────────────────────────────────────────────────────
-//  Severity pill — dot + UPPERCASE label on *Bg token.
-//  Solid danger fill is CRITICAL's privilege alone.
+//  Severity pill — §9.1 shape-coded escalation.
+//  low / medium = outline · high = tinted · critical =
+//  filled + icon. The word always travels with the color.
 // ─────────────────────────────────────────────────────
 const SeverityPill: React.FC<{ level: string }> = ({ level }) => {
   const { colors } = useTheme();
   const key = level?.toLowerCase() ?? '';
-  const isCritical = key === 'critical';
-  const fg = isCritical ? colors.textInverse : getSeverityColor(key, colors);
-  const bg = isCritical ? colors.danger : severityBg(key, colors);
+  const sev = getSeverityColor(key, colors);
+  const variant = severityVariant(key);
+  const filled = variant === 'filled';
+  const fg = filled ? colors.textInverse : sev;
+  const bg = filled ? sev : variant === 'tinted' ? severityTint(key, colors) : 'transparent';
 
   return (
     <View
-      style={[styles.severityPill, { backgroundColor: bg }]}
+      style={[
+        styles.severityPill,
+        { backgroundColor: bg, borderColor: variant === 'outline' ? sev : 'transparent' },
+      ]}
       accessibilityLabel={`Urgency: ${key || 'unknown'}`}
     >
-      {!isCritical && <View style={[styles.severityDot, { backgroundColor: fg }]} />}
+      {filled && <Ionicons name="warning" size={12} color={fg} />}
       <Text style={[styles.severityPillText, { color: fg }]} maxFontSizeMultiplier={1.3}>
         {(level ?? '').toUpperCase()}
       </Text>
@@ -359,7 +382,7 @@ interface AlertCardProps {
 //  left edge is the only structural color.
 // ─────────────────────────────────────────────────────
 export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
-  const { colors, isDark, reduceMotion } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const sev = getSeverityColor(alert.urgency_level, colors);
   const [showDetail, setShowDetail] = useState(false);
 
@@ -382,7 +405,6 @@ export const AlertCard: React.FC<AlertCardProps> = ({ alert, onPress }) => {
             borderColor: colors.border,
             borderLeftColor: sev,
           },
-          !isDark && styles.cardShadow,
         ]}
       >
         {/* Severity + absolute-short timestamp */}
@@ -549,7 +571,7 @@ interface ToolCardProps {
 }
 
 export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subtitle, onPress, badge }) => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -562,7 +584,6 @@ export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subt
           backgroundColor: pressed ? colors.cardHover : colors.card,
           borderColor: colors.border,
         },
-        !isDark && styles.cardShadow,
       ]}
     >
       <View style={[styles.toolIcon, { backgroundColor: iconColor + '14' }]}>
@@ -697,36 +718,41 @@ export const ErrorCard: React.FC<ErrorCardProps> = ({ message, onRetry }) => {
 };
 
 // ─────────────────────────────────────────────────────
-//  SyncPebble — honest system state in the header.
-//  Synced / Saving… / n need retry / Offline · n queued,
-//  with a 1.5s "All synced" flash when the queue truly
-//  drains. Failure-aware (F5): permanently-failed items
-//  show a danger-toned "need retry" state and suppress
-//  the green Synced / All-synced states.
+//  SyncPebble — the §9.4 sync ledger: one component,
+//  four truths, always rendered (quiet when good):
+//    All synced · last HH:MM      (sync-synced green)
+//    Syncing n of m…              (sync-saving blue)
+//    n saved on phone — will sync (sync-queued amber)
+//    n couldn't sync — needs you  (sync-failed red)
+//  Offline is a place, not an error — the queued truth
+//  wears amber, never red. Counts always mirror the
+//  Outbox exactly; changes announce politely (a11y).
 // ─────────────────────────────────────────────────────
 export const SyncPebble: React.FC = () => {
   const { colors } = useTheme();
   const netInfo = useNetInfo();
   const { pending, failed } = useSyncCounts();
-  const [flash, setFlash] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const prevPending = useRef(pending);
+  const batchTotal = useRef(0);
 
   const offline = netInfo.isConnected === false || netInfo.isInternetReachable === false;
 
   useEffect(() => {
+    // Track the size of the in-flight batch so "Syncing n of m" is honest.
+    if (pending > batchTotal.current) batchTotal.current = pending;
     const prev = prevPending.current;
     prevPending.current = pending;
-    // Never celebrate while failures remain (F5).
-    if (failed > 0) {
-      setFlash(false);
-      return;
+    if (prev > 0 && pending === 0) {
+      batchTotal.current = 0;
+      // The ledger never lies: the timestamp is only minted on a clean drain.
+      if (failed === 0) {
+        setLastSyncedAt(
+          new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        );
+      }
     }
-    if (prev > 0 && pending === 0 && !offline) {
-      setFlash(true);
-      const timer = setTimeout(() => setFlash(false), 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [pending, failed, offline]);
+  }, [pending, failed]);
 
   const queued = pending + failed;
 
@@ -736,43 +762,48 @@ export const SyncPebble: React.FC = () => {
   let label: string;
   let a11yLabel: string;
 
-  if (offline) {
-    bg = colors.offlineBg;
-    fg = colors.offline;
-    icon = 'cloud-offline-outline';
-    label = queued > 0 ? `Offline · ${queued} queued` : 'Offline';
-    a11yLabel = queued > 0
-      ? `Offline. ${queued} ${queued === 1 ? 'report' : 'reports'} saved on phone, will sync`
-      : 'Offline. Reports will be saved on phone';
-  } else if (pending > 0) {
+  if (offline && queued > 0) {
+    // Truth 3 — saved on phone, will sync (waiting, not wrong)
     bg = colors.warningBg;
-    fg = colors.warning;
-    icon = 'sync-outline';
-    label = 'Saving…';
-    a11yLabel = `Saving. ${pending} ${pending === 1 ? 'report' : 'reports'} waiting to sync`;
-  } else if (failed > 0) {
+    fg = colors.syncQueued;
+    icon = 'phone-portrait-outline';
+    label = `${queued} saved on phone — will sync`;
+    a11yLabel = `${queued} ${queued === 1 ? 'report' : 'reports'} saved on phone, will sync when the network returns`;
+  } else if (offline) {
+    // Quiet offline — the place itself, nothing waiting
+    bg = colors.warningBg;
+    fg = colors.syncQueued;
+    icon = 'cloud-offline-outline';
+    label = 'Offline — saves on phone';
+    a11yLabel = 'Offline. New reports will save on this phone and sync later';
+  } else if (failed > 0 && pending === 0) {
+    // Truth 4 — couldn't sync, needs a human. Never silent.
     bg = colors.dangerBg;
-    fg = colors.danger;
+    fg = colors.syncFailed;
     icon = 'alert-circle-outline';
-    label = failed === 1 ? '1 needs retry' : `${failed} need retry`;
-    a11yLabel = `${failed} ${failed === 1 ? 'report' : 'reports'} could not upload and ${failed === 1 ? 'needs' : 'need'} a retry from the Sync Outbox`;
-  } else if (flash) {
-    bg = colors.successBg;
-    fg = colors.success;
-    icon = 'checkmark-circle-outline';
-    label = 'All synced';
-    a11yLabel = 'All reports synced';
+    label = `${failed} couldn't sync — needs you`;
+    a11yLabel = `${failed} ${failed === 1 ? 'report' : 'reports'} could not sync and ${failed === 1 ? 'needs' : 'need'} your attention in the Sync Outbox`;
+  } else if (pending > 0) {
+    // Truth 2 — in flight
+    const total = Math.max(batchTotal.current, pending);
+    const current = Math.min(total - pending + 1, total);
+    bg = colors.infoBg;
+    fg = colors.syncSaving;
+    icon = 'sync-outline';
+    label = `Syncing ${current} of ${total}…`;
+    a11yLabel = `Syncing ${current} of ${total} reports`;
   } else {
+    // Truth 1 — all synced, timestamped when we truly know
     bg = colors.successBg;
-    fg = colors.success;
+    fg = colors.syncSynced;
     icon = 'checkmark-circle-outline';
-    label = 'Synced';
-    a11yLabel = 'Synced';
+    label = lastSyncedAt ? `All synced · last ${lastSyncedAt}` : 'All synced';
+    a11yLabel = lastSyncedAt ? `All reports synced. Last sync ${lastSyncedAt}` : 'All reports synced';
   }
 
   return (
     <View
-      style={[styles.pebble, { backgroundColor: bg }]}
+      style={[styles.pebble, { backgroundColor: bg, borderColor: fg }]}
       accessible
       accessibilityLiveRegion="polite"
       accessibilityLabel={a11yLabel}
@@ -790,6 +821,100 @@ export const SyncPebble: React.FC = () => {
 };
 
 // ─────────────────────────────────────────────────────
+//  VerifiedStamp — §3 Move 01 / §9.6 provenance mark.
+//  The rubber stamp: slightly rotated, 1.5px inked border
+//  in success ink, a human name, a role, a tabular time.
+//  Pure border + text — survives cheap GPUs and print.
+//  Only ever applied with a human name; never for AI.
+// ─────────────────────────────────────────────────────
+interface VerifiedStampProps {
+  verifierName: string;
+  role?: string;
+  timestamp?: string;
+}
+
+export const VerifiedStamp: React.FC<VerifiedStampProps> = ({ verifierName, role, timestamp }) => {
+  const { colors } = useTheme();
+  return (
+    <View
+      style={[styles.stamp, { borderColor: colors.success }]}
+      accessible
+      accessibilityLabel={
+        `Verified by ${verifierName}` +
+        (role ? `, ${role}` : '') +
+        (timestamp ? `, ${timestamp}` : '')
+      }
+    >
+      <Text style={[styles.stampTitle, { color: colors.success }]} maxFontSizeMultiplier={1.3}>
+        {'✓ VERIFIED'}
+      </Text>
+      <Text
+        style={[styles.stampMeta, { color: colors.success }]}
+        maxFontSizeMultiplier={1.3}
+        numberOfLines={2}
+      >
+        {role ? `${verifierName} · ${role}` : verifierName}
+      </Text>
+      {!!timestamp && (
+        <Text
+          style={[styles.stampTime, { color: colors.success }]}
+          maxFontSizeMultiplier={1.3}
+          numberOfLines={1}
+        >
+          {timestamp}
+        </Text>
+      )}
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
+//  AILabel — §9.6 the violet provenance chip. Violet +
+//  sparkle + dashed border + the word "AI": triple-coded
+//  so the lesson survives colorblindness and low
+//  literacy. Violet means the system worked this out —
+//  it is never a fact until a human makes it one.
+// ─────────────────────────────────────────────────────
+export const AILabel: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+  const { colors } = useTheme();
+  return (
+    <View
+      style={[styles.aiLabel, { backgroundColor: colors.aiBg, borderColor: colors.aiBorder }]}
+      accessible
+      accessibilityLabel="AI inferred — not a verified fact"
+    >
+      <Ionicons name="sparkles" size={12} color={colors.ai} />
+      <Text style={[styles.aiLabelText, { color: colors.ai }]} maxFontSizeMultiplier={1.3}>
+        {children ?? 'AI — INFERRED'}
+      </Text>
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
+//  AICard — dashed-violet-border card for AI surfaces.
+//  Wraps content under the AILabel eyebrow; the dashed
+//  border means "inferred" on every AI surface, no
+//  exceptions. Nothing may wear both this and the stamp.
+// ─────────────────────────────────────────────────────
+interface AICardProps {
+  children: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+  /** Optional eyebrow override — defaults to "AI — INFERRED". */
+  label?: string;
+}
+
+export const AICard: React.FC<AICardProps> = ({ children, style, label }) => {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.aiCard, { backgroundColor: colors.aiBg, borderColor: colors.aiBorder }, style]}>
+      <AILabel>{label}</AILabel>
+      {children}
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
 //  SectionDivider
 // ─────────────────────────────────────────────────────
 export const SectionDivider: React.FC = () => {
@@ -801,14 +926,6 @@ export const SectionDivider: React.FC = () => {
 //  Styles
 // ─────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  /* ── Light-mode-only shadow (single recipe) ── */
-  cardShadow: {
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-
   /* ── Header ── */
   header: {
     paddingHorizontal: spacing.lg,
@@ -875,14 +992,16 @@ const styles = StyleSheet.create({
   qaIcon: { width: 44, height: 44, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' },
   qaLabel: { fontSize: 13, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
 
-  /* ── Severity pill ── */
+  /* ── Severity pill — §9.1: h28, r-full, micro type; borderWidth is
+        constant so outline / tinted / filled tiers keep one geometry ── */
   severityPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 6,
+    paddingHorizontal: 10, paddingVertical: 4,
+    minHeight: 28,
     borderRadius: radii.pill,
+    borderWidth: 1.5,
   },
-  severityDot: { width: 6, height: 6, borderRadius: 3 },
-  severityPillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
+  severityPillText: { fontSize: 12, lineHeight: 16, fontWeight: '600', letterSpacing: 0.6 },
 
   /* ── Alert card ── */
   alertCard: {
@@ -945,14 +1064,51 @@ const styles = StyleSheet.create({
   },
   errorRetryText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
 
-  /* ── Sync Pebble ── */
+  /* ── Sync Pebble — §9.4 ledger chip: tint + 1px truth-colored hairline ── */
   pebble: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 6,
+    paddingHorizontal: 10, paddingVertical: 5,
     borderRadius: radii.pill,
+    borderWidth: 1,
     minHeight: 28, alignSelf: 'flex-start',
   },
-  pebbleText: { fontSize: 12, lineHeight: 16, fontWeight: '700' },
+  pebbleText: { fontSize: 12, lineHeight: 16, fontWeight: '700', flexShrink: 1 },
+
+  /* ── VerifiedStamp — §9.6: border + text only, gently askew ── */
+  stamp: {
+    alignSelf: 'flex-start',
+    borderWidth: 1.5,
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 2,
+    transform: [{ rotate: '-2deg' }],
+  },
+  stampTitle: { fontSize: 13, lineHeight: 18, fontWeight: '800', letterSpacing: 1 },
+  stampMeta:  { fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  stampTime:  { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+
+  /* ── AI provenance — §9.6: violet + sparkle + dashed + the word ── */
+  aiLabel: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 4,
+    minHeight: 28,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  aiLabelText: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700',
+    letterSpacing: 0.6, textTransform: 'uppercase',
+  },
+  aiCard: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: radii.md,
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
 
   /* ── Divider ── */
   divider: { height: StyleSheet.hairlineWidth, marginHorizontal: spacing.lg, marginVertical: spacing.xs },

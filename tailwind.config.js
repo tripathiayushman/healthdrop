@@ -45,6 +45,12 @@ module.exports = {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        // Bharosa reserved AI violet — provenance marks only
+        ai: {
+          DEFAULT: 'hsl(var(--ai))',
+          container: 'hsl(var(--ai-container))',
+          border: 'hsl(var(--ai-border))',
+        },
       },
       borderRadius: {
         lg: 'var(--radius)',

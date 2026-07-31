@@ -1,10 +1,14 @@
 // =====================================================
-// STATUS BADGE COMPONENT — dot + UPPERCASE pill on the
-// matching *Bg token. Solid danger fill is reserved for
-// CRITICAL alone. Never color alone, never a bare dot.
+// STATUS BADGE — §9.1 Bharosa pills. Escalation is
+// shape-coded: outline → tinted → filled; the word
+// always travels with the color, and critical adds an
+// icon. Water pills always carry the droplet pictogram;
+// water-critical is filled and says "DO NOT DRINK".
+// Never color alone, never a bare dot.
 // =====================================================
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import {
   useTheme,
   Theme,
@@ -20,24 +24,41 @@ interface StatusBadgeProps {
   size?: 'small' | 'medium' | 'large';
 }
 
-/** Resolve the soft *Bg token that pairs with a resolved status color. */
+type PillVariant = 'outline' | 'tinted' | 'filled';
+
+// §9.1 ladders — low/medium (safe/moderate) stay quiet outlines,
+// high (unsafe) is tinted, critical is filled + icon.
+const SEVERITY_VARIANT: Record<string, PillVariant> = {
+  low: 'outline',
+  medium: 'outline',
+  high: 'tinted',
+  critical: 'filled',
+};
+
+const WATER_VARIANT: Record<string, PillVariant> = {
+  safe: 'outline',
+  moderate: 'outline',
+  poor: 'tinted',      // legacy vocab → unsafe tier
+  unsafe: 'tinted',
+  contaminated: 'filled', // legacy vocab → critical tier
+  critical: 'filled',
+};
+
+/** Resolve the soft container token that pairs with a resolved pill color. */
 const getBgToken = (color: string, colors: Theme): string => {
   switch (color) {
     case colors.success:
-    case colors.severityLow:
-    case colors.waterSafe:
+    case colors.badgeActive:
       return colors.successBg;
     case colors.warning:
-    case colors.severityMedium:
-    case colors.waterModerate:
       return colors.warningBg;
     case colors.danger:
     case colors.severityCritical:
-    case colors.waterUnsafe:
-    case colors.waterCritical:
       return colors.dangerBg;
     case colors.severityHigh:
+    case colors.waterUnsafe:
     case colors.accent:
+      return colors.severityHighBg;
     case colors.offline:
       return colors.offlineBg;
     case colors.info:
@@ -53,33 +74,63 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   size = 'medium',
 }) => {
   const { colors } = useTheme();
+  const key = status?.toLowerCase() ?? '';
 
-  const getColor = () => {
+  const resolveColor = () => {
     switch (type) {
       case 'severity':
-        return getSeverityColor(status, colors);
+        return getSeverityColor(key, colors);
       case 'water':
-        return getWaterQualityColor(status, colors);
+        return getWaterQualityColor(key, colors);
       default:
-        return getStatusColor(status, colors);
+        return getStatusColor(key, colors);
     }
   };
 
-  // Solid fill is CRITICAL's privilege alone
-  const isCritical = status?.toLowerCase() === 'critical';
-  const color = isCritical ? colors.textInverse : getColor();
-  const backgroundColor = isCritical ? colors.danger : getBgToken(getColor(), colors);
+  // Shape tier: severity and water follow the §9.1 ladders; generic
+  // statuses stay tinted, except critical — filled is its privilege alone.
+  let variant: PillVariant;
+  if (type === 'severity') {
+    variant = SEVERITY_VARIANT[key] ?? 'outline';
+  } else if (type === 'water') {
+    variant = WATER_VARIANT[key] ?? 'outline';
+  } else {
+    variant = key === 'critical' ? 'filled' : 'tinted';
+  }
+
+  const base = resolveColor();
+  const filled = variant === 'filled';
+  const color = filled ? colors.textInverse : base;
+  const backgroundColor = filled
+    ? base
+    : variant === 'tinted'
+      ? getBgToken(base, colors)
+      : 'transparent';
+  const borderColor = variant === 'outline' ? base : 'transparent';
+
+  // The directive outranks the taxonomy: water-critical commands.
+  const isWaterCritical = type === 'water' && (key === 'critical' || key === 'contaminated');
+  const label = isWaterCritical
+    ? 'DO NOT DRINK'
+    : (status ?? '').replace(/_/g, ' ').toUpperCase();
 
   const sizeStyles = {
-    small: { paddingHorizontal: 8, paddingVertical: 3, fontSize: 12 },
-    medium: { paddingHorizontal: 10, paddingVertical: 6, fontSize: 12 },
-    large: { paddingHorizontal: 14, paddingVertical: 6, fontSize: 13 },
+    small: { paddingHorizontal: 8, paddingVertical: 2, fontSize: 12, icon: 11 },
+    medium: { paddingHorizontal: 10, paddingVertical: 4, fontSize: 12, icon: 12 },
+    large: { paddingHorizontal: 14, paddingVertical: 5, fontSize: 13, icon: 13 },
   };
-
-  const formatLabel = (str: string) => str.replace(/_/g, ' ').toUpperCase();
 
   const a11yPrefix =
     type === 'severity' ? 'Urgency' : type === 'water' ? 'Water quality' : 'Status';
+  const a11yLabel = isWaterCritical
+    ? `Water quality: critical. Do not drink`
+    : `${a11yPrefix}: ${(status ?? '').replace(/_/g, ' ')}`;
+
+  // Icons carry the words' meaning past color: droplet on every water
+  // pill, warning on filled critical, dot on tinted status pills.
+  const showDroplet = type === 'water';
+  const showCriticalIcon = !showDroplet && filled;
+  const showDot = type === 'status' && !filled;
 
   return (
     <View
@@ -87,19 +138,22 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
         styles.badge,
         {
           backgroundColor,
+          borderColor,
           paddingHorizontal: sizeStyles[size].paddingHorizontal,
           paddingVertical: sizeStyles[size].paddingVertical,
         },
       ]}
       accessible
-      accessibilityLabel={`${a11yPrefix}: ${status?.replace(/_/g, ' ')}`}
+      accessibilityLabel={a11yLabel}
     >
-      {!isCritical && <View style={[styles.dot, { backgroundColor: color }]} />}
+      {showDroplet && <Ionicons name="water" size={sizeStyles[size].icon} color={color} />}
+      {showCriticalIcon && <Ionicons name="warning" size={sizeStyles[size].icon} color={color} />}
+      {showDot && <View style={[styles.dot, { backgroundColor: color }]} />}
       <Text
         style={[styles.text, { color, fontSize: sizeStyles[size].fontSize }]}
         maxFontSizeMultiplier={1.3}
       >
-        {formatLabel(status)}
+        {label}
       </Text>
     </View>
   );
@@ -109,17 +163,20 @@ const styles = StyleSheet.create({
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 5,
     borderRadius: radii.pill,
+    // Constant borderWidth keeps outline / tinted / filled the same height
+    borderWidth: 1.5,
+    minHeight: 28,
     alignSelf: 'flex-start',
   },
   dot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    marginRight: 6,
   },
   text: {
-    fontWeight: '800',
+    fontWeight: '600',
     letterSpacing: 0.6,
     lineHeight: 16,
   },

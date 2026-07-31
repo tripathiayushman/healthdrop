@@ -35,9 +35,12 @@ import EscalationMonitoringScreen from './screens/EscalationMonitoringScreen';
 import WidgetCustomizationScreen from './screens/WidgetCustomizationScreen';
 import SyncOutboxScreen from './screens/SyncOutboxScreen';
 import MySubmissionsScreen from './screens/MySubmissionsScreen';
+import OutbreakSignalScreen from './screens/OutbreakSignalScreen';
+import OutbreakConsoleScreen from './screens/OutbreakConsoleScreen';
 
 // Forms
 import { DiseaseReportForm, WaterQualityReportForm, CampaignForm, AlertForm } from './forms';
+import { ReportTypeSheet } from './forms/ReportTypeSheet';
 
 // AI Chatbot
 import { AIChatbot } from './ai/AIChatbot';
@@ -64,7 +67,9 @@ type ScreenType =
   | 'escalation-monitoring'
   | 'widget-customization'
   | 'sync-outbox'
-  | 'my-submissions';
+  | 'my-submissions'
+  | 'outbreak-signal'
+  | 'outbreak-console';
 type RestrictedScreenType = Exclude<ScreenType, 'tabs' | CreateScreenType>;
 
 const TAB_ORDER: TabType[] = ['home', 'map', 'reports', 'campaigns', 'profile'];
@@ -89,6 +94,8 @@ const SCREEN_PERMISSIONS: Record<RestrictedScreenType, Profile['role'][]> = {
   'widget-customization': ['super_admin', 'health_admin', 'district_officer', 'clinic', 'asha_worker', 'volunteer'],
   'sync-outbox': ALL_ROLES,
   'my-submissions': ALL_ROLES,
+  'outbreak-signal': ['super_admin', 'health_admin', 'district_officer'],
+  'outbreak-console': ['super_admin', 'health_admin', 'district_officer'],
 };
 
 const CREATE_ACTIONS: Array<{
@@ -122,6 +129,8 @@ const isScreenType = (value: string): value is ScreenType =>
     'widget-customization',
     'sync-outbox',
     'my-submissions',
+    'outbreak-signal',
+    'outbreak-console',
   ].includes(value);
 
 const canCreateOnRole = (role: Profile['role'], screen: CreateScreenType): boolean =>
@@ -140,6 +149,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const { colors, isDark } = useTheme();
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('tabs');
+  const [outbreakFocusId, setOutbreakFocusId] = useState<string | null>(null);
   const [approvalQueueInitialTab, setApprovalQueueInitialTab] = useState<'disease' | 'water' | 'campaigns' | 'alerts'>('disease');
   const [reportFocus, setReportFocus] = useState<{ type: 'disease' | 'water'; id: string } | null>(null);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
@@ -147,14 +157,6 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const availableCreateActions = CREATE_ACTIONS.filter(action =>
     canCreateOnRole(profile.role, action.screen)
   );
-
-  // Semantic tint per create action — token-driven, no hex literals.
-  const createActionColor: Record<CreateScreenType, string> = {
-    'new-disease-report': colors.danger,
-    'new-water-report': colors.info,
-    'new-campaign': colors.success,
-    'new-alert': colors.warning,
-  };
 
   useEffect(() => {
     setShowCreateMenu(false);
@@ -215,6 +217,22 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   ).current;
 
   const navigateToForm = (formType: string) => {
+    if (formType.startsWith('outbreak-signal:')) {
+      if (!canAccessScreen(profile.role, 'outbreak-signal')) {
+        Alert.alert(
+          'Permission Denied',
+          'Your role does not have permission to review outbreak signals.'
+        );
+        return;
+      }
+      const id = formType.split(':')[1];
+      if (id) {
+        setOutbreakFocusId(id);
+        setCurrentScreen('outbreak-signal');
+      }
+      return;
+    }
+
     if (formType.startsWith('open-report:')) {
       const [, reportType, reportId] = formType.split(':');
       if ((reportType === 'disease' || reportType === 'water') && reportId) {
@@ -355,6 +373,28 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
           onBack={goBackToTabs}
           onOpenQueue={(tab) => navigateToForm(`approval-queue:${tab}`)}
         />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'outbreak-signal' && outbreakFocusId) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <OutbreakSignalScreen
+          profile={profile}
+          outbreakId={outbreakFocusId}
+          onBack={goBackToTabs}
+          onOpenConsole={(id: string) => {
+            setOutbreakFocusId(id);
+            setCurrentScreen('outbreak-console');
+          }}
+        />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'outbreak-console' && outbreakFocusId) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <OutbreakConsoleScreen profile={profile} outbreakId={outbreakFocusId} onBack={goBackToTabs} />
       </SafeAreaView>
     );
   }
@@ -524,45 +564,6 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
 
       {showUniversalAddFab && (
         <>
-          {showCreateMenu && (
-            <Pressable
-              style={styles.createMenuBackdrop}
-              onPress={() => setShowCreateMenu(false)}
-              accessibilityRole="button"
-              accessibilityLabel="Close create menu"
-            />
-          )}
-
-          {showCreateMenu && (
-            <View style={[styles.createMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {availableCreateActions.map((action) => {
-                const tint = createActionColor[action.screen];
-                return (
-                  <Pressable
-                    key={action.screen}
-                    style={({ pressed }) => [
-                      styles.createMenuItem,
-                      pressed && { backgroundColor: colors.cardHover },
-                    ]}
-                    onPress={() => {
-                      setShowCreateMenu(false);
-                      navigateToForm(action.screen);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Create ${action.label}`}
-                  >
-                    <View style={[styles.createMenuIcon, { backgroundColor: tint + '14' }]}>
-                      <Ionicons name={action.icon} size={18} color={tint} />
-                    </View>
-                    <Text style={[styles.createMenuLabel, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                      {action.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          )}
-
           {/* Extended create button — labeled, never icon-only */}
           <Pressable
             style={({ pressed }) => [
@@ -572,16 +573,27 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
                 shadowColor: colors.shadow,
               },
             ]}
-            onPress={() => setShowCreateMenu(prev => !prev)}
+            onPress={() => setShowCreateMenu(true)}
             accessibilityRole="button"
-            accessibilityLabel={showCreateMenu ? 'Close create menu' : 'Create new record'}
+            accessibilityLabel="Create new record"
             accessibilityState={{ expanded: showCreateMenu }}
           >
-            <Ionicons name={showCreateMenu ? 'close' : 'add'} size={24} color={colors.onPrimary} />
+            <Ionicons name="add" size={24} color={colors.onPrimary} />
             <Text style={[styles.createFabLabel, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
               Create
             </Text>
           </Pressable>
+
+          {/* Bharosa A·01 — "What are you reporting?" bottom sheet */}
+          <ReportTypeSheet
+            visible={showCreateMenu}
+            allowedTargets={availableCreateActions.map((action) => action.screen)}
+            onClose={() => setShowCreateMenu(false)}
+            onSelect={(target) => {
+              setShowCreateMenu(false);
+              navigateToForm(target);
+            }}
+          />
         </>
       )}
 
@@ -636,11 +648,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  /* ── Create menu ── */
-  createMenuBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 18,
-  },
+  /* ── Create action ── */
   createFab: {
     position: 'absolute',
     right: spacing.lg,
@@ -663,37 +671,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     fontWeight: '700',
-  },
-  createMenu: {
-    position: 'absolute',
-    right: spacing.lg,
-    bottom: Platform.OS === 'ios' ? 164 : 156,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    paddingVertical: spacing.xs,
-    minWidth: 220,
-    zIndex: 20,
-    overflow: 'hidden',
-  },
-  createMenuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: spacing.md,
-  },
-  createMenuIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  createMenuLabel: {
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: '600',
   },
 
   /* ── Tab bar ── */

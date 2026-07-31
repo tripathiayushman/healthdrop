@@ -2,51 +2,58 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Theme variables mapped to the HealthDrop "Prakash" palette
-   (see DESIGN_SPEC.md / lib/ThemeContext.tsx — keep the two in sync). */
+/* Theme variables mapped to the HealthDrop "Bharosa" palette
+   (see the Bharosa field manual §2.1 / lib/ThemeContext.tsx —
+   keep the two in sync). Values are HSL triplets. */
 @layer base {
   :root {
-    --background: 210 31% 95%;
-    --foreground: 210 59% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 210 59% 11%;
+    --background: 0 0% 100%;          /* bg #FFFFFF */
+    --foreground: 240 5% 4%;          /* ink #0A0A0B */
+    --card: 0 0% 100%;                /* card #FFFFFF */
+    --card-foreground: 240 5% 4%;
     --popover: 0 0% 100%;
-    --popover-foreground: 210 59% 11%;
-    --primary: 207 88% 35%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 210 33% 92%;
-    --secondary-foreground: 210 59% 11%;
-    --muted: 210 33% 92%;
-    --muted-foreground: 207 26% 32%;
-    --accent: 17 88% 40%;
+    --popover-foreground: 240 5% 4%;
+    --primary: 173 81% 23%;           /* action teal #0B6B60 */
+    --primary-foreground: 0 0% 100%;  /* on-primary #FFFFFF */
+    --secondary: 240 5% 96%;          /* zinc-100 #F4F4F5 */
+    --secondary-foreground: 240 5% 4%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;   /* ink-3 #71717A */
+    --accent: 18 92% 38%;             /* sev-high #BC3D08 */
     --accent-foreground: 0 0% 100%;
-    --destructive: 0 74% 42%;
+    --destructive: 3 71% 41%;         /* danger #B3261E */
     --destructive-foreground: 0 0% 100%;
-    --border: 209 24% 81%;
-    --input: 208 16% 47%;
-    --ring: 207 88% 35%;
-    --radius: 0.75rem;
+    --border: 240 6% 90%;             /* hairline #E4E4E7 */
+    --input: 240 5% 65%;              /* border-input #A1A1AA */
+    --ring: 173 81% 23%;              /* 2px teal focus ring */
+    --ai: 263 70% 50%;                /* reserved violet #6D28D9 */
+    --ai-container: 261 74% 95%;      /* AI card fill #F1EBFC */
+    --ai-border: 261 70% 83%;         /* dashed = inferred #CBB6F2 */
+    --radius: 0.75rem;                /* r-12 cards, buttons */
   }
 
   .dark:root {
-    --background: 210 39% 7%;
-    --foreground: 207 53% 97%;
-    --card: 213 35% 13%;
-    --card-foreground: 207 53% 97%;
-    --popover: 213 35% 13%;
-    --popover-foreground: 207 53% 97%;
-    --primary: 205 72% 61%;
-    --primary-foreground: 206 83% 14%;
-    --secondary: 210 31% 15%;
-    --secondary-foreground: 207 53% 97%;
-    --muted: 210 31% 15%;
-    --muted-foreground: 208 22% 72%;
-    --accent: 27 96% 61%;
-    --accent-foreground: 210 59% 11%;
-    --destructive: 0 91% 71%;
-    --destructive-foreground: 210 59% 11%;
-    --border: 210 27% 23%;
-    --input: 209 21% 39%;
-    --ring: 205 72% 61%;
+    --background: 240 8% 5%;          /* bg #0B0B0D */
+    --foreground: 0 0% 98%;           /* ink #FAFAFA */
+    --card: 240 7% 11%;               /* card #19191D */
+    --card-foreground: 0 0% 98%;
+    --popover: 240 7% 11%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 171 62% 58%;           /* action teal #53D6C3 */
+    --primary-foreground: 172 71% 8%; /* on-primary #06231F */
+    --secondary: 240 4% 16%;          /* zinc-800 #27272A */
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 4% 16%;
+    --muted-foreground: 240 3% 62%;   /* ink-3 #9B9BA1 */
+    --accent: 20 87% 70%;             /* sev-high #F59B6E */
+    --accent-foreground: 240 8% 5%;
+    --destructive: 5 85% 74%;         /* danger #F58E85 */
+    --destructive-foreground: 240 8% 5%;
+    --border: 240 4% 16%;             /* hairline #27272A */
+    --input: 240 5% 34%;              /* border-input #52525B */
+    --ring: 171 62% 58%;
+    --ai: 258 81% 84%;                /* reserved violet #C7B3F7 */
+    --ai-container: 253 42% 22%;      /* AI card fill #2B2150 */
+    --ai-border: 253 36% 36%;         /* dashed = inferred #4A3B7E */
   }
 }

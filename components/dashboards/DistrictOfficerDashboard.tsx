@@ -4,7 +4,8 @@
 // Four-state data regions: skeleton / content / quiet-zero / error-with-retry.
 // =====================================================
 import React, { useState, useEffect } from 'react';
-import { ScrollView, View, StyleSheet, RefreshControl } from 'react-native';
+import { ScrollView, View, Text, StyleSheet, RefreshControl, Pressable } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
@@ -17,19 +18,47 @@ import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
 import { filterAlertsForProfile } from '../../lib/services/alertRadius';
 import { useDashboardWidgetVisibility } from '../../lib/services/widgetPreferences';
+import { Outbreak, isOutbreakConfirmed, outbreaksService } from '../../lib/services/outbreaks';
 
-interface Props { profile: Profile; onNavigate: (s: string) => void }
+interface Props {
+  profile: Profile;
+  onNavigate: (s: string) => void;
+  /** Optional: open the outbreak signal-review / console flow. */
+  onOpenOutbreak?: (id: string) => void;
+}
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
 
-export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
-  const { colors } = useTheme();
+const relativeAge = (iso: string): string => {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const mins = Math.max(0, Math.floor((Date.now() - t) / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+};
+
+const outbreakDay = (iso: string): number => {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return 1;
+  return Math.max(1, Math.floor((Date.now() - t) / 86400000) + 1);
+};
+
+export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate, onOpenOutbreak }) => {
+  const { colors, isDark } = useTheme();
   const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ districtReports: 0, districtWater: 0, campaigns: 0, alerts: 0, pendingReports: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [outbreaks, setOutbreaks] = useState<Outbreak[]>([]);
+
+  const openOutbreak = (id: string) => {
+    if (onOpenOutbreak) onOpenOutbreak(id);
+    else onNavigate(`outbreak-signal:${id}`);
+  };
 
   const load = async () => {
     setError(null);
@@ -48,6 +77,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
         dQ, wQ, pDiseaseQ, pWaterQ,
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('status', 'active'),
       ]);
+      const outbreakRes = await outbreaksService.getActive(profile.district || undefined);
       const alertData = await supabase
         .from('health_alerts')
         .select('*')
@@ -65,6 +95,13 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
 
       if (alertData.error) failed = true;
       const visibleAlerts = filterAlertsForProfile(alertData.data ?? [], profile);
+
+      if (outbreakRes.error || !outbreakRes.data) {
+        failed = true;
+        setOutbreaks([]);
+      } else {
+        setOutbreaks(outbreakRes.data);
+      }
 
       setStats({
         districtReports: countOf(d),
@@ -86,6 +123,11 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
   const retry = () => { setLoading(true); load(); };
 
+  // C·01 — the auto-detected signal awaiting a human decision:
+  // newest active outbreak with no confirmation entry in its audit log.
+  const signalOutbreak = outbreaks.find((o) => o.status === 'active' && !isOutbreakConfirmed(o)) ?? null;
+  const latestOutbreak = outbreaks[0] ?? null;
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
@@ -98,6 +140,54 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
       {!loading && error && (
         <View style={styles.errorWrap}>
           <ErrorCard message={error} onRetry={retry} />
+        </View>
+      )}
+
+      {/* ── C·01 AUTO-DETECTED SIGNAL — outranks everything, but wears
+           warning amber + a gear (rule-based, not AI, not confirmed danger).
+           Never violet, never red. ── */}
+      {!loading && !error && signalOutbreak && (
+        <View style={styles.bannerWrap}>
+          <View
+            style={[
+              styles.signalCard,
+              { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.warning },
+              !isDark && styles.cardShadow,
+            ]}
+          >
+            <View style={styles.signalHeader}>
+              <View style={styles.signalEyebrowWrap}>
+                <Ionicons name="settings-outline" size={14} color={colors.warning} />
+                <Text style={[styles.signalEyebrow, { color: colors.warning }]} maxFontSizeMultiplier={1.3}>
+                  AUTO-DETECTED SIGNAL
+                </Text>
+              </View>
+              <Text style={[styles.signalAge, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                {relativeAge(signalOutbreak.created_at)}
+              </Text>
+            </View>
+            <Text style={[styles.signalTitle, { color: colors.text }]} numberOfLines={2}>
+              Possible {signalOutbreak.disease_name.toLowerCase()} outbreak — {signalOutbreak.district}
+            </Text>
+            <Text style={[styles.signalMeta, { color: colors.textSecondary }]}>
+              {signalOutbreak.total_cases} approved case{signalOutbreak.total_cases === 1 ? '' : 's'} from{' '}
+              {signalOutbreak.report_count} report{signalOutbreak.report_count === 1 ? '' : 's'} · Rule:
+              case threshold — not a public alert until you confirm.
+            </Text>
+            <Pressable
+              onPress={() => openOutbreak(signalOutbreak.id)}
+              accessibilityRole="button"
+              accessibilityLabel="Review the auto-detected outbreak signal"
+              style={({ pressed }) => [
+                styles.signalBtn,
+                { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+              ]}
+            >
+              <Text style={[styles.signalBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                Review signal
+              </Text>
+            </Pressable>
+          </View>
         </View>
       )}
 
@@ -133,7 +223,17 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate 
                 </View>
                 <View style={[styles.statsRow, styles.rowGap]}>
                   <StatCard label="Pending Approval" value={stats.pendingReports} icon="time-outline" color={colors.accent} />
-                  <View style={styles.statSpacer} />
+                  {latestOutbreak ? (
+                    <StatCard
+                      label={`Outbreak · ${latestOutbreak.status} · day ${outbreakDay(latestOutbreak.created_at)}`}
+                      value={outbreaks.length}
+                      icon="pulse-outline"
+                      color={latestOutbreak.status === 'active' ? colors.danger : colors.warning}
+                      onPress={() => openOutbreak(latestOutbreak.id)}
+                    />
+                  ) : (
+                    <View style={styles.statSpacer} />
+                  )}
                 </View>
               </>
             ) : null}
@@ -220,6 +320,32 @@ const styles = StyleSheet.create({
   skelGap: { marginBottom: spacing.md },
   errorWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.lg },
   bannerWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.md },
+
+  /* ── C·01 auto-detected signal card ── */
+  cardShadow: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  signalCard: {
+    borderWidth: 1, borderLeftWidth: 3, borderRadius: radii.md,
+    padding: spacing.lg, gap: spacing.xs,
+  },
+  signalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: spacing.sm, marginBottom: 2,
+  },
+  signalEyebrowWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1 },
+  signalEyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
+  signalAge: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  signalTitle: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
+  signalMeta: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  signalBtn: {
+    minHeight: 48, borderRadius: radii.md, marginTop: spacing.sm,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg,
+  },
+  signalBtnText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
 });
 
 export default DistrictOfficerDashboard;

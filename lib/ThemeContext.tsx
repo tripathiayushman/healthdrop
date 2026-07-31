@@ -1,7 +1,11 @@
 // =====================================================
-// THEME CONTEXT — "Prakash" design system tokens
-// Ink-on-paper light mode, opaque-surface dark mode.
-// Keys are never renamed; values follow DESIGN_SPEC.md.
+// THEME CONTEXT — "Bharosa" design language tokens
+// Calm paper, ink, and one teal — flat, high-contrast,
+// printable. Color is spent like money: severity and
+// water ladders, sync truths, and the reserved AI violet
+// appear only when they mean something.
+// Keys are never renamed; values follow the Bharosa
+// field manual §2.1 (light / dark specced per token).
 // =====================================================
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useColorScheme, AccessibilityInfo } from 'react-native';
@@ -11,20 +15,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
 export const radii = { sm: 8, md: 12, lg: 16, pill: 999 } as const;
 
-// Professional Medical Color Palette
+// Bharosa reference ramps (action teal leads; ramps kept
+// for chart/ornament use — semantic tokens live below)
 export const colors = {
-  // Primary - Medical Blue (Trust, Professionalism)
+  // Primary - Bharosa Action Teal (one teal, spent carefully)
   primary: {
-    50: '#E3F2FD',
-    100: '#BBDEFB',
-    200: '#90CAF9',
-    300: '#64B5F6',
-    400: '#42A5F5',
-    500: '#1976D2', // Main primary
-    600: '#1565C0',
-    700: '#0D47A1',
-    800: '#0A3D8F',
-    900: '#072B6B',
+    50: '#EAF7F4',
+    100: '#D9F0EC',
+    200: '#AFE5DC',
+    300: '#7BE2D3',
+    400: '#53D6C3',
+    500: '#0B6B60', // Main primary (light-mode action teal)
+    600: '#095E54',
+    700: '#08554C',
+    800: '#064239',
+    900: '#06231F',
   },
   // Secondary - Teal (Health, Vitality)
   secondary: {
@@ -122,6 +127,10 @@ export interface Theme {
   primaryLight: string;
   primaryDark: string;
   primaryVariant: string;
+  /** §2.1 primary-pressed — state, not shadow */
+  primaryPressed: string;
+  /** §2.1 primary-container — selected chips, rows (alias of primaryLight) */
+  primaryContainer: string;
   onPrimary: string;
   secondary: string;
   secondaryLight: string;
@@ -142,6 +151,8 @@ export interface Theme {
   infoBg: string;
   ai: string;
   aiBg: string;
+  /** §2.1 ai-border — dashed = inferred; violet is reserved for AI alone */
+  aiBorder: string;
   headerBg: string;
   skeleton: string;
   skeletonHighlight: string;
@@ -150,6 +161,10 @@ export interface Theme {
   border: string;
   borderLight: string;
   borderDark: string;
+  /** §2.1 border-strong — dividers with meaning */
+  borderStrong: string;
+  /** §2.1 border-input — quiet at rest; 2px teal ring on focus */
+  borderInput: string;
   shadow: string;
   shadowMedium: string;
   shadowDark: string;
@@ -176,10 +191,17 @@ export interface Theme {
   severityHigh: string;
   severityMedium: string;
   severityLow: string;
+  /** Soft container for the §9.1 tinted-pill tier (sev-high / water-unsafe hue) */
+  severityHighBg: string;
   waterSafe: string;
   waterModerate: string;
   waterUnsafe: string;
   waterCritical: string;
+  /** §2.1 sync ladder — state is sacred, never silent */
+  syncSynced: string;
+  syncSaving: string;
+  syncQueued: string;
+  syncFailed: string;
   overlay: string;
   badgeActive: string;
   badgePending: string;
@@ -196,240 +218,258 @@ export interface Theme {
 export const themes = {
   light: {
     mode: 'light' as const,
-    // Backgrounds — ink on paper, opaque solids
-    background: '#EEF2F6',
-    surface: '#F8FAFC',
-    surfaceVariant: '#E3EAF1',
+    // Canvas — calm paper: pure white screen, faint grey wash for grouped bg
+    background: '#FFFFFF',
+    surface: '#F7F7F8',
+    surfaceVariant: '#EFEFF1',
     card: '#FFFFFF',
-    cardHover: '#F1F5F9',
+    cardHover: '#F4F4F5',
 
-    // Text
-    text: '#0C1D2E',
-    textSecondary: '#3D5568',
-    textTertiary: '#64788A',
+    // Ink tiers — 16:1 body, 8:1 secondary, 5:1 meta (≥12px only)
+    text: '#0A0A0B',
+    textSecondary: '#52525B',
+    textTertiary: '#71717A',
     textInverse: '#FFFFFF',
 
-    // Primary actions — deep institutional blue
-    primary: '#0B5FA5',
-    primaryLight: '#D8E9F7',
-    primaryDark: '#083D6E',
-    primaryVariant: '#0A5290',
+    // Action — one teal; pressed is a state, not a shadow
+    primary: '#0B6B60',
+    primaryLight: '#D9F0EC',
+    primaryDark: '#08554C',
+    primaryVariant: '#08554C',
+    primaryPressed: '#08554C',
+    primaryContainer: '#D9F0EC',
     onPrimary: '#FFFFFF',
 
-    // Secondary
-    secondary: '#0F766E',
-    secondaryLight: '#D6EDEA',
+    // Secondary — RNR default button ink (zinc-950 family)
+    secondary: '#18181B',
+    secondaryLight: '#F4F4F5',
     onSecondary: '#FFFFFF',
 
-    // Accent — warm saffron
-    accent: '#C2410C',
+    // Accent — warm sev-high hue (saffron duty, ladder-sourced)
+    accent: '#BC3D08',
 
-    // Status colors
-    success: '#15803D',
-    successLight: '#EAF7EF',
-    successBg: '#DCF2E3',
+    // Semantic status
+    success: '#157A3C',
+    successLight: '#E8F6EE',
+    successBg: '#DCF0E5',
 
-    warning: '#B45309',
-    warningLight: '#FEF6E8',
-    warningBg: '#FDEED6',
+    warning: '#8A5800',
+    warningLight: '#FAF3DF',
+    warningBg: '#F5E9C9',
 
-    error: '#B91C1C',
-    danger: '#B91C1C',
-    dangerLight: '#FDEFEF',
-    dangerBg: '#FBE2E2',
+    error: '#B3261E',
+    danger: '#B3261E',
+    dangerLight: '#FBECEB',
+    dangerBg: '#F8DFDD',
 
-    info: '#0369A1',
-    infoLight: '#EAF6FC',
-    infoBg: '#DDF0FA',
+    info: '#0B5FA5',
+    infoLight: '#EAF3FB',
+    infoBg: '#DCEBF8',
 
-    // AI — indigo means "the system inferred this"
-    ai: '#4F46E5',
-    aiBg: '#E7E8FB',
+    // AI — reserved violet; nothing else may use it
+    ai: '#6D28D9',
+    aiBg: '#F1EBFC',
+    aiBorder: '#CBB6F2',
 
-    // Borders
-    border: '#C3CFDA',
-    borderLight: '#D8E1E9',
-    borderDark: '#8CA0B0',
+    // Header — flat ink masthead (zinc-950 family) over paper;
+    // guarantees contrast for the shared textInverse header ink
+    headerBg: '#18181B',
 
-    // Header — flat navy band
-    headerBg: '#083D6E',
-
-    // Sidebar
-    sidebar: '#0C1D2E',
-    sidebarText: '#A7B8C7',
+    // Sidebar — same ink panel family
+    sidebar: '#18181B',
+    sidebarText: '#A1A1AA',
     sidebarTextActive: '#FFFFFF',
-    sidebarHover: '#16324A',
-    sidebarActive: '#53A6E3',
+    sidebarHover: '#27272A',
+    sidebarActive: '#53D6C3',
 
     // Navigation
-    navBackground: '#F8FAFC',
-    navBorder: '#C3CFDA',
+    navBackground: '#FFFFFF',
+    navBorder: '#E4E4E7',
 
-    // Input
+    // Input — quiet at rest, 2px teal ring on focus
     inputBackground: '#FFFFFF',
-    inputBorder: '#64788A',
-    inputFocus: '#0B5FA5',
-    inputFocusBorder: '#0B5FA5',
-    inputFilledBorder: '#3D5568',
-    inputErrorBorder: '#B91C1C',
-    inputPlaceholderColor: '#64788A',
-    placeholder: '#64788A',
+    inputBorder: '#A1A1AA',
+    inputFocus: '#0B6B60',
+    inputFocusBorder: '#0B6B60',
+    inputFilledBorder: '#52525B',
+    inputErrorBorder: '#B3261E',
+    inputPlaceholderColor: '#71717A',
+    placeholder: '#71717A',
 
-    // Skeleton loading
-    skeleton: '#E3EAF1',
-    skeletonHighlight: '#F2F6FA',
+    // Skeleton — static grey blocks (no shimmer)
+    skeleton: '#E4E4E7',
+    skeletonHighlight: '#F4F4F5',
 
-    // Offline / sync
-    offline: '#C2410C',
-    offlineBg: '#FDE8D8',
+    // Offline is a place, not an error — queued amber, never red
+    offline: '#8A5800',
+    offlineBg: '#F5E9C9',
 
-    // Charts — one ink series, hairline grid
-    chartLine: '#0B5FA5',
-    chartArea: '#D8E9F7',
-    chartGrid: '#E3EAF1',
+    // Charts — one teal series, hairline grid
+    chartLine: '#0B6B60',
+    chartArea: '#D9F0EC',
+    chartGrid: '#ECECEE',
 
-    // Severity indicators
-    severityCritical: '#B91C1C',
-    severityHigh: '#C2410C',
-    severityMedium: '#B45309',
-    severityLow: '#15803D',
+    // Severity ladder — outline → tinted → filled
+    severityCritical: '#9B1C1C',
+    severityHigh: '#BC3D08',
+    severityMedium: '#8A5800',
+    severityLow: '#71717A',
+    severityHighBg: '#FBE7DC',
 
-    // Water quality
-    waterSafe: '#15803D',
-    waterModerate: '#B45309',
-    waterUnsafe: '#B91C1C',
+    // Water ladder — safe is CYAN, never the action teal
+    waterSafe: '#0E7490',
+    waterModerate: '#8A5800',
+    waterUnsafe: '#BC3D08',
     waterCritical: '#7F1D1D',
 
-    // Shadow — single recipe (opacity 0.06)
-    shadow: 'rgba(12, 29, 46, 0.06)',
-    shadowMedium: 'rgba(12, 29, 46, 0.10)',
-    shadowDark: 'rgba(12, 29, 46, 0.14)',
+    // Sync — state is sacred
+    syncSynced: '#157A3C',
+    syncSaving: '#0B5FA5',
+    syncQueued: '#8A5800',
+    syncFailed: '#B3261E',
+
+    // Shadow — none; borders do the work (Bharosa is printable)
+    shadow: 'rgba(0, 0, 0, 0)',
+    shadowMedium: 'rgba(0, 0, 0, 0)',
+    shadowDark: 'rgba(0, 0, 0, 0)',
 
     // Overlay
-    overlay: 'rgba(12, 29, 46, 0.50)',
+    overlay: 'rgba(10, 10, 11, 0.50)',
 
     // Status badges
-    badgeActive: '#15803D',
-    badgePending: '#B45309',
-    badgeInactive: '#64788A',
+    badgeActive: '#157A3C',
+    badgePending: '#8A5800',
+    badgeInactive: '#71717A',
 
-    disabled: '#8CA0B0',
+    // Borders — zinc hairlines; strong = dividers with meaning
+    border: '#E4E4E7',
+    borderLight: '#ECECEE',
+    borderDark: '#D4D4D8',
+    borderStrong: '#D4D4D8',
+    borderInput: '#A1A1AA',
+
+    disabled: '#A1A1AA',
     elevation: {
-      low: 'rgba(12, 29, 46, 0.06)',
-      medium: 'rgba(12, 29, 46, 0.10)',
-      high: 'rgba(12, 29, 46, 0.14)',
+      low: 'rgba(0, 0, 0, 0)',
+      medium: 'rgba(0, 0, 0, 0)',
+      high: 'rgba(0, 0, 0, 0)',
     },
-    alert: '#B91C1C',
-    campaign: '#15803D',
+    alert: '#B3261E',
+    campaign: '#157A3C',
   } as Theme,
   
   dark: {
     mode: 'dark' as const,
-    // ── Opaque surface ladder: background → surface → card → cardHover ──
-    background:     '#0B1219',
-    surface:        '#111A24',
-    surfaceVariant: '#1B2733',
-    card:           '#16212E',
-    cardHover:      '#1D2938',
+    // ── Canvas ladder (zinc-black): background → surface → card → cardHover ──
+    background:     '#0B0B0D',
+    surface:        '#131316',
+    surfaceVariant: '#1F1F23',
+    card:           '#19191D',
+    cardHover:      '#202025',
 
-    // Text
-    text:          '#F2F7FB',
-    textSecondary: '#A7B8C7',
-    textTertiary:  '#7C8FA0',
-    textInverse:   '#0C1D2E',
+    // Ink tiers
+    text:          '#FAFAFA',
+    textSecondary: '#B4B4BC',
+    textTertiary:  '#9B9BA1',
+    textInverse:   '#0B0B0D',
 
-    // Primary — lifted institutional blue
-    primary:        '#53A6E3',
-    primaryLight:   '#123A5C',
-    primaryDark:    '#3584C8',
-    primaryVariant: '#3584C8',
-    onPrimary:      '#06263F',
+    // Action — lifted teal; pressed lifts further (state, not shadow)
+    primary:        '#53D6C3',
+    primaryLight:   '#123B34',
+    primaryDark:    '#7BE2D3',
+    primaryVariant: '#7BE2D3',
+    primaryPressed: '#7BE2D3',
+    primaryContainer: '#123B34',
+    onPrimary:      '#06231F',
 
-    // Secondary
-    secondary:      '#2DD4BF',
-    secondaryLight: '#123B36',
-    onSecondary:    '#06263F',
+    // Secondary — inverted ink button
+    secondary:      '#E4E4E7',
+    secondaryLight: '#26262B',
+    onSecondary:    '#0B0B0D',
 
-    // Accent — warm saffron
-    accent: '#FB923C',
+    // Accent — warm sev-high hue
+    accent: '#F59B6E',
 
-    // Status
-    success:      '#4ADE80',
-    successLight: '#0E2A1D',
-    successBg:    '#123324',
+    // Semantic status
+    success:      '#6BD695',
+    successLight: '#11291C',
+    successBg:    '#153524',
 
-    warning:      '#FBBF24',
-    warningLight: '#2E230B',
-    warningBg:    '#3A2C0D',
+    warning:      '#E8B54A',
+    warningLight: '#2A2008',
+    warningBg:    '#33280C',
 
-    error:       '#F87171',
-    danger:      '#F87171',
-    dangerLight: '#301111',
-    dangerBg:    '#3D1717',
+    error:       '#F58E85',
+    danger:      '#F58E85',
+    dangerLight: '#2E1311',
+    dangerBg:    '#3A1815',
 
-    info:      '#4FC3F7',
-    infoLight: '#0B2534',
-    infoBg:    '#0E2E40',
+    info:      '#7CC0F5',
+    infoLight: '#0E2336',
+    infoBg:    '#122C44',
 
-    // AI — indigo means "the system inferred this"
-    ai:   '#818CF8',
-    aiBg: '#232A4E',
+    // AI — reserved violet; nothing else may use it
+    ai:   '#C7B3F7',
+    aiBg: '#2B2150',
+    aiBorder: '#4A3B7E',
 
-    // Borders
-    border:      '#2B3B4B',
-    borderLight: '#22303D',
-    borderDark:  '#3E5163',
-
-    // Header — flat surface band with bottom border
-    headerBg: '#111A24',
+    // Header — flat surface band with strong bottom border
+    headerBg: '#131316',
 
     // Sidebar
-    sidebar:           '#0B1219',
-    sidebarText:       '#7C8FA0',
-    sidebarTextActive: '#F2F7FB',
-    sidebarHover:      '#1B2733',
-    sidebarActive:     '#53A6E3',
+    sidebar:           '#0B0B0D',
+    sidebarText:       '#9B9BA1',
+    sidebarTextActive: '#FAFAFA',
+    sidebarHover:      '#1F1F23',
+    sidebarActive:     '#53D6C3',
 
     // Navigation
-    navBackground: '#111A24',
-    navBorder:     '#2B3B4B',
+    navBackground: '#131316',
+    navBorder:     '#27272A',
 
-    // Input
-    inputBackground: '#111A24',
-    inputBorder:     '#4E6478',
-    inputFocus:      '#53A6E3',
-    inputFocusBorder:'#53A6E3',
-    inputFilledBorder:'#7C8FA0',
-    inputErrorBorder:'#F87171',
-    inputPlaceholderColor:'#7C8FA0',
-    placeholder:     '#7C8FA0',
+    // Input — quiet at rest, 2px teal ring on focus
+    inputBackground: '#131316',
+    inputBorder:     '#52525B',
+    inputFocus:      '#53D6C3',
+    inputFocusBorder:'#53D6C3',
+    inputFilledBorder:'#B4B4BC',
+    inputErrorBorder:'#F58E85',
+    inputPlaceholderColor:'#9B9BA1',
+    placeholder:     '#9B9BA1',
 
-    // Skeleton loading
-    skeleton:          '#1B2733',
-    skeletonHighlight: '#263442',
+    // Skeleton — static grey blocks (no shimmer)
+    skeleton:          '#27272A',
+    skeletonHighlight: '#303036',
 
-    // Offline / sync
-    offline:   '#FB923C',
-    offlineBg: '#3B2312',
+    // Offline is a place, not an error — queued amber, never red
+    offline:   '#E8B54A',
+    offlineBg: '#33280C',
 
-    // Charts — one ink series, hairline grid
-    chartLine: '#53A6E3',
-    chartArea: '#123A5C',
-    chartGrid: '#1E2732',
+    // Charts — one teal series, hairline grid
+    chartLine: '#53D6C3',
+    chartArea: '#123B34',
+    chartGrid: '#1F1F23',
 
-    // Severity
+    // Severity ladder
     severityCritical: '#F87171',
-    severityHigh:     '#FB923C',
-    severityMedium:   '#FBBF24',
-    severityLow:      '#4ADE80',
+    severityHigh:     '#F59B6E',
+    severityMedium:   '#E8B54A',
+    severityLow:      '#A6A6AD',
+    severityHighBg:   '#33190D',
 
-    // Water quality
-    waterSafe:     '#4ADE80',
-    waterModerate: '#FBBF24',
-    waterUnsafe:   '#F87171',
+    // Water ladder — safe is CYAN, never the action teal
+    waterSafe:     '#67D3EE',
+    waterModerate: '#E8B54A',
+    waterUnsafe:   '#F59B6E',
     waterCritical: '#FCA5A5',
 
-    // Shadow — zero shadows in dark mode (surface ladder is the elevation)
+    // Sync — state is sacred
+    syncSynced: '#6BD695',
+    syncSaving: '#7CC0F5',
+    syncQueued: '#E8B54A',
+    syncFailed: '#F58E85',
+
+    // Shadow — none; borders do the work
     shadow:       'rgba(0,0,0,0)',
     shadowMedium: 'rgba(0,0,0,0)',
     shadowDark:   'rgba(0,0,0,0)',
@@ -438,18 +478,25 @@ export const themes = {
     overlay: 'rgba(0,0,0,0.60)',
 
     // Badges
-    badgeActive:   '#4ADE80',
-    badgePending:  '#FBBF24',
-    badgeInactive: '#7C8FA0',
+    badgeActive:   '#6BD695',
+    badgePending:  '#E8B54A',
+    badgeInactive: '#9B9BA1',
 
-    disabled: '#4E6478',
+    // Borders — hairlines; strong = dividers with meaning
+    border:      '#27272A',
+    borderLight: '#1F1F23',
+    borderDark:  '#4A5A54',
+    borderStrong:'#4A5A54',
+    borderInput: '#52525B',
+
+    disabled: '#5C6B66',
     elevation: {
       low:    'rgba(0,0,0,0)',
       medium: 'rgba(0,0,0,0)',
       high:   'rgba(0,0,0,0)',
     },
-    alert:    '#F87171',
-    campaign: '#4ADE80',
+    alert:    '#F58E85',
+    campaign: '#6BD695',
   } as Theme,
 };
 
