@@ -215,7 +215,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
               <>
                 <View style={styles.statsRow}>
                   <StatCard label="Disease Reports" value={stats.districtReports} icon="bar-chart-outline" color={colors.danger} />
-                  <StatCard label="Water Reports" value={stats.districtWater} icon="water-outline" color={colors.info} />
+                  <StatCard label="Water Reports" value={stats.districtWater} icon="water-outline" color={colors.info} onPress={() => onNavigate('water-sources')} />
                 </View>
                 <View style={[styles.statsRow, styles.rowGap]}>
                   <StatCard label="Active Alerts" value={stats.alerts} icon="warning-outline" color={colors.warning} />
@@ -298,6 +298,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
             <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="See your district risk score and response trends" onPress={() => onNavigate('health-score')} />
             <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Review campaign performance and AI recommendations" onPress={() => onNavigate('campaign-intelligence')} />
             <ToolCard icon="git-network-outline" iconColor={colors.danger} title="Escalation Monitoring" subtitle="Track district approvals nearing SLA breach" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="share-social-outline" iconColor={colors.primary} title="Weekly Summary" subtitle="IDSP-style verified digest — share on WhatsApp" onPress={() => onNavigate('weekly-summary')} />
             <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Control visibility of dashboard sections" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />

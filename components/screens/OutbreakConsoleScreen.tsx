@@ -22,6 +22,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { DiseaseReport, Profile } from '../../types';
 import { useTheme, Theme, radii, spacing } from '../../lib/ThemeContext';
 import { ErrorCard, SkeletonBlock } from '../dashboards/DashboardShared';
+import { supabase } from '../../lib/supabase';
+import { alertAcks } from '../../lib/services/alertAcks';
 import {
   Outbreak,
   OutbreakStatus,
@@ -31,6 +33,16 @@ import {
 } from '../../lib/services/outbreaks';
 
 const OUTBREAK_ERROR = "Couldn't load this outbreak — check connection.";
+
+/**
+ * D·02 reach stat — loads independently of the console.
+ * 'ready' never fakes a percent: staff null/0 means the
+ * denominator is unknown and only the ack count is shown.
+ */
+type ReachState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; acked: number; staff: number | null }
+  | { kind: 'unavailable' };
 
 const STATUS_OPTIONS: { value: OutbreakStatus; label: string }[] = [
   { value: 'active', label: 'Active' },
@@ -83,6 +95,8 @@ export default function OutbreakConsoleScreen({
   const [reports, setReports] = useState<DiseaseReport[]>([]);
   const [deltasAvailable, setDeltasAvailable] = useState(false);
 
+  const [reach, setReach] = useState<ReachState>({ kind: 'loading' });
+
   const [statusSaving, setStatusSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -103,6 +117,8 @@ export default function OutbreakConsoleScreen({
     }
     setOutbreak(res.data);
     setLoading(false);
+    // Reach loads independently — its own skeleton, its own fallback.
+    loadReach(res.data);
     // Deltas need the contributing reports; their failure only
     // degrades the delta captions, never fakes a zero.
     const reportsRes = await outbreaksService.contributingReports(res.data);
@@ -112,6 +128,51 @@ export default function OutbreakConsoleScreen({
     } else {
       setReports(reportsRes.data);
       setDeltasAvailable(true);
+    }
+  };
+
+  /**
+   * D·02 — "% of staff acknowledged", the outbreak's real-time reach.
+   * Only when an alert is live (alert_sent): find the newest approved
+   * live health_alert for the district, preferring one that names this
+   * disease in disease_or_issue/title, then count acks vs. active
+   * field staff. Any failure → 'unavailable', never a fake number.
+   */
+  const loadReach = async (ob: Outbreak) => {
+    if (!ob.alert_sent) return;
+    setReach({ kind: 'loading' });
+    try {
+      const { data, error } = await supabase
+        .from('health_alerts')
+        .select('id, title, disease_or_issue, created_at')
+        .eq('approval_status', 'approved')
+        .eq('status', 'active')
+        .eq('district', ob.district)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        setReach({ kind: 'unavailable' });
+        return;
+      }
+      const disease = (ob.disease_name ?? '').trim().toLowerCase();
+      const linked =
+        (disease &&
+          data.find(
+            (a: { title?: string | null; disease_or_issue?: string | null }) =>
+              String(a.disease_or_issue ?? '').toLowerCase().includes(disease) ||
+              String(a.title ?? '').toLowerCase().includes(disease),
+          )) ||
+        data[0];
+      const res = await alertAcks.reachForDistrict(linked.id, ob.district);
+      if (res.error || !res.data) {
+        setReach({ kind: 'unavailable' });
+        return;
+      }
+      setReach({ kind: 'ready', acked: res.data.acked, staff: res.data.staff });
+    } catch (e) {
+      console.error('Error loading alert reach:', e);
+      setReach({ kind: 'unavailable' });
     }
   };
 
@@ -366,7 +427,7 @@ export default function OutbreakConsoleScreen({
                 delta={null}
                 deltaCaption="all verified by people"
               />
-              <View style={{ flex: 1 }} />
+              {outbreak.alert_sent ? <ReachTile state={reach} /> : <View style={{ flex: 1 }} />}
             </View>
 
             {/* ── Linked alert ── */}
@@ -615,6 +676,73 @@ const DeltaTile: React.FC<{
         {label}
       </Text>
       {deltaNode}
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
+//  ReachTile — D·02 "{pct}% alert ack'd · {acked} of
+//  {staff} staff". Four states, one footprint (no layout
+//  jump): skeleton while loading; percent only when the
+//  staff denominator is real; "{acked} acknowledged"
+//  when it isn't; a quiet dash when nothing loads.
+// ─────────────────────────────────────────────────────
+const ReachTile: React.FC<{ state: ReachState }> = ({ state }) => {
+  const { colors, isDark } = useTheme();
+
+  if (state.kind === 'loading') {
+    return (
+      <View style={{ flex: 1 }} accessibilityElementsHidden>
+        <SkeletonBlock height={104} radius={radii.md} />
+      </View>
+    );
+  }
+
+  let value = '—';
+  let label = 'alert reach';
+  let caption = 'unavailable right now';
+  let a11y = 'Alert reach unavailable right now';
+
+  if (state.kind === 'ready') {
+    const { acked, staff } = state;
+    if (staff !== null && staff > 0) {
+      const pct = Math.round((acked / staff) * 100);
+      value = `${pct}%`;
+      label = "alert ack'd";
+      caption = `${acked} of ${staff} staff`;
+      a11y = `Alert acknowledged by ${pct} percent: ${acked} of ${staff} staff`;
+    } else {
+      // Staff count blocked (RLS) or genuinely zero — never a fake percent.
+      value = `${acked}`;
+      label = 'acknowledged';
+      caption = 'staff count unavailable';
+      a11y = `${acked} acknowledged; staff count unavailable`;
+    }
+  }
+
+  return (
+    <View
+      style={[
+        styles.statTile,
+        { backgroundColor: colors.card, borderColor: colors.border, borderTopColor: colors.info },
+        !isDark && styles.cardShadow,
+      ]}
+      accessible
+      accessibilityLabel={a11y}
+    >
+      <Text style={[styles.statValue, { color: colors.text }]} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+        {value}
+      </Text>
+      <Text style={[styles.statLabel, { color: colors.textSecondary }]} numberOfLines={2}>
+        {label}
+      </Text>
+      <Text
+        style={[styles.deltaText, { color: colors.textTertiary }]}
+        maxFontSizeMultiplier={1.3}
+        numberOfLines={1}
+      >
+        {caption}
+      </Text>
     </View>
   );
 };

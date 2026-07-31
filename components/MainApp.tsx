@@ -37,6 +37,8 @@ import SyncOutboxScreen from './screens/SyncOutboxScreen';
 import MySubmissionsScreen from './screens/MySubmissionsScreen';
 import OutbreakSignalScreen from './screens/OutbreakSignalScreen';
 import OutbreakConsoleScreen from './screens/OutbreakConsoleScreen';
+import WaterSourcesScreen from './screens/WaterSourcesScreen';
+import WeeklySummaryScreen from './screens/WeeklySummaryScreen';
 
 // Forms
 import { DiseaseReportForm, WaterQualityReportForm, CampaignForm, AlertForm } from './forms';
@@ -69,7 +71,9 @@ type ScreenType =
   | 'sync-outbox'
   | 'my-submissions'
   | 'outbreak-signal'
-  | 'outbreak-console';
+  | 'outbreak-console'
+  | 'water-sources'
+  | 'weekly-summary';
 type RestrictedScreenType = Exclude<ScreenType, 'tabs' | CreateScreenType>;
 
 const TAB_ORDER: TabType[] = ['home', 'map', 'reports', 'campaigns', 'profile'];
@@ -96,6 +100,8 @@ const SCREEN_PERMISSIONS: Record<RestrictedScreenType, Profile['role'][]> = {
   'my-submissions': ALL_ROLES,
   'outbreak-signal': ['super_admin', 'health_admin', 'district_officer'],
   'outbreak-console': ['super_admin', 'health_admin', 'district_officer'],
+  'water-sources': ALL_ROLES,
+  'weekly-summary': ['super_admin', 'health_admin', 'district_officer', 'clinic'],
 };
 
 const CREATE_ACTIONS: Array<{
@@ -131,6 +137,8 @@ const isScreenType = (value: string): value is ScreenType =>
     'my-submissions',
     'outbreak-signal',
     'outbreak-console',
+    'water-sources',
+    'weekly-summary',
   ].includes(value);
 
 const canCreateOnRole = (role: Profile['role'], screen: CreateScreenType): boolean =>
@@ -152,6 +160,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   const [outbreakFocusId, setOutbreakFocusId] = useState<string | null>(null);
   const [approvalQueueInitialTab, setApprovalQueueInitialTab] = useState<'disease' | 'water' | 'campaigns' | 'alerts'>('disease');
   const [reportFocus, setReportFocus] = useState<{ type: 'disease' | 'water'; id: string } | null>(null);
+  const [waterPrefillSourceId, setWaterPrefillSourceId] = useState<string | null>(null);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
 
   const availableCreateActions = CREATE_ACTIONS.filter(action =>
@@ -217,6 +226,21 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   ).current;
 
   const navigateToForm = (formType: string) => {
+    // E·02 — retest flow: open the water report form prefilled from a source.
+    if (formType.startsWith('new-water-report:prefill:')) {
+      if (!canCreateOnRole(profile.role, 'new-water-report')) {
+        Alert.alert(
+          'Permission Denied',
+          'Your role does not have permission to create this record type.'
+        );
+        return;
+      }
+      const sourceId = formType.split(':')[2];
+      setWaterPrefillSourceId(sourceId || null);
+      setCurrentScreen('new-water-report');
+      return;
+    }
+
     if (formType.startsWith('outbreak-signal:')) {
       if (!canAccessScreen(profile.role, 'outbreak-signal')) {
         Alert.alert(
@@ -291,6 +315,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
 
   const goBackToTabs = () => {
     setShowCreateMenu(false);
+    setWaterPrefillSourceId(null);
     setCurrentScreen('tabs');
   };
 
@@ -305,7 +330,11 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   if (currentScreen === 'new-water-report') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <WaterQualityReportForm onSuccess={goBackToTabs} onCancel={goBackToTabs} />
+        <WaterQualityReportForm
+          onSuccess={goBackToTabs}
+          onCancel={goBackToTabs}
+          prefillSourceId={waterPrefillSourceId ?? undefined}
+        />
       </SafeAreaView>
     );
   }
@@ -416,6 +445,24 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <MySubmissionsScreen profile={profile} onBack={goBackToTabs} />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'water-sources') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <WaterSourcesScreen
+          profile={profile}
+          onBack={goBackToTabs}
+          onNavigateToForm={navigateToForm}
+        />
+      </SafeAreaView>
+    );
+  }
+  if (currentScreen === 'weekly-summary') {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <WeeklySummaryScreen profile={profile} onBack={goBackToTabs} />
       </SafeAreaView>
     );
   }

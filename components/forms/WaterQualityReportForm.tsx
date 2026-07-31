@@ -3,8 +3,12 @@
 // Flat header, labels-above 52dp inputs, 44dp selection
 // chips, inline errors + scroll-to-first-error,
 // One-Hand Action Bar. Zero hex literals.
+// Bharosa E·02: when opened as a retest (prefillSourceId),
+// the form arrives prefilled with the source's history —
+// she compares, not recalls — and her senses outrank the
+// strip kit.
 // =====================================================
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +22,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, getWaterQualityColor, Theme } from '../../lib/ThemeContext';
 import { waterQualityService } from '../../lib/services/waterQuality';
+import { WaterSourceRecord, waterSourcesService } from '../../lib/services/waterSources';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { SourceType, WaterQuality } from '../../types';
@@ -25,6 +30,8 @@ import { SourceType, WaterQuality } from '../../types';
 interface WaterQualityReportFormProps {
   onSuccess: () => void;
   onCancel: () => void;
+  /** E·02 retest flow — prefill from this tracked water source. */
+  prefillSourceId?: string;
 }
 
 // ── Local building blocks ────────────────────────────────────────────────────
@@ -87,9 +94,17 @@ const QUALITY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   critical: 'close-circle',
 };
 
+const shortDayDate = (iso?: string | null): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+};
+
 export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
   onSuccess,
   onCancel,
+  prefillSourceId,
 }) => {
   const { colors, isDark, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
@@ -123,6 +138,40 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
     latitude: null as number | null,
     longitude: null as number | null,
   });
+
+  // ── E·02 — retest prefill: the task arrives with history ──
+  const [prefillSource, setPrefillSource] = useState<WaterSourceRecord | null>(null);
+  const [prefillLoading, setPrefillLoading] = useState(!!prefillSourceId);
+  const [prefillError, setPrefillError] = useState<string | null>(null);
+
+  const loadPrefill = async () => {
+    if (!prefillSourceId) return;
+    setPrefillLoading(true);
+    setPrefillError(null);
+    const res = await waterSourcesService.getById(prefillSourceId);
+    if (res.error || !res.data) {
+      setPrefillError("Couldn't load this source's history — you can still file the reading.");
+      setPrefillLoading(false);
+      return;
+    }
+    const src = res.data;
+    setPrefillSource(src);
+    setFormData((prev) => ({
+      ...prev,
+      source_name: src.source_name || prev.source_name,
+      location_name: src.location_name ?? prev.location_name,
+      district: src.district || prev.district,
+      state: src.state ?? prev.state,
+      latitude: src.latitude ?? prev.latitude,
+      longitude: src.longitude ?? prev.longitude,
+    }));
+    setPrefillLoading(false);
+  };
+
+  useEffect(() => {
+    loadPrefill();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillSourceId]);
 
   const waterSourceOptions = [
     { label: 'Well', value: 'well' },
@@ -352,6 +401,94 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
+        {/* ── E·02 — LAST TIME: she compares, not recalls ── */}
+        {prefillSourceId && (
+          prefillLoading ? (
+            <View style={[styles.section, { marginTop: 16 }]}>
+              <View
+                style={[
+                  styles.lastTimeSkeleton,
+                  { backgroundColor: colors.skeleton },
+                ]}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              />
+            </View>
+          ) : prefillError ? (
+            <View style={[styles.section, { marginTop: 16 }]}>
+              <View style={[styles.lastTimeErrorRow]}>
+                <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.lastTimeErrorText, { color: colors.textSecondary }]}>
+                  {prefillError}
+                </Text>
+                <Pressable
+                  onPress={loadPrefill}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading the source history"
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Text style={[styles.lastTimeRetry, { color: colors.primary }]}>Retry</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : prefillSource ? (
+            <View style={[styles.section, { marginTop: 16 }]}>
+              <View
+                style={[
+                  styles.lastTimeCard,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: colors.border,
+                    borderLeftColor: getWaterQualityColor(prefillSource.current_status, colors),
+                  },
+                ]}
+                accessible
+                accessibilityLabel={`Last time: this source was marked ${prefillSource.current_status}`}
+              >
+                <Text
+                  style={[
+                    styles.lastTimeEyebrow,
+                    { color: getWaterQualityColor(prefillSource.current_status, colors) },
+                  ]}
+                  maxFontSizeMultiplier={1.3}
+                >
+                  LAST TIME
+                  {(prefillSource.flagged_at || prefillSource.last_reported_at)
+                    ? ` · ${shortDayDate(prefillSource.flagged_at ?? prefillSource.last_reported_at)}`
+                    : ''}
+                </Text>
+                <Text style={[styles.lastTimeBody, { color: colors.text }]}>
+                  {prefillSource.current_status === 'unsafe' || prefillSource.current_status === 'critical'
+                    ? 'Flagged '
+                    : 'Last reading: '}
+                  {prefillSource.current_status}
+                  {prefillSource.last_ph != null || prefillSource.last_turbidity != null ? ': ' : ''}
+                  {[
+                    prefillSource.last_ph != null ? `pH ${prefillSource.last_ph}` : null,
+                    prefillSource.last_turbidity != null ? `${prefillSource.last_turbidity} NTU` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  .
+                </Text>
+                {!!prefillSource.treatment_note && (
+                  <Text style={[styles.lastTimeMeta, { color: colors.textSecondary }]}>
+                    Treatment: {prefillSource.treatment_note}
+                  </Text>
+                )}
+                {!!prefillSource.retest_due_date && (
+                  <Text style={[styles.lastTimeMeta, { color: colors.textSecondary }]}>
+                    Retest due {shortDayDate(prefillSource.retest_due_date)}
+                    {prefillSource.assignee?.full_name
+                      ? ` · assigned to ${prefillSource.assignee.full_name}`
+                      : ''}
+                  </Text>
+                )}
+              </View>
+            </View>
+          ) : null
+        )}
+
         {/* Water Source Details */}
         <View style={styles.section} onLayout={onSectionLayout('source')}>
           <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Water Source Details</Text>
@@ -424,7 +561,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
                 });
                 if (loc.locationName && loc.district && loc.state) clearError('location');
               }}
-              autoFetch={true}
+              autoFetch={!prefillSourceId}
             />
             <FieldError message={errors.location} colors={colors} />
           </View>
@@ -460,6 +597,14 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
               />
             ))}
           </View>
+
+          {/* E·02 — fieldworker judgment outranks the strip kit */}
+          {prefillSourceId && (
+            <Text style={[styles.sensesCaption, { color: colors.textSecondary }]}>
+              Numbers suggest safe — but your eyes and nose overrule the strips. If it still smells,
+              mark it unsafe.
+            </Text>
+          )}
 
           {/* Quality indicator — handles exactly safe/moderate/unsafe/critical */}
           <View
@@ -682,6 +827,22 @@ const styles = StyleSheet.create({
   chipLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600', flex: 1 },
+  /* ── E·02 LAST TIME card — 3px left edge in the water token ── */
+  lastTimeCard: {
+    borderRadius: 12, borderWidth: 1, borderLeftWidth: 3, padding: 16, gap: 4,
+  },
+  lastTimeEyebrow: {
+    fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6,
+    textTransform: 'uppercase', marginBottom: 2,
+  },
+  lastTimeBody: { fontSize: 15, lineHeight: 22, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  lastTimeMeta: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  lastTimeSkeleton: { height: 84, borderRadius: 12 },
+  lastTimeErrorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  lastTimeErrorText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  lastTimeRetry: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  /* ── E·02 senses caption ── */
+  sensesCaption: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 12 },
   // Quality indicator — card with 3px left edge in the quality token
   indicatorCard: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
