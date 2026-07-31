@@ -59,6 +59,11 @@ jobs:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -euo pipefail
+          # Pasting into GitHub's secret textarea commonly captures a trailing
+          # newline; it ends up inside the value and Postgres then looks for a
+          # database literally named "postgres\n". Strip CR/LF from both.
+          DB_URL="$(printf '%s' "$DB_URL" | tr -d '\r\n')"
+          PASSPHRASE="$(printf '%s' "$PASSPHRASE" | tr -d '\r\n')"
           STAMP=$(date -u +%Y%m%d-%H%M)
 
           # public = the surveillance data; this one must succeed.
