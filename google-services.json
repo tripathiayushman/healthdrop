@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "198018792596",
+    "project_id": "healthdrop-4c3d9",
+    "storage_bucket": "healthdrop-4c3d9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:198018792596:android:d95cab02a2b6a046c48881",
+        "android_client_info": {
+          "package_name": "com.tripathiayushman.healthdrop"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDheZOyjNiI7Bp4Gn8G8Oax3OLQYOdS52M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

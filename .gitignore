@@ -40,6 +40,14 @@ yarn-error.*
 # Claude Code local skill symlinks (absolute paths, machine-specific)
 .claude/
 
+# Firebase service-account keys — PRIVATE. These grant send permission on the
+# Firebase project and must never reach this public repo. Upload them to
+# expo.dev → Credentials instead and keep the file outside the working tree.
+# (google-services.json is NOT secret and is intentionally committed.)
+*-firebase-adminsdk-*.json
+*service-account*.json
+serviceAccountKey.json
+
 # typescript
 *.tsbuildinfo
 
