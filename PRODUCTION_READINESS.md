@@ -6,7 +6,7 @@ _Owner = requires dashboard/account access or a policy decision only the owner c
 ## CRITICAL (16)
 
 ### 1. Fix profiles RLS privilege escalation: any user can self-promote to super_admin
-**Status:** DONE — applied live (fix_profiles_privilege_escalation) · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — migration applied live (profiles privilege escalation closed) · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED LIVE (pg_policies): legacy permissive policies 'Allow users to manage own profile' and 'Users manage own profile' (FOR ALL, WITH CHECK auth.uid()=id only) and 'profiles_update' (UPDATE with NO with_check) OR together with profiles_self_update, defeating its role-pinning WITH CHECK — any authenticated user can PATCH their own row to role='super_admin' via PostgREST. profiles_insert_policy is WITH CHECK (auth.uid()=id OR super_admin) with no role restriction, so the 3-role limit in AuthScreen SIGNUP_ROLES is client-side only. 'profiles_delete' and 'profiles_update' still reference the extinct role='admin'. Merged duplicate of the onboarding-dimension item covering the same holes.
 
@@ -19,7 +19,7 @@ VERIFIED LIVE (pg_policies): legacy permissive policies 'Allow users to manage o
 _Files: database_structure/FIX_PROFILES_PRIVILEGE_ESCALATION.sql, database_structure/FIX_PROFILES_RLS_RECURSION.sql, components/AuthScreen.tsx, components/screens/UserManagementScreen.tsx_
 
 ### 2. Move push fan-out to the deployed edge function and stop exposing expo_push_token via profiles
-**Status:** PARTIAL — client fan-out removal + outbox policy done; token-table migration pending · **Effort:** L · **Doable by agent:** yes
+**Status:** DONE — user_push_tokens table + claim RPC; client fan-out deleted; dispatcher v2 outbox-gated · **Effort:** L · **Doable by agent:** yes
 
 VERIFIED: lib/services/notifications.ts sendAlertPushNotifications (lines 209-294) and components/forms/AlertForm.tsx sendPushNotifications (lines 202, 239) SELECT expo_push_token,role,district from profiles on the client and POST directly to exp.host — silently no-ops for field roles under RLS, pulls every reachable user's token for admin roles, and double-sends alerts because trg_push_on_alert_created already fans out. supabase/functions/push-notifications/index.ts (read in full) accepts arbitrary {tokens,title,body} from ANY valid user JWT with zero role check. CORRECTION: dispatch_push_notification() already accepts super_admin/health_admin (verified live) — only the 'Admins can read push outbox' SELECT policy still checks the extinct role='admin'.
 
@@ -32,7 +32,7 @@ VERIFIED: lib/services/notifications.ts sendAlertPushNotifications (lines 209-29
 _Files: lib/services/notifications.ts, components/forms/AlertForm.tsx, lib/services/users.ts, supabase/functions/push-notifications/index.ts, database_structure/PUSH_NOTIFICATIONS.sql_
 
 ### 7. Publish a real DPDP-grounded privacy policy: hosted URL (Play hard requirement) + in-app notice
-**Status:** OWNER ACTION · **Effort:** M · **Doable by agent:** no (owner)
+**Status:** DEFERRED — no longer a store gate; an in-app privacy notice replaces the hosted URL · **Effort:** M · **Doable by agent:** no (owner)
 
 VERIFIED: the only policy text is the PRIVACY_TEXT constant in ProfileScreen.tsx (line 59) rendered in a modal — generic bullets, no hosted URL for the Play Console, and it understates real flows (AI chat to OpenRouter via gemini.ts, expo push token in profiles, GPS coordinates to Nominatim as reverse-geocode fallback — AuthScreen.tsx:57 and src/hooks/useLocation.ts:113). Merged from two overlapping proposals (DPDP notice + Play privacy URL); the separate 'Nominatim disclosure' item was PRUNED as already done — AuthScreen line 597 already shows 'Your location is sent to OpenStreetMap...', both call sites already send an identifying User-Agent, and native geocoding is already tried first — its only residual (mention Nominatim in the notice) lives here.
 
@@ -56,7 +56,7 @@ VERIFIED: no delete-account code exists anywhere in components/ or lib/services;
 _Files: supabase/functions/delete-account/index.ts, components/screens/ProfileScreen.tsx, lib/services/users.ts, src/services/offlineSync/SyncQueue.ts_
 
 ### 11. Global error capture: ErrorBoundary + native/web fatal handlers + client_error_logs table
-**Status:** IN PROGRESS — ErrorBoundary + global handlers (fix fleet) · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — ErrorBoundary + global JS error hooks · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED: no ErrorBoundary/componentDidCatch/ErrorUtils exists anywhere in the codebase and package.json has no crash-reporting dependency — one render crash white-screens the app in the field with zero trace, and queued offline reports become unreachable until relaunch. Merged duplicate (reliability ErrorBoundary item + operations client_error_logs item): one boundary implementation, one logging sink; Sentry (separate item) later wraps rather than replaces this.
 
@@ -70,7 +70,7 @@ VERIFIED: no ErrorBoundary/componentDidCatch/ErrorUtils exists anywhere in the c
 _Files: components/shared/AppErrorBoundary.tsx, App.tsx, components/MainApp.tsx, lib/errorReporting.ts, lib/services/errorLogs.ts, database_structure/CLIENT_ERROR_LOGS.sql, components/dashboards/SuperAdminDashboard.tsx_
 
 ### 12. Create the Android notification channels the push pipeline already targets, and add a foreground notification handler
-**Status:** IN PROGRESS — notification channels + foreground handler (fix fleet) · **Effort:** S · **Doable by agent:** yes
+**Status:** DONE — Android notification channels + foreground handler · **Effort:** S · **Doable by agent:** yes
 
 VERIFIED GAP: supabase/functions/push-notifications/index.ts sends channelId 'health-alerts' / 'report-updates' / 'default' (lines 111-113, 179) but setNotificationChannelAsync appears nowhere in the client — on Android 8+ notifications posted to a never-created channel are silently dropped, so outbreak pushes may never display. No Notifications.setNotificationHandler exists either, so foreground pushes show nothing. CORRECTION: android/ is gitignored (a local prebuild artifact), not committed — no prebuild-sync caveat needed beyond the next EAS build picking up app.json.
 
@@ -84,7 +84,7 @@ VERIFIED GAP: supabase/functions/push-notifications/index.ts sends channelId 'he
 _Files: src/services/notifications/setupNotifications.ts, App.tsx, components/MainApp.tsx, app.json, supabase/functions/push-notifications/index.ts_
 
 ### 13. Hydrate a cached profile on offline cold-start so logged-in field users are not dumped to the login screen
-**Status:** IN PROGRESS — offline profile cache (fix fleet) · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — offline profile cache on cold start · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED BUG: App.tsx fetchProfile does a network query with no offline fallback; on a cold start without signal the catch (line 189) leaves profile=null and line 274 renders AuthScreen despite a valid persisted session — an ASHA worker offline in the field is locked out of the app including the Sync Outbox built precisely for that situation. Each fetch also carries built-in 500ms/1000ms sleeps (line 114) that slow every cold start.
 
@@ -98,7 +98,7 @@ VERIFIED BUG: App.tsx fetchProfile does a network query with no offline fallback
 _Files: App.tsx, components/MainApp.tsx_
 
 ### 27. i18n foundation: i18next + react-i18next with AsyncStorage-persisted language picker (no native module)
-**Status:** PLANNED · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — i18next wired app-wide, Hermes-safe, persisted language picker · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED: package.json has no i18n dependency and no t()/useTranslation usage exists — the app is 100% English with hundreds of hardcoded <Text> nodes. i18next + react-i18next is pure JS (works on Hermes/RN 0.81, Expo Go, react-native-web, no config plugin or rebuild). A manual picker beats expo-localization for ASHA users whose phones often run English OS locale; bundled require()'d JSON locales are inherently offline-capable.
 
@@ -113,7 +113,7 @@ VERIFIED: package.json has no i18n dependency and no t()/useTranslation usage ex
 _Files: package.json, lib/i18n/index.ts, lib/i18n/locales/en.json, lib/i18n/locales/hi.json, App.tsx, components/screens/ProfileScreen.tsx_
 
 ### 28. String extraction phase 1: field-worker surfaces (forms, shared dashboard kit, ASHA/volunteer path, sync screens)
-**Status:** PLANNED · **Effort:** L · **Doable by agent:** yes
+**Status:** DONE — phase 1: tabs, report sheet, disease wizard, sync outbox · **Effort:** L · **Doable by agent:** yes
 
 VALID (file inventory verified: all four forms, DashboardShared, Asha/Volunteer dashboards, MainApp, AuthScreen, SubmissionModal, MySubmissionsScreen, SyncOutboxScreen exist). The users who cannot read English are field workers, not admins — convert their surfaces first. Critical detail confirmed in DiseaseReportForm (lines 111-152): chip option arrays must translate label while keeping value as the canonical English string stored in Supabase, or outbreak-detection grouping by disease_name breaks.
 
@@ -127,7 +127,7 @@ VALID (file inventory verified: all four forms, DashboardShared, Asha/Volunteer 
 _Files: components/forms/DiseaseReportForm.tsx, components/forms/WaterQualityReportForm.tsx, components/forms/AlertForm.tsx, components/forms/CampaignForm.tsx, components/dashboards/DashboardShared.tsx, components/dashboards/AshaWorkerDashboard.tsx, components/dashboards/VolunteerDashboard.tsx, components/MainApp.tsx, components/AuthScreen.tsx, components/shared/SubmissionModal.tsx, components/screens/MySubmissionsScreen.tsx, components/screens/SyncOutboxScreen.tsx, lib/i18n/locales/en.json_
 
 ### 29. Hindi locale pack with reviewed health glossary and dual-script disease names
-**Status:** OWNER ACTION · **Effort:** M · **Doable by agent:** no (owner)
+**Status:** DONE — Hindi pack shipped and natively reviewed by the owner · **Effort:** M · **Doable by agent:** no (owner)
 
 VALID: a machine-drafted hi.json is 90% of the work but health terminology errors are dangerous in outbreak surveillance; disease chips should render dual-script ('हैज़ा (Cholera)') because ASHA training materials and clinic paperwork use English disease names, and the stored value must stay English (verified: outbreak grouping keys on disease_name). Alert-directive strings carry the highest translation-quality bar. Needs a native Hindi speaker with health-domain familiarity — not fully agent-completable.
 
@@ -139,7 +139,7 @@ VALID: a machine-drafted hi.json is 90% of the work but health terminology error
 _Files: lib/i18n/locales/hi.json, lib/i18n/GLOSSARY.md, components/forms/DiseaseReportForm.tsx_
 
 ### 38. Database backups: currently zero recoverability for a live public-health dataset
-**Status:** OWNER ACTION · **Effort:** S · **Doable by agent:** no (owner)
+**Status:** DONE — encrypted daily pg_dump via CI (Pro plan declined); verified working · **Effort:** S · **Doable by agent:** no (owner)
 
 VALID with one correction: the proposal claimed all domain tables are empty — live counts are 6 profiles, 4 disease reports, 4 alerts, 5 campaigns, so real (if small) data ALREADY exists unprotected, which strengthens the urgency. Free-tier Supabase takes no automated backups and no PITR posture exists; a bad migration or the known auto_approve_*/trigger quirks corrupting data is unrecoverable.
 
@@ -151,7 +151,7 @@ VALID with one correction: the proposal claimed all domain tables are empty — 
 _Files: .github/workflows/db-backup.yml, OPERATIONS.md_
 
 ### 39. False-outbreak-alert incident playbook + alert retraction capability
-**Status:** PLANNED · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — playbook in docs/OPERATIONS.md · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED LIVE: push_on_alert_created fires notify_users_push on every health_alerts INSERT with no approval_status gate (function body read), and resolve_outbreak's permission check tests v_caller_role = 'admin' — a role that no longer exists — so super_admin/health_admin literally cannot resolve an outbreak today, and there is no way to tell recipients an alert was false. This app's worst credibility event currently has no response path.
 
@@ -164,7 +164,7 @@ VERIFIED LIVE: push_on_alert_created fires notify_users_push on every health_ale
 _Files: INCIDENT_PLAYBOOK.md, database_structure/OUTBREAK_DETECTION.sql, database_structure/PUSH_NOTIFICATIONS.sql, components/screens/AllAlertsScreen.tsx_
 
 ### 53. Fix the outbreak alert dead-end: notifications target a role nobody has, no push fires, and admins cannot resolve outbreaks
-**Status:** DONE — outbreak notifications now target real roles; resolve console still pending · **Effort:** M · **Doable by agent:** yes · missing-critical
+**Status:** DONE — outbreak notifications retargeted to real roles; console + signal screens shipped · **Effort:** M · **Doable by agent:** yes · missing-critical
 
 The first real outbreak will be detected and then seen by no one. detect_outbreak_after_report inserts notifications with target_role='admin', but no profile has role 'admin' (actual roles: super_admin, health_admin, ...), and lib/services/notifications.ts:77 filters target_role !== profile.role, so the admin notification is invisible to every user; clinic/district_officer rows depend on exact district-string match. The trigger sends zero push notifications (notify_users_push is only wired to health_alerts inserts and report approvals). resolve_outbreak's privileged path checks role='admin', so super_admin/health_admin get 'Permission denied' trying to resolve the first (possibly false) outbreak.
 
@@ -176,7 +176,7 @@ The first real outbreak will be detected and then seen by no one. detect_outbrea
 _Files: D:\Projects\Health-Drop-Surveillance-System-main\Health-Drop-Surveillance-System-main\lib\services\notifications.ts_
 
 ### 54. Configure Android FCM credentials for EAS builds — production APKs currently register zero push tokens, silently
-**Status:** OWNER ACTION · **Effort:** M · **Doable by agent:** no (owner) · missing-critical
+**Status:** DONE — FCM V1 service account key uploaded to EAS; google-services.json wired · **Effort:** M · **Doable by agent:** no (owner) · missing-critical
 
 There is no google-services.json in the repo, no android.googleServicesFile or expo-notifications plugin in app.json, and no FCM V1 service account implied anywhere. On EAS-built Android binaries, Notifications.getExpoPushTokenAsync requires Firebase; without it the call throws and App.tsx:228-230 swallows the error with console.log('[Push] Token registration skipped.'). Result: in the field, no device ever gets a token, the entire repaired push pipeline sends to an empty list, and nothing surfaces the failure. Separately, devices without Google services can never receive FCM push, so in-app alert surfacing on app-open must be the guaranteed fallback path.
 
@@ -189,7 +189,7 @@ There is no google-services.json in the repo, no android.googleServicesFile or e
 _Files: D:\Projects\Health-Drop-Surveillance-System-main\Health-Drop-Surveillance-System-main\app.json, D:\Projects\Health-Drop-Surveillance-System-main\Health-Drop-Surveillance-System-main\App.tsx, D:\Projects\Health-Drop-Surveillance-System-main\Health-Drop-Surveillance-System-main\eas.json_
 
 ### 55. Set up custom SMTP and decide the email-confirmation policy — first 100 signups will stall on Supabase's default mailer
-**Status:** OWNER ACTION · **Effort:** S · **Doable by agent:** no (owner) · missing-critical
+**Status:** DONE — Gmail SMTP live and verified; email rate limit raised · **Effort:** S · **Doable by agent:** no (owner) · missing-critical
 
 Signup requires email confirmation (AuthScreen.tsx shows 'Check Your Email' after signUp and blocks sign-in on 'Email not confirmed'), but no plan item configures SMTP. Supabase's built-in mailer is rate-limited to a few emails per hour and, on current projects, only delivers to project team-member addresses — so real users' confirmation emails simply never arrive and their accounts are permanently stuck at 'Email Not Verified'. The planned forgot-password flow depends on the same broken channel. Many ASHA workers also have no usable email at all, which makes the confirmation requirement itself questionable for field roles.
 
@@ -215,7 +215,7 @@ _Files: D:\Projects\Health-Drop-Surveillance-System-main\Health-Drop-Surveillanc
 ## HIGH (23)
 
 ### 3. Replace the two always-true RLS policies (ai_recommendations anon-writable, campaign_participants free-for-all)
-**Status:** DONE — applied live (fix_always_true_policies_and_outbox_role) · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — always-true policies replaced (ai_recommendations, campaign_participants, campaigns SELECT) · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED LIVE: ai_recommendations 'act on recommendations' is UPDATE USING(true) WITH CHECK(true) for {public} and anon holds a live UPDATE grant (information_schema confirmed) — anyone with the publishable key can rewrite AI outbreak recommendations unauthenticated. campaign_participants 'allow_all_authenticated' is FOR ALL USING(true) WITH CHECK(true) — any signed-in user can delete or forge any other user's participation rows. Both re-confirmed today by the security advisors (rls_policy_always_true x2).
 
@@ -227,7 +227,7 @@ VERIFIED LIVE: ai_recommendations 'act on recommendations' is UPDATE USING(true)
 _Files: database_structure/DATABASE_SCHEMA.sql, components/screens/CampaignsScreen.tsx, lib/services/advancedAnalytics.ts_
 
 ### 4. Convert the 9 SECURITY DEFINER vw_* views to security_invoker and revoke anon access (plus mv_campaign_effectiveness)
-**Status:** DONE — applied live (harden_views_matview_and_app_function_search_paths) · **Effort:** S · **Doable by agent:** yes
+**Status:** DONE — 9 views security_invoker + anon revoked · **Effort:** S · **Doable by agent:** yes
 
 VERIFIED LIVE: all nine vw_* views (approval_activity, campaign_effectiveness, disease_heatmap, disease_trends, district_health_score, district_health_summary, outbreak_warnings, recent_audit_activity, water_heatmap) have reloptions NULL — no security_invoker — and advisors re-confirm 9 security_definer_view findings today. The audit/approval views expose actor identities to the anon key, bypassing table RLS. Advisors also flag materialized view public.mv_campaign_effectiveness as selectable by anon/authenticated — fix in the same pass.
 
@@ -239,7 +239,7 @@ VERIFIED LIVE: all nine vw_* views (approval_activity, campaign_effectiveness, d
 _Files: database_structure/GEOGRAPHIC_HEATMAP.sql, database_structure/AUDIT_LOG.sql, database_structure/APPROVAL_SYSTEM.sql, lib/services/advancedAnalytics.ts_
 
 ### 5. Drop the bundled OpenRouter API key and direct-call fallback from the client
-**Status:** OWNER ACTION · **Effort:** S · **Doable by agent:** no (owner)
+**Status:** DONE — OPENROUTER_API_KEY is an edge secret; direct-call fallback deleted; EAS vars removed · **Effort:** S · **Doable by agent:** no (owner)
 
 VERIFIED: lib/services/gemini.ts line 20 bakes EXPO_PUBLIC_OPENROUTER_API_KEY into every bundle and callOpenRouterDirect (lines 173-219) sends it to openrouter.ai from user devices; the fallback branch in callOpenRouter (lines 230-238) only survives because the proxy secret is not yet set. The proxy path via the deployed openrouter-proxy edge function exists (lines 150-170, function confirmed ACTIVE on the project). The key is one of the 4 known-leaked keys.
 
@@ -251,7 +251,7 @@ VERIFIED: lib/services/gemini.ts line 20 bakes EXPO_PUBLIC_OPENROUTER_API_KEY in
 _Files: lib/services/gemini.ts, .env.example, eas.json_
 
 ### 6. Add a password reset flow (none exists), an app URL scheme, and a unified password policy
-**Status:** OWNER ACTION · **Effort:** M · **Doable by agent:** no (owner)
+**Status:** DONE — email-OTP reset flow shipped and verified live end-to-end · **Effort:** M · **Doable by agent:** no (owner)
 
 VERIFIED: resetPasswordForEmail/PASSWORD_RECOVERY appear nowhere in the repo and AuthScreen has no forgot-password UI — a locked-out ASHA worker has no self-service recovery. CORRECTION to one proposal's steps: app.json has NO "scheme" key (verified), so recovery deep links cannot return to the Android app until one is added. Policy is inconsistent: signup enforces 8+ chars (AuthScreen.tsx:357) but ProfileScreen change-password accepts 6 (line 218). Merged duplicate of the onboarding-dimension forgot-password item.
 
@@ -264,7 +264,7 @@ VERIFIED: resetPasswordForEmail/PASSWORD_RECOVERY appear nowhere in the repo and
 _Files: components/AuthScreen.tsx, components/screens/ProfileScreen.tsx, app.json, App.tsx_
 
 ### 14. Extend sync idempotency to campaign/health_alert/feedback and recover items stranded in 'syncing' after a mid-sync kill
-**Status:** PARTIAL — idempotency columns live on all 5 tables; client upsert flip in fix fleet · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — idempotency keys on all five queue tables; stale-syncing recovery · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED: OfflineSyncService.ts TABLE_MAP (lines 38-40) marks campaign/health_alert/feedback usesIdempotencyKey:false with plain insert — a client-side timeout that committed server-side duplicates on retry, and a duplicate health_alerts row re-fires trg_push_on_alert_created (confirmed live on health_alerts), double-blasting a district. Live DB confirms client_idempotency_key exists ONLY on disease_reports and water_quality_reports. SyncQueue.getPendingItems (lines 125-131) excludes status 'syncing', so an item stranded by an app kill mid-upload is invisible to automatic sync forever; SyncOutboxScreen already has the STALE_SYNCING_MS pattern (line 26) to reuse. SyncQueue.updateItem also never emits change events.
 
@@ -278,7 +278,7 @@ VERIFIED: OfflineSyncService.ts TABLE_MAP (lines 38-40) marks campaign/health_al
 _Files: src/services/offlineSync/OfflineSyncService.ts, src/services/offlineSync/SyncQueue.ts, components/forms/AlertForm.tsx, components/forms/CampaignForm.tsx, database_structure/OFFLINE_SYNC_SCHEMA.sql, components/screens/SyncOutboxScreen.tsx_
 
 ### 15. Fix the push-token lifecycle: clear on sign-out, claim uniquely per device, prune dead tokens
-**Status:** PARTIAL — clear-on-signout in fix fleet; unique-claim + pruning pending · **Effort:** M · **Doable by agent:** yes
+**Status:** PARTIAL — clear-on-signout + unique device claim done; dead-token pruning open · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED: App.tsx handleSignOut (lines 241-251) never clears the push token and usersService.registerExpoPushToken (line 276+) is a plain own-row update with no uniqueness — on shared phones the previous user keeps receiving the next user's district alerts and approval notices. Expo DeviceNotRegistered failures are recorded by update_push_outbox_status but nothing prunes the dead token. NOTE: implement against the token store chosen in the push fan-out item (user_push_tokens table if that lands first) — same lifecycle logic either way.
 
@@ -306,7 +306,7 @@ VERIFIED: SyncQueue.getAll (line 74) does an unguarded JSON.parse of the single 
 _Files: src/services/offlineSync/SyncQueue.ts, src/services/offlineSync/OfflineSyncService.ts, components/screens/SyncOutboxScreen.tsx, components/forms/DiseaseReportForm.tsx, components/forms/WaterQualityReportForm.tsx_
 
 ### 17. Wire Supabase session auto-refresh to AppState and defuse the onAuthStateChange deadlock pattern
-**Status:** IN PROGRESS — AppState session auto-refresh (fix fleet) · **Effort:** S · **Doable by agent:** yes
+**Status:** DONE — AppState-driven session auto-refresh · **Effort:** S · **Doable by agent:** yes
 
 VERIFIED: zero AppState usage anywhere in components/lib/src (grep confirmed), so the app skips the startAutoRefresh/stopAutoRefresh wiring Supabase's RN guide requires — after Android doze, users resume to expired tokens and queries 401 until a refresh. App.tsx lines 91-99 call fetchProfile (a Supabase query) synchronously inside onAuthStateChange — the documented deadlock-risk pattern — and refire a full profile refetch (with built-in sleeps) on every TOKEN_REFRESHED.
 
@@ -410,7 +410,7 @@ VERIFIED: supabase_migrations.schema_migrations holds exactly 5 rows while the r
 _Files: supabase/migrations/, supabase/config.toml, lib/supabase.ts, eas.json, .env.example, database_structure/README.md_
 
 ### 46. Make versionCode deterministic — fix the dual GITHUB_RUN_NUMBER counters
-**Status:** PLANNED · **Effort:** S · **Doable by agent:** yes
+**Status:** DONE — versionCode derives from git commit count · **Effort:** S · **Doable by agent:** yes
 
 VERIFIED: scripts/sync-version.cjs line 16-18 falls back to GITHUB_RUN_NUMBER (or 1 locally); prepare-release.yml commits a versionCode from ITS run_number while build-android-release.yml re-runs sync-version with the build workflow's independent run_number (never committed) — released APK versionCodes diverge from the repo and the two counters can regress relative to each other, risking INSTALL_FAILED_VERSION_DOWNGRADE for sideload users migrating to a Play build. app.json currently sits at versionCode 4.
 
@@ -423,7 +423,7 @@ VERIFIED: scripts/sync-version.cjs line 16-18 falls back to GITHUB_RUN_NUMBER (o
 _Files: scripts/sync-version.cjs, .github/workflows/build-android-release.yml, .github/workflows/prepare-release.yml, app.json, package.json_
 
 ### 47. Add a production app-bundle lane to CI (tag builds currently produce only preview APKs)
-**Status:** PLANNED · **Effort:** M · **Doable by agent:** yes
+**Status:** NOT APPLICABLE — no Play Store submission, APK lane is sufficient · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED: build-android-release.yml runs eas build --profile preview and attaches the APK to a public GitHub Release; the production app-bundle profile in eas.json is never exercised by CI. Play requires an .aab, so submission would depend on ad-hoc local builds. Impact adjusted critical->high: a manual `eas build --profile production` remains possible, so this blocks repeatability, not capability.
 
@@ -436,7 +436,7 @@ VERIFIED: build-android-release.yml runs eas build --profile preview and attache
 _Files: .github/workflows/build-android-release.yml, .github/workflows/play-release.yml, eas.json, README.md_
 
 ### 48. app.json cleanup: drop deprecated sdkVersion, fix the 108px splash via plugin, add expo-notifications icon config, block legacy permissions
-**Status:** PLANNED · **Effort:** M · **Doable by agent:** yes
+**Status:** PARTIAL — googleServicesFile + expo-notifications plugin added; deprecated sdkVersion still present · **Effort:** M · **Doable by agent:** yes
 
 VERIFIED: app.json pins "sdkVersion": "54.0.0" and uses the legacy top-level splash key pointing at assets/splash-icon.png which is literally 108x108 px (PNG header read) while an unused 1024x1024 assets/splash-ico.png sits beside it. No expo-notifications plugin block exists despite a working push pipeline. The local prebuild manifest confirms READ/WRITE_EXTERNAL_STORAGE and SYSTEM_ALERT_WINDOW (android/app/src/main/AndroidManifest.xml lines 5-8) which nothing uses and Play reviewers flag.
 
@@ -462,7 +462,7 @@ VERIFIED: expo-updates is not in package.json and distribution is sideloaded APK
 _Files: package.json, app.json, eas.json, .github/workflows/build-android-release.yml_
 
 ### 50. Play submission checklist: verify target API 36, fill Data safety from actual flows, produce listing assets
-**Status:** OWNER ACTION · **Effort:** L · **Doable by agent:** no (owner)
+**Status:** NOT APPLICABLE — owner has ruled out Play Store distribution · **Effort:** L · **Doable by agent:** no (owner)
 
 VALID process item: Expo SDK 54 targets API 36 (satisfies Play's Aug 2026 requirement) but must be verified in the actual production build — the stale local android/ (gitignored) proves nothing. The Data safety form must match real flows (verified: name/email/phone/district/state/pincode at signup, health report contents, transient fine location, push token in profiles, AI chat text to OpenRouter) and the repo has zero store-listing assets beyond the icon. Impact adjusted critical->high: owner-driven process contingent on the Play decision, not a code blocker.
 
@@ -475,7 +475,7 @@ VALID process item: Expo SDK 54 targets API 36 (satisfies Play's Aug 2026 requir
 _Files: assets/icon.png, DESIGN_SPEC.md_
 
 ### 52. Keystore hygiene: verify/back up the EAS-managed keystore and neutralize the stale debug-signed local android/ dir
-**Status:** OWNER ACTION · **Effort:** S · **Doable by agent:** no (owner)
+**Status:** DONE — keystore verified intact (JKS, alias 61b72c7f…) during FCM setup · **Effort:** S · **Doable by agent:** no (owner)
 
 VERIFIED: eas.json has no credentialsSource (EAS-managed remote keystore, never verified or backed up — losing it before Play App Signing enrollment permanently bricks the app identity for sideload users). The gitignored local android/ configures release builds with the DEBUG keystore (android/app/build.gradle:110/115 'signingConfig signingConfigs.debug') and hardcodes versionCode 1 / versionName 1.0.0 (lines 95-96) — any local release build is an undistributable, misversioned binary.
 
@@ -488,7 +488,7 @@ VERIFIED: eas.json has no credentialsSource (EAS-managed remote keystore, never 
 _Files: eas.json, .gitignore, README.md_
 
 ### 57. Gate outbreak detection on approved data, bound cases_count, and recompute on rejection — one typo currently creates a permanent outbreak
-**Status:** PARTIAL — approved-only gating + case bounds applied live; recompute-on-rejection pending · **Effort:** M · **Doable by agent:** yes · missing-critical
+**Status:** DONE — detection gated on approved reports, counts bounded, recompute-on-rejection trigger · **Effort:** M · **Doable by agent:** yes · missing-critical
 
 detect_outbreak_after_report counts every report where approval_status != 'rejected', which includes ASHA submissions still pending_approval — so unreviewed data drives outbreak declaration despite the human-review pipeline. cases_count has no upper bound anywhere (client just strips non-digits, DB CHECKs only enforce deaths<=cases), so an ASHA worker typing 500 instead of 50 instantly creates an 'active' outbreak and urgent notifications. The trigger fires AFTER INSERT only: rejecting the bad report afterwards never recomputes or retracts the outbreak. The planned false-alert playbook is reactive; this is the prevention side, and it will bite during week-1 training sessions when practice reports hit the live trigger.
 
@@ -500,7 +500,7 @@ detect_outbreak_after_report counts every report where approval_status != 'rejec
 _Files: D:\Projects\Health-Drop-Surveillance-System-main\Health-Drop-Surveillance-System-main\components\forms\DiseaseReportForm.tsx_
 
 ### 58. Alert on unsafe water-quality results — the app's core signal currently notifies no one
-**Status:** DONE — trg_notify_on_unsafe_water applied live · **Effort:** S · **Doable by agent:** yes · missing-critical
+**Status:** DONE — trg_notify_on_unsafe_water live · **Effort:** S · **Doable by agent:** yes · missing-critical
 
 water_quality_reports has only auto-approve, audit-log, and geo-sync triggers; a report with overall_quality='unsafe' produces no notification, no push, no alert — it only increments a dashboard stat (waterQuality.ts unsafeSources count). For a waterborne-disease surveillance app, the first contaminated hand-pump found in week 1 sits silently in a table until an official happens to browse the dashboard, while villagers keep drinking from the source. Every other alert path (disease outbreak, manual health alerts) is covered by plan items; this one is absent.
 
@@ -549,7 +549,7 @@ VERIFIED: HealthMapComponent.tsx loads leaflet.js/css from unpkg.com in the WebV
 _Files: components/shared/HealthMapComponent.tsx, assets/leaflet/_
 
 ### 19. Remove expo-blur and orphaned legacy components; lazy-mount the map WebView for low-memory devices
-**Status:** PLANNED · **Effort:** M · **Doable by agent:** yes
+**Status:** DONE — expo-blur and orphaned components removed · **Effort:** M · **Doable by agent:** yes
 
 CORRECTED: the proposal claimed expo-navigation-bar has zero imports — FALSE: MainApp.tsx dynamically imports it at lines 169 and 182, so it must stay. expo-blur genuinely has zero imports (verified repo-wide) and HelloWorld/HeroSection/Navbar/Sidebar/Card.tsx have no importers (verified). android/ is gitignored, not committed, so no prebuild-sync caveat applies. The lazy-map rationale stands: every role's home dashboard auto-mounts a Leaflet WebView at first paint — the heaviest memory consumer on 1-2GB devices.
 
@@ -562,7 +562,7 @@ CORRECTED: the proposal claimed expo-navigation-bar has zero imports — FALSE: 
 _Files: package.json, components/HelloWorld.tsx, components/HeroSection.tsx, components/Navbar.tsx, components/Sidebar.tsx, components/Card.tsx, components/shared/HealthMapComponent.tsx_
 
 ### 23. Enforce deactivation server-side and fix its broken web UX
-**Status:** PLANNED · **Effort:** S · **Doable by agent:** yes
+**Status:** PARTIAL — soft-delete unified in admin screens; server-side enforcement open · **Effort:** S · **Doable by agent:** yes
 
 VERIFIED LIVE: get_my_role() returns the role with no is_active check, so every get_my_role-based policy still honors a deactivated admin's permissions — deactivation only blocks the app UI. That UI block uses Alert.alert (App.tsx:164), a no-op on react-native-web: a deactivated web user is silently bounced to login with no explanation.
 
@@ -678,7 +678,7 @@ VERIFIED: lib/services/gemini.ts hardcodes an English-only system prompt (line 2
 _Files: lib/services/gemini.ts, components/ai/AIChatbot.tsx, components/ai/AIInsightsPanel.tsx, supabase/functions/openrouter-proxy/index.ts_
 
 ### 42. Operations runbook + monitoring cadence (advisors, get_logs, release checks)
-**Status:** PLANNED · **Effort:** S · **Doable by agent:** yes
+**Status:** DONE — docs/OPERATIONS.md runbook · **Effort:** S · **Doable by agent:** yes
 
 VERIFIED: no markdown file in the repo mentions backups, incidents, monitoring, or crash handling. Advisor baseline re-confirmed today: 37 mutable-search_path functions, 9 SECURITY DEFINER views, 2 always-true RLS policies, leaked-password protection off, postgis+pg_net in public, plus 1 materialized view exposed to the API — this baseline will silently grow without a review cadence.
 
@@ -727,7 +727,7 @@ VERIFIED: dist/ exists but is gitignored and hosted nowhere, so 'also runs on we
 _Files: .github/workflows/web-deploy.yml, lib/supabase.ts_
 
 ### 59. Stand up a week-1 APK distribution channel — Play's closed-testing gate means the store cannot be the launch path
-**Status:** PLANNED · **Effort:** M · **Doable by agent:** yes · missing-critical
+**Status:** DONE — GitHub Releases is the distribution channel (CI publishes every APK) · **Effort:** M · **Doable by agent:** yes · missing-critical
 
 Personal Play Console accounts must run a closed test with 12 testers for 14 continuous days before production access, so Play is structurally unavailable for a week-1 field deployment even if the listing were perfect. The repo builds preview APKs in CI (build-android-release.yml) but there is no distribution path for 100 ASHA workers: no stable download URL, no QR/install guidance for 'unknown sources', and no in-app binary version check — so the field ends up with a WhatsApp-forwarded zoo of stale APKs that no OTA (expo-updates covers JS only) can recall. The existing Play-checklist plan item covers store compliance, not how the app physically reaches users this week.
 
@@ -764,3 +764,8 @@ VALID: no analytics exist anywhere. Users are government-adjacent health workers
 
 _Files: database_structure/ANALYTICS_EVENTS.sql, lib/services/telemetry.ts, components/screens/ProfileScreen.tsx, components/MainApp.tsx_
 
+
+
+---
+
+_Statuses reconciled against the live project and repository on 2026-07-31._
