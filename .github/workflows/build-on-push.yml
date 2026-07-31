@@ -57,7 +57,9 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Build APK on EAS
-        run: npx eas build --platform android --profile preview --non-interactive --wait --json > eas-build.json
+        # 'eas' comes from expo-github-action's PATH — 'npx eas' resolves the
+        # wrong registry package and fails with "could not determine executable".
+        run: eas build --platform android --profile preview --non-interactive --wait --json > eas-build.json
 
       - name: Download APK artifact
         run: |
