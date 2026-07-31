@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii, Theme } from '../../lib/ThemeContext';
 
 export type ReportTypeTarget =
@@ -90,6 +91,7 @@ export const ReportTypeSheet: React.FC<ReportTypeSheetProps> = ({
   onClose,
 }) => {
   const { colors, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   const netInfo = useNetInfo();
   // Tolerant null check — isInternetReachable === null before the first probe
   // must never read as offline.
@@ -133,20 +135,20 @@ export const ReportTypeSheet: React.FC<ReportTypeSheetProps> = ({
             >
               <Ionicons name="cloud-offline-outline" size={18} color={colors.offline} />
               <Text style={[styles.offlineText, { color: colors.offline }]}>
-                No network — your report will save on this phone.
+                {t('reportSheet.offlineNotice')}
               </Text>
             </View>
           )}
 
           <Text style={[styles.title, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-            What are you reporting?
+            {t('reportSheet.title')}
           </Text>
 
           {can('new-disease-report') && (
             <SheetRow
               icon="medkit-outline"
-              title="Sickness in the community"
-              caption="Fever, loose motion, dengue…"
+              title={t('reportSheet.sicknessTitle')}
+              caption={t('reportSheet.sicknessCaption')}
               colors={colors}
               onPress={() => onSelect('new-disease-report')}
             />
@@ -154,32 +156,32 @@ export const ReportTypeSheet: React.FC<ReportTypeSheetProps> = ({
           {can('new-water-report') && (
             <SheetRow
               icon="water-outline"
-              title="Water problem"
-              caption="Dirty source, smell, sickness nearby"
+              title={t('reportSheet.waterTitle')}
+              caption={t('reportSheet.waterCaption')}
               colors={colors}
               onPress={() => onSelect('new-water-report')}
             />
           )}
           <SheetRow
             icon="refresh-circle-outline"
-            title="Case follow-up"
-            caption="Update an earlier patient"
+            title={t('reportSheet.followUpTitle')}
+            caption={t('reportSheet.followUpCaption')}
             colors={colors}
             disabled
-            disabledNote="Coming soon"
+            disabledNote={t('reportSheet.comingSoon')}
           />
 
           {showExtras && (
             <>
               <View style={[styles.divider, { backgroundColor: colors.border }]} />
               <Text style={[styles.eyebrow, { color: colors.textSecondary }]}>
-                FOR OFFICIALS
+                {t('reportSheet.officials')}
               </Text>
               {can('new-campaign') && (
                 <SheetRow
                   icon="megaphone-outline"
-                  title="Campaign"
-                  caption="Plan an awareness or health drive"
+                  title={t('reportSheet.campaignTitle')}
+                  caption={t('reportSheet.campaignCaption')}
                   colors={colors}
                   onPress={() => onSelect('new-campaign')}
                 />
@@ -187,8 +189,8 @@ export const ReportTypeSheet: React.FC<ReportTypeSheetProps> = ({
               {can('new-alert') && (
                 <SheetRow
                   icon="warning-outline"
-                  title="Health Alert"
-                  caption="Draft an alert for your area"
+                  title={t('reportSheet.alertTitle')}
+                  caption={t('reportSheet.alertCaption')}
                   colors={colors}
                   onPress={() => onSelect('new-alert')}
                 />
@@ -208,7 +210,7 @@ export const ReportTypeSheet: React.FC<ReportTypeSheetProps> = ({
             ]}
           >
             <Text style={[styles.cancelText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-              Cancel
+              {t('common.cancel')}
             </Text>
           </Pressable>
         </View>
@@ -253,7 +255,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 22,
-    lineHeight: 28,
+    lineHeight: 30, // ×1.35+ — Devanagari matras must not clip
     fontWeight: '800',
     letterSpacing: -0.4,
     marginBottom: spacing.md,
@@ -290,14 +292,14 @@ const styles = StyleSheet.create({
   },
   rowNote: {
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 17, // ×1.35+ — Devanagari matras must not clip
     fontWeight: '600',
     marginTop: 2,
   },
   divider: { height: 1, marginVertical: spacing.sm },
   eyebrow: {
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 17, // ×1.35+ — Devanagari matras must not clip
     fontWeight: '700',
     letterSpacing: 0.6,
     marginBottom: spacing.sm,

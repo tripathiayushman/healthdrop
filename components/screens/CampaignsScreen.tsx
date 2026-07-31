@@ -17,6 +17,8 @@ import {
   Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+import NetInfo from '@react-native-community/netinfo';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
@@ -50,6 +52,11 @@ interface Campaign {
   current_participants?: number;
   notes?: string;
   created_at: string;
+  // Site coordinates — NOT present on live health_campaigns rows today
+  // (verified against the schema); kept optional so GPS gating activates
+  // automatically if the columns are ever added.
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 type CampaignEligibilityFields = Pick<Campaign, 'status' | 'approval_status' | 'start_date' | 'end_date'>;
@@ -68,6 +75,11 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
   const [enrolledCampaigns, setEnrolledCampaigns] = useState<Set<string>>(new Set());
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawTarget, setWithdrawTarget] = useState<{ id: string; name: string } | null>(null);
+  // GPS check-in (Bharosa R·02): campaignId → ISO time of recorded check-in
+  const [checkins, setCheckins] = useState<Record<string, string>>({});
+  const [checkinBusyId, setCheckinBusyId] = useState<string | null>(null);
+  // Inline per-campaign check-in notices — never Alert.alert
+  const [checkinNotices, setCheckinNotices] = useState<Record<string, string>>({});
 
   // Approval consistency: admins/officers see everything; other roles see
   // approved campaigns (or legacy rows without an approval status) plus
@@ -118,7 +130,7 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
       const { data, error } = await supabase
         .from('campaign_participants')
-        .select('campaign_id')
+        .select('campaign_id, status, notes, updated_at')
         .eq('user_id', user.id)
         .neq('status', 'cancelled');
 
@@ -130,10 +142,27 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
       if (data) {
         const enrolledIds = new Set(data.map(item => item.campaign_id));
+        // Rebuild check-in state from the participant rows so it survives
+        // remounts: an 'attended' row means a recorded check-in; the timestamp
+        // comes from the appended notes line, falling back to updated_at.
+        const checkinMap: Record<string, string> = {};
+        for (const row of data) {
+          if (row.status !== 'attended' && row.status !== 'completed') continue;
+          let iso: string | null = null;
+          if (typeof row.notes === 'string') {
+            const matches = row.notes.match(/Checked in (\S+) @/g);
+            if (matches && matches.length > 0) {
+              const inner = /Checked in (\S+) @/.exec(matches[matches.length - 1]);
+              if (inner) iso = inner[1];
+            }
+          }
+          checkinMap[row.campaign_id] = iso || row.updated_at || '';
+        }
         if (__DEV__) {
           console.info('[CampaignsScreen] Loaded enrolled campaigns', { count: enrolledIds.size });
         }
         setEnrolledCampaigns(enrolledIds);
+        setCheckins(checkinMap);
       }
     } catch (error: any) {
       console.log('Enrollments loading error:', error.message);
@@ -214,6 +243,202 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
 
   const isCampaignActive = (campaign: Campaign) => {
     return isCampaignEnrollable(campaign);
+  };
+
+  // ── GPS check-in (Bharosa R·02) ─────────────────────────────────────────
+
+  /** Great-circle distance in km between two coordinates (haversine). */
+  const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * 6371 * Math.asin(Math.sqrt(a));
+  };
+
+  /** Check-in window: status 'ongoing'/'active', or today within start/end dates. */
+  const isCheckinOpen = (campaign: Campaign) => {
+    const status = (campaign.status || '').toLowerCase();
+    if (['completed', 'cancelled', 'inactive', 'closed', 'archived'].includes(status)) return false;
+    if (status === 'ongoing' || status === 'active') return true;
+    const start = new Date(campaign.start_date);
+    const end = new Date(campaign.end_date);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return false;
+    end.setHours(23, 59, 59, 999); // end_date is a DATE — inclusive through end of day
+    const now = new Date();
+    return start <= now && now <= end;
+  };
+
+  const hasSiteCoords = (campaign: Campaign) =>
+    typeof campaign.latitude === 'number' && typeof campaign.longitude === 'number';
+
+  const formatCheckinTime = (iso: string) => {
+    const date = new Date(iso);
+    if (isNaN(date.getTime())) return '';
+    return date.toLocaleString('en-IN', {
+      hour: 'numeric',
+      minute: '2-digit',
+      day: 'numeric',
+      month: 'short',
+    });
+  };
+
+  const setCheckinNotice = (campaignId: string, message: string) => {
+    setCheckinNotices(prev => ({ ...prev, [campaignId]: message }));
+  };
+
+  const handleCheckIn = async (campaign: Campaign) => {
+    const campaignId = campaign.id;
+    setCheckinNotice(campaignId, '');
+    setCheckinBusyId(campaignId);
+    try {
+      // Check-in requires network — recording attendance offline would only
+      // pretend to count, so we say so instead of fake-queueing it.
+      const net = await NetInfo.fetch();
+      const isOnline = net.isConnected !== false && net.isInternetReachable !== false;
+      if (!isOnline) {
+        setCheckinNotice(campaignId, "Check-in needs a connection — try again when you're back online.");
+        return;
+      }
+
+      const { status: permStatus } = await Location.requestForegroundPermissionsAsync();
+      if (permStatus !== 'granted') {
+        setCheckinNotice(campaignId, 'Location permission is needed to check in at the site.');
+        return;
+      }
+
+      // Fast path: recent last-known fix, then an active GPS fix.
+      let position = await Location.getLastKnownPositionAsync({ maxAge: 60000, requiredAccuracy: 200 });
+      if (!position) {
+        position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      }
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+
+      // GPS gate — only when the campaign row actually has site coordinates.
+      if (hasSiteCoords(campaign)) {
+        const distKm = haversineKm(lat, lng, campaign.latitude as number, campaign.longitude as number);
+        if (distKm > 0.5) {
+          const distLabel = distKm >= 1 ? `${distKm.toFixed(1)} km` : `${Math.round(distKm * 1000)} m`;
+          setCheckinNotice(campaignId, `You're ${distLabel} away — check-in opens at the site.`);
+          return;
+        }
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setCheckinNotice(campaignId, 'You must be signed in to check in.');
+        return;
+      }
+
+      const { data: participantRow, error: rowError } = await supabase
+        .from('campaign_participants')
+        .select('id, notes')
+        .eq('campaign_id', campaignId)
+        .eq('user_id', user.id)
+        .neq('status', 'cancelled')
+        .maybeSingle();
+
+      if (rowError || !participantRow) {
+        setCheckinNotice(campaignId, "Couldn't find your enrollment — refresh and try again.");
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const checkinLine = `Checked in ${nowIso} @ ${lat.toFixed(6)},${lng.toFixed(6)}`;
+      const nextNotes = participantRow.notes ? `${participantRow.notes}\n${checkinLine}` : checkinLine;
+
+      // Own-row update permitted by campaign_participants RLS.
+      const { error: updateError } = await supabase
+        .from('campaign_participants')
+        .update({ status: 'attended', notes: nextNotes, updated_at: nowIso })
+        .eq('id', participantRow.id);
+
+      if (updateError) {
+        console.error('[CampaignsScreen.handleCheckIn] Update failed', { updateError });
+        setCheckinNotice(campaignId, "Couldn't record check-in — check connection and try again.");
+        return;
+      }
+
+      setCheckins(prev => ({ ...prev, [campaignId]: nowIso }));
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('timeout') || message.includes('unavailable')) {
+        setCheckinNotice(campaignId, 'Could not get a GPS fix — move to an open area and try again.');
+      } else {
+        setCheckinNotice(campaignId, "Couldn't record check-in — please try again.");
+      }
+      console.error('[CampaignsScreen.handleCheckIn] Error', { error });
+    } finally {
+      setCheckinBusyId(null);
+    }
+  };
+
+  /**
+   * Check-in region for a campaign the user is enrolled in.
+   * States: recorded → quiet success row; window open → primary button with
+   * honest captions; otherwise nothing.
+   */
+  const renderCheckinBlock = (campaign: Campaign) => {
+    if (!enrolledCampaigns.has(campaign.id)) return null;
+
+    const recordedAt = checkins[campaign.id];
+    if (recordedAt) {
+      const timeLabel = formatCheckinTime(recordedAt);
+      return (
+        <View
+          style={[styles.checkinDoneRow, { backgroundColor: colors.successBg }]}
+          accessibilityLabel={`Checked in${timeLabel ? ` at ${timeLabel}` : ''}`}
+        >
+          <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+          <Text style={[styles.checkinDoneText, { color: colors.success }]} maxFontSizeMultiplier={1.3}>
+            {`Checked in ✓${timeLabel ? ` · ${timeLabel}` : ''}`}
+          </Text>
+        </View>
+      );
+    }
+
+    if (!isCheckinOpen(campaign)) return null;
+
+    const busy = checkinBusyId === campaign.id;
+    const notice = checkinNotices[campaign.id];
+    return (
+      <View style={styles.checkinBlock}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.checkinButton,
+            { backgroundColor: pressed ? colors.primaryDark : colors.primary },
+            busy && { opacity: 0.6 },
+          ]}
+          onPress={() => handleCheckIn(campaign)}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={`Check in at ${getCampaignTitle(campaign)}`}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color={colors.onPrimary} />
+          ) : (
+            <>
+              <Ionicons name="navigate-outline" size={18} color={colors.onPrimary} />
+              <Text style={[styles.checkinButtonText, { color: colors.onPrimary }]}>Check in</Text>
+            </>
+          )}
+        </Pressable>
+        {notice ? (
+          <View style={styles.checkinNoticeRow}>
+            <Ionicons name="alert-circle-outline" size={16} color={colors.warning} />
+            <Text style={[styles.checkinNoticeText, { color: colors.warning }]}>{notice}</Text>
+          </View>
+        ) : null}
+        <Text style={[styles.checkinCaption, { color: colors.textTertiary }]}>
+          {hasSiteCoords(campaign)
+            ? 'Attendance counts toward camp effectiveness'
+            : 'Attendance counts toward camp effectiveness · Location recorded with your check-in'}
+        </Text>
+      </View>
+    );
   };
 
   const filterCampaigns = () => {
@@ -569,6 +794,9 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
             )}
           </View>
 
+          {/* GPS check-in (R·02) — enrolled + window open */}
+          {renderCheckinBlock(campaign)}
+
           {/* Enrolled Badge */}
           {enrolledCampaigns.has(campaign.id) && (
             <View style={[styles.enrolledBadge, { backgroundColor: colors.successBg }]}>
@@ -774,6 +1002,9 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                     <Text style={[styles.enrolledBadgeText, { color: colors.success, fontSize: 15 }]}>You're Enrolled in this Campaign</Text>
                   </View>
                 )}
+
+                {/* GPS check-in (R·02) in Modal */}
+                {renderCheckinBlock(selectedCampaign)}
 
                 {isCampaignActive(selectedCampaign) && canEnroll && (
                   enrolledCampaigns.has(selectedCampaign.id) ? (
@@ -1206,6 +1437,58 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     marginTop: spacing.md,
     gap: 6,
+  },
+  /* GPS check-in (R·02) */
+  checkinBlock: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  checkinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+  },
+  checkinButtonText: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  checkinNoticeRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  checkinNoticeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  checkinCaption: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  checkinDoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    marginTop: spacing.md,
+    gap: 6,
+  },
+  checkinDoneText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   enrolledBadgeText: {
     fontSize: 13,

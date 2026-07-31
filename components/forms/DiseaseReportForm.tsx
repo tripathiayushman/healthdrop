@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
+import { useTranslation } from 'react-i18next';
 import { useTheme, getSeverityColor, spacing, radii, Theme } from '../../lib/ThemeContext';
 import { diseaseReportsService } from '../../lib/services/diseaseReports';
 import { SubmissionModal } from '../shared';
@@ -181,6 +182,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   refillReportId,
 }) => {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   const netInfo = useNetInfo();
   // Tolerant null check — isInternetReachable === null (no probe yet) is online.
   const isOffline =
@@ -336,6 +338,13 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   const resolvedDiseaseName =
     disease === 'Other…' ? customDisease.trim() : disease;
 
+  // Display-only glossary lookup — chips and the payload keep the English
+  // identifiers; Hindi renders dual-script ("दस्त (Diarrhea)") per Bharosa.
+  const diseaseDisplay = (name: string): string =>
+    (DISEASE_OPTIONS as readonly string[]).includes(name) && name !== 'Other…'
+      ? t(`diseaseForm.diseases.${name}`)
+      : name;
+
   // ── Step navigation ────────────────────────────────────────────────────────
 
   const handleContinue = () => {
@@ -343,8 +352,8 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     if (!resolvedDiseaseName) {
       errs.disease_name =
         disease === 'Other…'
-          ? 'Type the sickness name'
-          : 'Pick the closest sickness — the clinic confirms later';
+          ? t('diseaseForm.errTypeSickness')
+          : t('diseaseForm.errPickSickness');
     }
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
@@ -374,7 +383,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
       !location.district.trim() ||
       !location.state
     ) {
-      errs.location = 'Enter location, district and state';
+      errs.location = t('diseaseForm.errLocation');
     }
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
@@ -421,7 +430,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     } catch (error: any) {
       console.error('Submit error:', error);
       const message = String(error?.message ?? error ?? '').trim();
-      setErrorMessage(message || 'Failed to save report. Please try again.');
+      setErrorMessage(message || t('diseaseForm.errorFallback'));
       setErrorModalVisible(true);
     } finally {
       setLoading(false);
@@ -466,9 +475,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
   if (savedResult) {
     const queued = savedResult.queued;
-    const severityLabel =
-      SEVERITY_LEVELS.find((l) => l.value === savedResult.severity)?.label ??
-      savedResult.severity;
+    const severityLabel = t(`diseaseForm.severity.${savedResult.severity}`);
     const markColor = queued ? colors.warning : colors.success;
     const markBg = queued ? colors.warningBg : colors.successBg;
     const timeText = savedResult.savedAt.toLocaleTimeString([], {
@@ -476,9 +483,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
       minute: '2-digit',
     });
     const nextSteps = [
-      queued ? 'Syncs when signal returns' : 'Synced to the server',
-      'District officer reviews it',
-      "You'll see the decision in My Submissions",
+      queued ? t('diseaseForm.nextQueued') : t('diseaseForm.nextSynced'),
+      t('diseaseForm.nextReview'),
+      t('diseaseForm.nextDecision'),
     ];
 
     return (
@@ -502,20 +509,20 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             maxFontSizeMultiplier={1.3}
             accessibilityRole="header"
           >
-            {queued ? 'Saved on phone' : 'Report submitted'}
+            {queued ? t('diseaseForm.confirmQueuedTitle') : t('diseaseForm.confirmSubmittedTitle')}
           </Text>
           <Text style={[styles.confirmBody, { color: colors.textSecondary }]}>
             {queued
-              ? 'It will sync by itself when the network returns. Nothing more for you to do.'
-              : 'It reached the server and is now waiting for review.'}
+              ? t('diseaseForm.confirmQueuedBody')
+              : t('diseaseForm.confirmSubmittedBody')}
           </Text>
 
           {/* Summary card */}
           <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.summaryTopRow}>
               <Text style={[styles.summaryTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                {savedResult.diseaseName} · {savedResult.casesCount} sick · {savedResult.deathsCount}{' '}
-                {savedResult.deathsCount === 1 ? 'death' : 'deaths'}
+                {diseaseDisplay(savedResult.diseaseName)} · {savedResult.casesCount} {t('diseaseForm.sickWord')} · {savedResult.deathsCount}{' '}
+                {savedResult.deathsCount === 1 ? t('diseaseForm.deathOne') : t('diseaseForm.deathMany')}
               </Text>
               <View
                 style={[
@@ -534,7 +541,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                     { color: queued ? colors.warning : colors.success },
                   ]}
                 >
-                  {queued ? 'Queued' : 'Submitted'}
+                  {queued ? t('diseaseForm.pillQueued') : t('diseaseForm.pillSubmitted')}
                 </Text>
               </View>
             </View>
@@ -546,7 +553,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
           {/* WHAT HAPPENS NEXT — the 1-2-3 strip */}
           <Text style={[styles.eyebrow, { color: colors.textSecondary }]}>
-            WHAT HAPPENS NEXT
+            {t('diseaseForm.whatNext')}
           </Text>
           <View style={[styles.stepsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {nextSteps.map((stepText, i) => (
@@ -591,7 +598,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             ]}
           >
             <Text style={[styles.secondaryBtnText, { color: colors.text }]}>
-              Report another
+              {t('diseaseForm.reportAnother')}
             </Text>
           </Pressable>
           <Pressable
@@ -602,7 +609,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
               { backgroundColor: pressed ? colors.primaryDark : colors.primary },
             ]}
           >
-            <Text style={[styles.submitText, { color: colors.onPrimary }]}>Done</Text>
+            <Text style={[styles.submitText, { color: colors.onPrimary }]}>{t('common.done')}</Text>
           </Pressable>
         </View>
       </View>
@@ -631,13 +638,13 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
           accessibilityLabel={step === 2 ? 'Back to step 1' : 'Go back'}
         >
           <Ionicons name="arrow-back" size={24} color={headerText} />
-          <Text style={[styles.backText, { color: headerText }]}>Back</Text>
+          <Text style={[styles.backText, { color: headerText }]}>{t('common.back')}</Text>
         </Pressable>
         <Text style={[styles.headerTitle, { color: headerText }]} accessibilityRole="header">
-          Report sickness
+          {t('diseaseForm.headerTitle')}
         </Text>
         <Text style={[styles.headerSubtitle, { color: headerText }]}>
-          {step === 1 ? 'Step 1 of 2 · takes ~2 minutes' : 'Step 2 of 2'}
+          {step === 1 ? t('diseaseForm.step1') : t('diseaseForm.step2')}
         </Text>
       </View>
 
@@ -649,7 +656,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         >
           <Ionicons name="cloud-offline-outline" size={18} color={colors.offline} />
           <Text style={[styles.offlineBannerText, { color: colors.offline }]}>
-            Offline — this form saves on your phone
+            {t('diseaseForm.offlineBanner')}
           </Text>
         </View>
       )}
@@ -712,15 +719,15 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
             {/* Which sickness? */}
             <View style={styles.section} onLayout={onFieldLayout('disease_name')}>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>Which sickness?</Text>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('diseaseForm.whichSickness')}</Text>
               <Text style={[styles.helpText, { color: colors.textSecondary }]}>
-                Pick the closest — the clinic confirms later.
+                {t('diseaseForm.pickClosestHelp')}
               </Text>
               <View style={styles.chipWrap}>
                 {DISEASE_OPTIONS.map((option) => (
                   <SelectChip
                     key={option}
-                    label={option}
+                    label={t(`diseaseForm.diseases.${option}`)}
                     selected={disease === option}
                     onPress={() => {
                       setDisease(option);
@@ -734,11 +741,11 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
               {disease === 'Other…' && (
                 <>
                   <Text style={[styles.label, { color: colors.textSecondary }]}>
-                    What is it called?
+                    {t('diseaseForm.whatCalled')}
                   </Text>
                   <TextInput
                     style={getInputStyle('custom_disease')}
-                    placeholder="Type the sickness name…"
+                    placeholder={t('diseaseForm.typeSicknessPlaceholder')}
                     placeholderTextColor={colors.inputPlaceholderColor}
                     value={customDisease}
                     onChangeText={(text) => {
@@ -756,7 +763,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             {/* Counts — steppers, no typing */}
             <View style={styles.section}>
               <CountStepper
-                label="People sick"
+                label={t('diseaseForm.peopleSick')}
                 value={casesCount}
                 min={1}
                 onChange={setCasesCount}
@@ -764,7 +771,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                 accessibilityUnit="people sick"
               />
               <CountStepper
-                label="Deaths"
+                label={t('diseaseForm.deaths')}
                 value={deathsCount}
                 min={0}
                 onChange={handleDeathsChange}
@@ -776,7 +783,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             {/* Severity */}
             <View style={styles.section}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                How serious does it look?
+                {t('diseaseForm.howSerious')}
               </Text>
               <View style={styles.chipWrap}>
                 {SEVERITY_LEVELS.map((level) => {
@@ -785,7 +792,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                   return (
                     <SelectChip
                       key={level.value}
-                      label={level.label}
+                      label={t(`diseaseForm.severity.${level.value}`)}
                       selected={severity === level.value}
                       onPress={() => setSeverity(level.value)}
                       colors={colors}
@@ -797,7 +804,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                 })}
               </View>
               <Text style={[styles.helpText, { color: colors.textSecondary, marginTop: spacing.sm }]}>
-                Deaths &gt; 0 sets severity to at least High automatically.
+                {t('diseaseForm.deathsRule')}
               </Text>
             </View>
           </>
@@ -806,13 +813,13 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             {/* Symptoms */}
             <View style={styles.section}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                Symptoms seen · pick all
+                {t('diseaseForm.symptomsSeen')}
               </Text>
               <View style={styles.chipWrap}>
                 {SYMPTOM_OPTIONS.map((symptom) => (
                   <SelectChip
                     key={symptom}
-                    label={symptom}
+                    label={t(`diseaseForm.symptoms.${symptom}`)}
                     selected={selectedSymptoms.includes(symptom)}
                     onPress={() => toggleSymptom(symptom)}
                     colors={colors}
@@ -820,11 +827,11 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                 ))}
               </View>
               <Text style={[styles.label, { color: colors.textSecondary }]}>
-                Other symptoms · optional
+                {t('diseaseForm.otherSymptomsLabel')}
               </Text>
               <TextInput
                 style={getInputStyle('other_symptoms')}
-                placeholder="Anything else you saw…"
+                placeholder={t('diseaseForm.otherSymptomsPlaceholder')}
                 placeholderTextColor={colors.inputPlaceholderColor}
                 value={otherSymptoms}
                 onChangeText={setOtherSymptoms}
@@ -836,7 +843,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             {/* Location — GPS autofill */}
             <View style={styles.section} onLayout={onFieldLayout('location')}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                Where is this happening?
+                {t('diseaseForm.whereHappening')}
               </Text>
               <LocationField
                 value={{
@@ -860,7 +867,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                 autoFetch={!refillReportId}
               />
               <Text style={[styles.helpText, { color: colors.textSecondary, marginTop: spacing.sm }]}>
-                GPS works without network
+                {t('diseaseForm.gpsHelp')}
               </Text>
               <FieldError message={errors.location} colors={colors} />
             </View>
@@ -868,11 +875,11 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             {/* Notes */}
             <View style={styles.section}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                Anything else? · optional
+                {t('diseaseForm.notesLabel')}
               </Text>
               <TextInput
                 style={[...getInputStyle('notes'), styles.textArea]}
-                placeholder="Two houses near the old well. Water smells since Monday…"
+                placeholder={t('diseaseForm.notesPlaceholder')}
                 placeholderTextColor={colors.inputPlaceholderColor}
                 value={notes}
                 onChangeText={setNotes}
@@ -890,7 +897,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
       <View style={[styles.actionZone, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
         {step === 2 && (
           <Text style={[styles.saveCaption, { color: colors.textSecondary }]}>
-            Saves on your phone first, always — then syncs.
+            {t('diseaseForm.saveCaption')}
           </Text>
         )}
         <View style={styles.actionRow}>
@@ -902,7 +909,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
               { backgroundColor: pressed ? colors.surfaceVariant : colors.surface },
             ]}
           >
-            <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+            <Text style={[styles.cancelText, { color: colors.textSecondary }]}>{t('common.cancel')}</Text>
           </Pressable>
           <Pressable
             onPress={step === 1 ? handleContinue : handleSubmit}
@@ -917,7 +924,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
             ]}
           >
             <Text style={[styles.submitText, { color: colors.onPrimary }]}>
-              {step === 1 ? 'Continue' : loading ? 'Saving…' : 'Save report'}
+              {step === 1 ? t('diseaseForm.continue') : loading ? t('diseaseForm.saving') : t('diseaseForm.saveReport')}
             </Text>
           </Pressable>
         </View>
@@ -927,7 +934,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
       <SubmissionModal
         visible={errorModalVisible}
         type="error"
-        title="Couldn't save report"
+        title={t('diseaseForm.errorTitle')}
         message={errorMessage}
         onClose={() => setErrorModalVisible(false)}
         onRetry={handleSubmit}
@@ -944,7 +951,7 @@ const styles = StyleSheet.create({
     minHeight: 48, alignSelf: 'flex-start', paddingRight: spacing.md,
   },
   backText: { fontSize: 16, fontWeight: '500' },
-  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerTitle: { fontSize: 22, lineHeight: 30 /* ×1.35+ — Devanagari matras */, fontWeight: '800', letterSpacing: -0.4 },
   headerSubtitle: { fontSize: 13, lineHeight: 18, fontWeight: '600', marginTop: 2 },
 
   offlineBanner: {
@@ -1011,7 +1018,7 @@ const styles = StyleSheet.create({
   /* One-Hand Action Bar */
   actionZone: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1 },
   saveCaption: {
-    fontSize: 12, lineHeight: 16, fontWeight: '600',
+    fontSize: 12, lineHeight: 17 /* ×1.35+ — Devanagari matras */, fontWeight: '600',
     textAlign: 'center', marginBottom: spacing.sm,
   },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
@@ -1046,7 +1053,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   confirmTitle: {
-    fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4,
+    fontSize: 22, lineHeight: 30 /* ×1.35+ — Devanagari matras */, fontWeight: '800', letterSpacing: -0.4,
     textAlign: 'center', marginBottom: spacing.sm,
   },
   confirmBody: {
@@ -1070,7 +1077,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill, paddingHorizontal: 10, paddingVertical: 6,
   },
   statusPillText: {
-    fontSize: 12, lineHeight: 16, fontWeight: '800',
+    fontSize: 12, lineHeight: 17 /* ×1.35+ — Devanagari matras */, fontWeight: '800',
     textTransform: 'uppercase', letterSpacing: 0.6,
   },
   summaryMeta: {
@@ -1078,7 +1085,7 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   eyebrow: {
-    fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6,
+    fontSize: 12, lineHeight: 17 /* ×1.35+ — Devanagari matras */, fontWeight: '700', letterSpacing: 0.6,
     marginBottom: spacing.sm,
   },
   stepsCard: { borderRadius: radii.md, borderWidth: 1, padding: spacing.lg, gap: spacing.lg },

@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../lib/ThemeContext';
 import { Profile } from '../types';
 
@@ -155,6 +156,7 @@ interface MainAppProps {
 
 const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }) => {
   const { colors, isDark } = useTheme();
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('tabs');
   const [outbreakFocusId, setOutbreakFocusId] = useState<string | null>(null);
@@ -491,11 +493,11 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
 
   // ── Tab definitions ───────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: keyof typeof Ionicons.glyphMap; activeIcon: keyof typeof Ionicons.glyphMap }[] = [
-    { id: 'home',      label: 'Home',      icon: 'home-outline',          activeIcon: 'home' },
-    { id: 'map',       label: 'Map',       icon: 'map-outline',           activeIcon: 'map' },
-    { id: 'reports',   label: 'Reports',   icon: 'document-text-outline', activeIcon: 'document-text' },
-    { id: 'campaigns', label: 'Campaigns', icon: 'megaphone-outline',     activeIcon: 'megaphone' },
-    { id: 'profile',   label: 'Profile',   icon: 'person-outline',        activeIcon: 'person' },
+    { id: 'home',      label: t('tabs.home'),      icon: 'home-outline',          activeIcon: 'home' },
+    { id: 'map',       label: t('tabs.map'),       icon: 'map-outline',           activeIcon: 'map' },
+    { id: 'reports',   label: t('tabs.reports'),   icon: 'document-text-outline', activeIcon: 'document-text' },
+    { id: 'campaigns', label: t('tabs.campaigns'), icon: 'megaphone-outline',     activeIcon: 'megaphone' },
+    { id: 'profile',   label: t('tabs.profile'),   icon: 'person-outline',        activeIcon: 'person' },
   ];
 
   const renderTabContent = () => {
@@ -760,7 +762,7 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 17, // ×1.35+ — Devanagari matras must not clip
     letterSpacing: 0.2,
   },
 });

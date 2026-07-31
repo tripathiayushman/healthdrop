@@ -3,17 +3,24 @@
 // Flat headerBg band, ink-on-paper card, labels above
 // 52dp inputs, inline field errors (no Alert.alert),
 // solid-fill role selection, honest signup errors.
+// In-app password recovery: 3-step email-OTP flow
+// (email → 6-digit code → new password) on an isolated
+// auth client — see lib/services/authRecovery.ts.
 // =====================================================
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet,
   ScrollView, KeyboardAvoidingView, Platform, Modal,
   ActivityIndicator, FlatList, SafeAreaView, StatusBar,
+  LayoutChangeEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
 import { supabase } from '../lib/supabase';
+import {
+  requestResetCode, verifyResetCode, setNewPassword, cancelRecovery,
+} from '../lib/services/authRecovery';
 import { Profile } from '../types';
 import { useTheme, spacing, radii } from '../lib/ThemeContext';
 
@@ -91,14 +98,14 @@ const LabeledField: React.FC<{
   label: string; icon: string; value: string; onChange: (t: string) => void;
   placeholder: string; keyboardType?: any; secure?: boolean;
   autoCapitalize?: any; autoComplete?: any; rightElement?: React.ReactNode;
-  error?: string;
-}> = ({ label, icon, value, onChange, placeholder, keyboardType, secure, autoCapitalize = 'none', autoComplete, rightElement, error }) => {
+  error?: string; onLayout?: (e: LayoutChangeEvent) => void;
+}> = ({ label, icon, value, onChange, placeholder, keyboardType, secure, autoCapitalize = 'none', autoComplete, rightElement, error, onLayout }) => {
   const { colors } = useTheme();
   const [focused, setFocused] = useState(false);
   const borderColor = error ? colors.inputErrorBorder : focused ? colors.inputFocusBorder : colors.inputBorder;
   const borderWidth = error || focused ? 2 : 1.5;
   return (
-    <View style={s.fieldWrap}>
+    <View style={s.fieldWrap} onLayout={onLayout}>
       <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
         {label}
       </Text>
@@ -128,13 +135,14 @@ const LabeledField: React.FC<{
 const DistrictField: React.FC<{
   value: string; onChange: (t: string) => void;
   loading: boolean; onGPS: () => void; error?: string;
-}> = ({ value, onChange, loading, onGPS, error }) => {
+  onLayout?: (e: LayoutChangeEvent) => void;
+}> = ({ value, onChange, loading, onGPS, error, onLayout }) => {
   const { colors } = useTheme();
   const [focused, setFocused] = useState(false);
   const borderColor = error ? colors.inputErrorBorder : focused ? colors.inputFocusBorder : colors.inputBorder;
   const borderWidth = error || focused ? 2 : 1.5;
   return (
-    <View style={s.fieldWrap}>
+    <View style={s.fieldWrap} onLayout={onLayout}>
       <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
         District
       </Text>
@@ -175,14 +183,17 @@ const DistrictField: React.FC<{
 };
 
 // ── States searchable dropdown ─────────────────────────
-const StatesDropdown: React.FC<{ value: string; onSelect: (st: string) => void; error?: string }> = ({ value, onSelect, error }) => {
+const StatesDropdown: React.FC<{
+  value: string; onSelect: (st: string) => void; error?: string;
+  onLayout?: (e: LayoutChangeEvent) => void;
+}> = ({ value, onSelect, error, onLayout }) => {
   const { colors, reduceMotion } = useTheme();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const filtered = INDIAN_STATES.filter(st => st.toLowerCase().includes(search.toLowerCase()));
   const borderColor = error ? colors.inputErrorBorder : colors.inputBorder;
   return (
-    <View style={s.fieldWrap}>
+    <View style={s.fieldWrap} onLayout={onLayout}>
       <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
         State
       </Text>
@@ -275,9 +286,36 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [showPw, setShowPw]         = useState(false);
   const [showCPw, setShowCPw]       = useState(false);
 
+  // ── Password recovery (3-step inline flow, same screen) ──
+  const [resetStep, setResetStep]   = useState<'email' | 'code' | 'password' | null>(null);
+  const [rEmail, setREmail]         = useState('');
+  const [rCode, setRCode]           = useState('');
+  const [rPw, setRPw]               = useState('');
+  const [rPw2, setRPw2]             = useState('');
+  const [showRPw, setShowRPw]       = useState(false);
+  const [showRPw2, setShowRPw2]     = useState(false);
+  const [codeFocused, setCodeFocused] = useState(false);
+  const [resendIn, setResendIn]     = useState(0);
+  const [resendNote, setResendNote] = useState('');
+  // Quiet success row after a completed reset, shown on the sign-in card
+  const [pwChanged, setPwChanged]   = useState(false);
+
   // Inline field-validation errors (spec: no alert modals for validation)
   const [errors, setErrors] = useState<Record<string, string>>({});
   const scrollRef = useRef<ScrollView>(null);
+  // Field y-positions (relative to the card) for scroll-to-first-error
+  const fieldYRef = useRef<Record<string, number>>({});
+  const cardYRef = useRef(0);
+  const trackY = (key: string) => (e: LayoutChangeEvent) => {
+    fieldYRef.current[key] = e.nativeEvent.layout.y;
+  };
+
+  // Resend countdown — one tick per second while > 0
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn(v => Math.max(0, v - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
 
   // Message modal — server/system responses only, never field validation
   const [msgVisible, setMsgVisible]   = useState(false);
@@ -347,7 +385,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     }
   };
 
-  // ── Validation — inline errors, scroll to the form top ──
+  // ── Validation — inline errors, scroll to the FIRST errored field ──
+  const scrollToFirstError = (next: Record<string, string>, order: string[]) => {
+    const first = order.find(k => next[k]);
+    const fieldY = first != null ? fieldYRef.current[first] : undefined;
+    const y = fieldY != null ? Math.max(0, cardYRef.current + fieldY - spacing.md) : 0;
+    scrollRef.current?.scrollTo({ y, animated: !reduceMotion });
+  };
+
   const validate = (): boolean => {
     const next: Record<string, string> = {};
     if (!email.trim()) next.email = 'Email is required';
@@ -362,10 +407,96 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     }
     setErrors(next);
     if (Object.keys(next).length > 0) {
-      scrollRef.current?.scrollTo({ y: 0, animated: !reduceMotion });
+      scrollToFirstError(
+        next,
+        isLogin
+          ? ['email', 'password']
+          : ['fullName', 'email', 'district', 'state', 'password', 'confirmPw'],
+      );
       return false;
     }
     return true;
+  };
+
+  // ── Password recovery handlers ────────────────────────
+  const resetRecoveryState = () => {
+    setRCode(''); setRPw(''); setRPw2('');
+    setShowRPw(false); setShowRPw2(false);
+    setResendIn(0); setResendNote('');
+    setErrors({});
+  };
+
+  const openReset = () => {
+    setResetStep('email');
+    setREmail(email.trim());
+    setPwChanged(false);
+    resetRecoveryState();
+  };
+
+  const exitReset = () => {
+    cancelRecovery(); // drops any half-finished recovery session (best-effort)
+    setResetStep(null);
+    resetRecoveryState();
+  };
+
+  const handleSendCode = async (isResend: boolean) => {
+    if (!rEmail.trim()) { setErrors({ rEmail: 'Email is required' }); return; }
+    if (!isValidEmail(rEmail.trim())) { setErrors({ rEmail: 'Enter a valid email address' }); return; }
+    setLoading(true);
+    const res = await requestResetCode(rEmail);
+    setLoading(false);
+    if (!res.ok) {
+      // Same surface the user is looking at: email field on step 1,
+      // under the code input on a resend.
+      setErrors(isResend ? { rCode: res.message } : { rEmail: res.message });
+      return;
+    }
+    setErrors({});
+    setResendIn(60);
+    if (isResend) {
+      setResendNote('New code sent — the old one no longer works.');
+    } else {
+      setRCode('');
+      setResendNote('');
+      setResetStep('code');
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    const code = rCode.trim();
+    if (!/^\d{6}$/.test(code)) {
+      setErrors({ rCode: 'Enter the 6-digit code from the email' });
+      return;
+    }
+    setLoading(true);
+    const res = await verifyResetCode(rEmail, code);
+    setLoading(false);
+    if (!res.ok) { setErrors({ rCode: res.message }); return; }
+    setErrors({});
+    setResendNote('');
+    setResetStep('password');
+  };
+
+  const handleSetNewPassword = async () => {
+    const next: Record<string, string> = {};
+    if (!rPw) next.rPw = 'Password is required';
+    else if (rPw.length < 8) next.rPw = 'Password must be at least 8 characters';
+    if (rPw && rPw2 !== rPw) next.rPw2 = "Passwords don't match";
+    setErrors(next);
+    if (Object.keys(next).length > 0) return;
+    setLoading(true);
+    const res = await setNewPassword(rPw);
+    setLoading(false);
+    if (!res.ok) { setErrors({ rPw: res.message }); return; }
+    // The service signed the temporary recovery session out — the normal
+    // sign-in flow now completes with the new password.
+    setEmail(rEmail.trim());
+    setPassword('');
+    setResetStep(null);
+    resetRecoveryState();
+    setIsLogin(true);
+    setPwChanged(true);
+    scrollRef.current?.scrollTo({ y: 0, animated: !reduceMotion });
   };
 
   // ── Auth ──────────────────────────────────────────────
@@ -376,8 +507,8 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     try {
       if (isLogin) {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        setLoading(false);
         if (error) {
+          setLoading(false);
           if (error.message.includes('Invalid login credentials'))
             showMsg('error', 'Login Failed', 'Incorrect email or password.');
           else if (error.message.includes('Email not confirmed'))
@@ -385,8 +516,33 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           else showMsg('error', 'Login Error', error.message);
           return;
         }
-        if (data?.session) onAuthSuccess();
-        else showMsg('error', 'Login Failed', 'Unable to sign in. Please try again.');
+        if (data?.session) {
+          // Deactivated accounts get a human next step, not a dead end.
+          // App-level auth still owns the actual sign-out; this check only
+          // adds the message (and fails open if the lookup itself fails).
+          let deactivated = false;
+          try {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('is_active')
+              .eq('id', data.session.user.id)
+              .maybeSingle();
+            deactivated = prof?.is_active === false;
+          } catch { /* fail open */ }
+          setLoading(false);
+          if (deactivated) {
+            showMsg(
+              'error',
+              'Account Deactivated',
+              'This account was deactivated by an administrator. Contact your district office to restore access.'
+            );
+            return;
+          }
+          onAuthSuccess();
+        } else {
+          setLoading(false);
+          showMsg('error', 'Login Failed', 'Unable to sign in. Please try again.');
+        }
       } else {
         const { data: sd, error: se } = await supabase.auth.signUp({
           email, password,
@@ -430,6 +586,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   };
 
   const switchMode = (login: boolean) => {
+    if (resetStep) cancelRecovery(); // abandoning recovery mid-flow
+    setResetStep(null);
+    resetRecoveryState();
+    setPwChanged(false);
     setIsLogin(login);
     setErrors({});
     setEmail(''); setPassword(''); setConfirmPw(''); setFullName('');
@@ -496,12 +656,163 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.shadow }]}>
+          <View
+            style={[s.card, { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.shadow }]}
+            onLayout={(e) => { cardYRef.current = e.nativeEvent.layout.y; }}
+          >
+            {/* Quiet success row after a completed password reset */}
+            {pwChanged && !resetStep && isLogin && (
+              <View style={[s.successRow, { backgroundColor: colors.successLight, borderColor: colors.success }]}>
+                <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+                <Text style={[s.successRowTxt, { color: colors.success }]} maxFontSizeMultiplier={1.3}>
+                  Password changed — sign in with your new password.
+                </Text>
+              </View>
+            )}
+
+            {resetStep && (
+              <TouchableOpacity
+                style={s.backRow}
+                onPress={exitReset}
+                accessibilityRole="button"
+                accessibilityLabel="Back to sign in"
+              >
+                <Ionicons name="arrow-back" size={18} color={colors.textSecondary} />
+                <Text style={[s.backTxt, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                  Back to sign in
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {resetStep && (
+              <Text style={[s.sectionLabel, { color: colors.textTertiary, marginTop: 0 }]} maxFontSizeMultiplier={1.3}>
+                {`Step ${resetStep === 'email' ? 1 : resetStep === 'code' ? 2 : 3} of 3`}
+              </Text>
+            )}
+
             <Text style={[s.heading, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-              {isLogin ? 'Sign in to continue' : 'Create your account'}
+              {resetStep ? 'Reset your password' : isLogin ? 'Sign in to continue' : 'Create your account'}
             </Text>
 
-            {isLogin ? (
+            {resetStep === 'email' ? (
+              /* ══ RECOVERY 1/3 — EMAIL ═════════════════ */
+              <>
+                <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+                  We'll email you a 6-digit code to reset your password.
+                </Text>
+                <LabeledField
+                  label="Email" icon="at-outline" value={rEmail}
+                  onChange={(t) => { setREmail(t); clearError('rEmail'); }}
+                  placeholder="Email address" keyboardType="email-address" autoComplete="email"
+                  error={errors.rEmail}
+                />
+              </>
+
+            ) : resetStep === 'code' ? (
+              /* ══ RECOVERY 2/3 — CODE ══════════════════ */
+              <>
+                <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+                  {`Enter the 6-digit code we sent to ${rEmail.trim()}.`}
+                </Text>
+                <View style={s.fieldWrap}>
+                  <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                    6-digit code
+                  </Text>
+                  <TextInput
+                    style={[
+                      s.codeInput,
+                      {
+                        color: colors.text,
+                        backgroundColor: colors.inputBackground,
+                        borderColor: errors.rCode
+                          ? colors.inputErrorBorder
+                          : codeFocused ? colors.inputFocusBorder : colors.inputBorder,
+                        borderWidth: errors.rCode || codeFocused ? 2 : 1.5,
+                      },
+                      WEB_NO_OUTLINE,
+                    ]}
+                    value={rCode}
+                    onChangeText={(t) => { setRCode(t.replace(/\D/g, '').slice(0, 6)); clearError('rCode'); }}
+                    placeholder="••••••"
+                    placeholderTextColor={colors.placeholder}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    textContentType="oneTimeCode"
+                    onFocus={() => setCodeFocused(true)}
+                    onBlur={() => setCodeFocused(false)}
+                    accessibilityLabel="6-digit code from the email"
+                  />
+                  <FieldError message={errors.rCode} />
+                </View>
+                {!!resendNote && (
+                  <View style={s.errorRow}>
+                    <Ionicons name="checkmark-circle" size={14} color={colors.success} />
+                    <Text style={[s.errorText, { color: colors.success }]} maxFontSizeMultiplier={1.3}>
+                      {resendNote}
+                    </Text>
+                  </View>
+                )}
+                <Text style={[s.disclosure, { color: colors.textTertiary, marginTop: spacing.xs }]} maxFontSizeMultiplier={1.3}>
+                  Check your spam folder if it doesn't arrive.
+                </Text>
+                <TouchableOpacity
+                  style={s.resendBtn}
+                  onPress={() => handleSendCode(true)}
+                  disabled={resendIn > 0 || loading}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: resendIn > 0 || loading }}
+                  accessibilityLabel={resendIn > 0 ? `Resend code available in ${resendIn} seconds` : 'Resend code'}
+                >
+                  <Text
+                    style={[s.resendTxt, { color: resendIn > 0 ? colors.textTertiary : colors.primary }]}
+                    maxFontSizeMultiplier={1.3}
+                  >
+                    {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+
+            ) : resetStep === 'password' ? (
+              /* ══ RECOVERY 3/3 — NEW PASSWORD ══════════ */
+              <>
+                <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+                  Choose a new password — at least 8 characters.
+                </Text>
+                <LabeledField
+                  label="New Password" icon="lock-closed-outline" value={rPw}
+                  onChange={(t) => { setRPw(t); clearError('rPw'); }}
+                  placeholder="New password (min 8 chars)" secure={!showRPw} autoComplete="new-password"
+                  error={errors.rPw}
+                  rightElement={
+                    <TouchableOpacity
+                      onPress={() => setShowRPw(p => !p)}
+                      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={showRPw ? 'Hide password' : 'Show password'}
+                    >
+                      <Ionicons name={showRPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  }
+                />
+                <LabeledField
+                  label="Confirm New Password" icon="lock-closed-outline" value={rPw2}
+                  onChange={(t) => { setRPw2(t); clearError('rPw2'); }}
+                  placeholder="Confirm new password" secure={!showRPw2} autoComplete="new-password"
+                  error={errors.rPw2 || (rPw2.length > 0 && rPw2 !== rPw ? "Passwords don't match" : undefined)}
+                  rightElement={
+                    <TouchableOpacity
+                      onPress={() => setShowRPw2(p => !p)}
+                      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={showRPw2 ? 'Hide password' : 'Show password'}
+                    >
+                      <Ionicons name={showRPw2 ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  }
+                />
+              </>
+
+            ) : isLogin ? (
               /* ══ SIGN IN ══════════════════════════════ */
               <>
                 <LabeledField
@@ -509,16 +820,18 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   onChange={(t) => { setEmail(t); clearError('email'); }}
                   placeholder="Email address" keyboardType="email-address" autoComplete="email"
                   error={errors.email}
+                  onLayout={trackY('email')}
                 />
                 <LabeledField
                   label="Password" icon="lock-closed-outline" value={password}
                   onChange={(t) => { setPassword(t); clearError('password'); }}
                   placeholder="Password" secure={!showPw} autoComplete="password"
                   error={errors.password}
+                  onLayout={trackY('password')}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowPw(p => !p)}
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
                       accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
                     >
@@ -526,6 +839,16 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                     </TouchableOpacity>
                   }
                 />
+                <TouchableOpacity
+                  style={s.forgotBtn}
+                  onPress={openReset}
+                  accessibilityRole="button"
+                  accessibilityLabel="Forgot password? Reset it with an emailed code"
+                >
+                  <Text style={[s.forgotTxt, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>
+                    Forgot password?
+                  </Text>
+                </TouchableOpacity>
               </>
 
             ) : (
@@ -536,12 +859,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   onChange={(t) => { setFullName(t); clearError('fullName'); }}
                   placeholder="Full name" autoCapitalize="words"
                   error={errors.fullName}
+                  onLayout={trackY('fullName')}
                 />
                 <LabeledField
                   label="Email" icon="at-outline" value={email}
                   onChange={(t) => { setEmail(t); clearError('email'); }}
                   placeholder="Email address" keyboardType="email-address" autoComplete="email"
                   error={errors.email}
+                  onLayout={trackY('email')}
                 />
                 <LabeledField
                   label="Phone (Optional)" icon="call-outline" value={phone}
@@ -552,6 +877,9 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 {/* Role */}
                 <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
                   Role
+                </Text>
+                <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+                  Official roles are provisioned by your district administrator.
                 </Text>
                 <View style={s.roleWrap}>
                   {SIGNUP_ROLES.map(r => {
@@ -608,11 +936,13 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   loading={fetchingLoc}
                   onGPS={fetchLocation}
                   error={errors.district}
+                  onLayout={trackY('district')}
                 />
                 <StatesDropdown
                   value={userState}
                   onSelect={(st) => { setUserState(st); clearError('state'); }}
                   error={errors.state}
+                  onLayout={trackY('state')}
                 />
                 <LabeledField
                   label="Pincode (Optional)" icon="pin-outline" value={pincode}
@@ -629,10 +959,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   onChange={(t) => { setPassword(t); clearError('password'); }}
                   placeholder="Create password (min 8 chars)" secure={!showPw} autoComplete="new-password"
                   error={errors.password}
+                  onLayout={trackY('password')}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowPw(p => !p)}
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
                       accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
                     >
@@ -645,10 +976,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   onChange={(t) => { setConfirmPw(t); clearError('confirmPw'); }}
                   placeholder="Confirm password" secure={!showCPw} autoComplete="new-password"
                   error={errors.confirmPw || (confirmPw.length > 0 && confirmPw !== password ? "Passwords don't match" : undefined)}
+                  onLayout={trackY('confirmPw')}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowCPw(p => !p)}
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
                       accessibilityLabel={showCPw ? 'Hide password' : 'Show password'}
                     >
@@ -666,16 +998,29 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 { backgroundColor: pressed ? colors.primaryDark : colors.primary },
                 loading && { opacity: 0.4 },
               ]}
-              onPress={handleAuth}
+              onPress={
+                resetStep === 'email' ? () => handleSendCode(false)
+                : resetStep === 'code' ? handleVerifyCode
+                : resetStep === 'password' ? handleSetNewPassword
+                : handleAuth
+              }
               disabled={loading}
               accessibilityRole="button"
-              accessibilityLabel={isLogin ? 'Sign in' : 'Create account'}
+              accessibilityLabel={
+                resetStep === 'email' ? 'Send code'
+                : resetStep === 'code' ? 'Verify code'
+                : resetStep === 'password' ? 'Set new password'
+                : isLogin ? 'Sign in' : 'Create account'
+              }
             >
               {loading
                 ? <ActivityIndicator size="small" color={colors.onPrimary} />
                 : (
                   <Text style={[s.submitTxt, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
-                    {isLogin ? 'Sign In' : 'Create Account'}
+                    {resetStep === 'email' ? 'Send Code'
+                      : resetStep === 'code' ? 'Verify Code'
+                      : resetStep === 'password' ? 'Set New Password'
+                      : isLogin ? 'Sign In' : 'Create Account'}
                   </Text>
                 )}
             </Pressable>
@@ -817,6 +1162,54 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   gpsTxt: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+
+  /* Forgot password — 48dp target, right-aligned under the field */
+  forgotBtn: {
+    alignSelf: 'flex-end',
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+    marginTop: -spacing.sm,
+  },
+  forgotTxt: { fontSize: 14, lineHeight: 20, fontWeight: '700' },
+
+  /* Recovery flow */
+  backRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2,
+    alignSelf: 'flex-start',
+    minHeight: 48,
+    paddingRight: spacing.sm,
+  },
+  backTxt: { fontSize: 14, lineHeight: 20, fontWeight: '600' },
+  codeInput: {
+    borderRadius: radii.md,
+    minHeight: 64,
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: '700',
+    letterSpacing: 10,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  resendBtn: {
+    alignSelf: 'flex-start',
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  resendTxt: { fontSize: 14, lineHeight: 20, fontWeight: '700' },
+
+  /* Quiet success row (post-reset) */
+  successRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    borderRadius: radii.md, borderWidth: 1,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  successRowTxt: { fontSize: 13, lineHeight: 18, fontWeight: '600', flexShrink: 1 },
 
   /* Submit */
   submitBtn: {

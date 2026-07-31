@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { syncQueue, QueueItem, QueueItemType, QueueItemStatus } from '../../src/services/offlineSync/SyncQueue';
 import { offlineSyncService } from '../../src/services/offlineSync/OfflineSyncService';
@@ -25,12 +26,13 @@ const MAX_ATTEMPTS = 3;
 // stuck (app killed mid-sync) and is safe to reset to 'pending'.
 const STALE_SYNCING_MS = 2 * 60 * 1000;
 
-const TYPE_LABEL: Record<QueueItemType, string> = {
-  disease_report:       'Disease report',
-  water_quality_report: 'Water quality report',
-  campaign:             'Campaign',
-  health_alert:         'Health alert',
-  feedback:             'Feedback',
+// Display goes through t() — the queue keeps its English type identifiers.
+const TYPE_LABEL_KEY: Record<QueueItemType, string> = {
+  disease_report:       'outbox.types.disease_report',
+  water_quality_report: 'outbox.types.water_quality_report',
+  campaign:             'outbox.types.campaign',
+  health_alert:         'outbox.types.health_alert',
+  feedback:             'outbox.types.feedback',
 };
 
 const TYPE_ICON: Record<QueueItemType, keyof typeof Ionicons.glyphMap> = {
@@ -69,21 +71,22 @@ const QueueStatusPill: React.FC<{ status: QueueItemStatus; permanentlyFailed: bo
   status, permanentlyFailed,
 }) => {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   let bg = colors.surfaceVariant;
   let fg = colors.textSecondary;
-  let label = 'SAVED';
+  let label = t('outbox.statusSaved');
   let spoken = 'saved on phone';
 
   if (status === 'pending') {
-    bg = colors.warningBg; fg = colors.warning; label = 'QUEUED'; spoken = 'queued, waiting to upload';
+    bg = colors.warningBg; fg = colors.warning; label = t('outbox.statusQueued'); spoken = 'queued, waiting to upload';
   } else if (status === 'syncing') {
-    bg = colors.infoBg; fg = colors.info; label = 'UPLOADING'; spoken = 'uploading now';
+    bg = colors.infoBg; fg = colors.info; label = t('outbox.statusUploading'); spoken = 'uploading now';
   } else if (status === 'failed') {
     bg = colors.dangerBg; fg = colors.danger;
-    label = permanentlyFailed ? 'NEEDS RETRY' : 'RETRYING';
+    label = permanentlyFailed ? t('outbox.statusNeedsRetry') : t('outbox.statusRetrying');
     spoken = permanentlyFailed ? 'upload failed, needs retry' : 'upload failed, retrying';
   } else if (status === 'synced') {
-    bg = colors.successBg; fg = colors.success; label = 'SYNCED'; spoken = 'synced';
+    bg = colors.successBg; fg = colors.success; label = t('outbox.statusSynced'); spoken = 'synced';
   }
 
   return (
@@ -99,6 +102,7 @@ const QueueStatusPill: React.FC<{ status: QueueItemStatus; permanentlyFailed: bo
 // ─────────────────────────────────────────────────────
 export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile; onBack: () => void }) {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   const netInfo = useNetInfo();
   const accent = ROLE_ACCENT[profile.role] ?? ROLE_ACCENT.volunteer;
 
@@ -143,12 +147,12 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       setItems(visible);
     } catch (err) {
       console.error('[SyncOutbox] failed to read queue:', err);
-      setLoadError("Couldn't read the reports saved on this phone");
+      setLoadError(t('outbox.loadError'));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [profile.id]);
+  }, [profile.id, t]);
 
   useEffect(() => {
     load();
@@ -170,7 +174,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       // say so honestly instead of "Already up to date" (F12). The queue's
       // onChange subscription reloads this list when that pass finishes.
       if (offlineSyncService.busy) {
-        setLastResult({ kind: 'warn', text: 'Sync already in progress…' });
+        setLastResult({ kind: 'warn', text: t('outbox.syncInProgress') });
         return;
       }
       const all = await syncQueue.getAll();
@@ -185,23 +189,25 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       await syncQueue.resetStuckSyncing(STALE_SYNCING_MS);
       const res = await offlineSyncService.triggerSync();
       if (res.busy) {
-        setLastResult({ kind: 'warn', text: 'Sync already in progress…' });
+        setLastResult({ kind: 'warn', text: t('outbox.syncInProgress') });
       } else if (res.failed > 0) {
         setLastResult({
           kind: 'warn',
-          text: `${res.synced} uploaded · ${res.failed} still waiting — will keep retrying`,
+          text: t('outbox.syncPartial', { synced: res.synced, failed: res.failed }),
         });
       } else if (res.synced > 0) {
         setLastResult({
           kind: 'ok',
-          text: `Uploaded ${res.synced} ${res.synced === 1 ? 'report' : 'reports'}`,
+          text: res.synced === 1
+            ? t('outbox.syncUploadedOne', { n: res.synced })
+            : t('outbox.syncUploadedMany', { n: res.synced }),
         });
       } else {
-        setLastResult({ kind: 'ok', text: 'Already up to date' });
+        setLastResult({ kind: 'ok', text: t('outbox.syncUpToDate') });
       }
     } catch (err) {
       console.error('[SyncOutbox] sync failed:', err);
-      setLastResult({ kind: 'fail', text: "Couldn't sync — will retry automatically when connection improves" });
+      setLastResult({ kind: 'fail', text: t('outbox.syncFailed') });
     } finally {
       setSyncing(false);
       load();
@@ -225,7 +231,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       await load();
     } catch (err) {
       console.error('[SyncOutbox] delete failed:', err);
-      setDeleteError("Couldn't remove it — try again");
+      setDeleteError(t('outbox.deleteError'));
     } finally {
       setDeleteBusy(false);
     }
@@ -236,12 +242,12 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
   const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
   const n = items.length;
   const headerLine = loading
-    ? 'Checking saved reports…'
+    ? t('outbox.headerChecking')
     : n === 0
-      ? 'Everything is safely uploaded'
+      ? t('outbox.headerAllSynced')
       : offline
-        ? `${n} ${n === 1 ? 'report' : 'reports'} saved on phone — will sync when online`
-        : `${n} ${n === 1 ? 'report' : 'reports'} saved on phone — syncing automatically`;
+        ? (n === 1 ? t('outbox.headerOfflineOne', { n }) : t('outbox.headerOfflineMany', { n }))
+        : (n === 1 ? t('outbox.headerOnlineOne', { n }) : t('outbox.headerOnlineMany', { n }));
 
   const resultColor = lastResult?.kind === 'ok'
     ? colors.success
@@ -255,10 +261,12 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
   // ── Row ──
   const renderItem = ({ item }: { item: QueueItem }) => {
     const permanentlyFailed = item.status === 'failed' && item.attempts >= MAX_ATTEMPTS;
-    const title = payloadTitle(item) ?? TYPE_LABEL[item.type] ?? 'Saved report';
+    const typeKey = TYPE_LABEL_KEY[item.type] as string | undefined;
+    const savedLine = t('outbox.savedAt', { when: formatShortDateTime(item.createdAt) || '—' });
+    const title = payloadTitle(item) ?? (typeKey ? t(typeKey) : t('outbox.savedReport'));
     const subtitle = payloadTitle(item)
-      ? `${TYPE_LABEL[item.type] ?? 'Report'} · Saved ${formatShortDateTime(item.createdAt) || '—'}`
-      : `Saved ${formatShortDateTime(item.createdAt) || '—'}`;
+      ? `${typeKey ? t(typeKey) : t('outbox.reportWord')} · ${savedLine}`
+      : savedLine;
 
     return (
       <View style={[st.card, { backgroundColor: colors.card, borderColor: colors.border }, !isDark && st.cardShadow]}>
@@ -289,8 +297,8 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
               <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
               <Text style={[st.failTitle, { color: colors.text }]}>
                 {permanentlyFailed
-                  ? `Couldn't upload after ${item.attempts} tries — tap Sync now to retry.`
-                  : "Last upload didn't go through — it will be retried."}
+                  ? t('outbox.failedPermanent', { n: item.attempts })
+                  : t('outbox.failedWillRetry')}
               </Text>
             </View>
             {!!item.error && (
@@ -304,14 +312,16 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
         <View style={st.cardFooter}>
           {item.attempts > 0 ? (
             <Text style={[st.attemptsText, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-              Tried {item.attempts} of {MAX_ATTEMPTS} {item.attempts === 1 ? 'time' : 'times'}
+              {item.attempts === 1
+                ? t('outbox.triedOne', { n: item.attempts, max: MAX_ATTEMPTS })
+                : t('outbox.triedMany', { n: item.attempts, max: MAX_ATTEMPTS })}
             </Text>
           ) : <View />}
           <TouchableOpacity
             onPress={() => { setDeleteError(null); setDeleteTarget(item); }}
             style={st.deleteBtn}
             accessibilityRole="button"
-            accessibilityLabel={`Delete saved ${TYPE_LABEL[item.type] ?? 'report'}`}
+            accessibilityLabel={`Delete saved ${typeKey ? t(typeKey) : 'report'}`}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Ionicons name="trash-outline" size={20} color={colors.danger} />
@@ -341,7 +351,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
           <Ionicons name="arrow-back" size={22} color={headerText} />
         </TouchableOpacity>
         <View style={st.headerTextWrap}>
-          <Text style={[st.headerTitle, { color: headerText }]} numberOfLines={1}>Sync Outbox</Text>
+          <Text style={[st.headerTitle, { color: headerText }]} numberOfLines={1}>{t('outbox.title')}</Text>
           <Text style={[st.headerSub, { color: headerSub }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>
             {headerLine}
           </Text>
@@ -375,7 +385,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
               items.length > 0 ? (
                 <View style={st.eyebrowRow}>
                   <Text style={[st.eyebrow, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                    SAVED ON THIS PHONE
+                    {t('outbox.eyebrowSaved')}
                     <Text style={st.eyebrowCount}>{` · ${items.length}`}</Text>
                   </Text>
                 </View>
@@ -386,8 +396,8 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
                 <EmptyState
                   icon="checkmark-circle-outline"
                   color={colors.success}
-                  title="All synced — nothing waiting on this phone."
-                  subtitle="Reports you file while offline are saved here first, then uploaded automatically."
+                  title={t('outbox.emptyTitle')}
+                  subtitle={t('outbox.emptySubtitle')}
                 />
               </View>
             }
@@ -402,7 +412,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
             <View style={st.barNoteRow}>
               <Ionicons name="cloud-offline-outline" size={16} color={colors.offline} />
               <Text style={[st.barNote, { color: colors.offline }]} maxFontSizeMultiplier={1.3}>
-                You're offline — reports are safe here and will sync automatically.
+                {t('outbox.offlineBar')}
               </Text>
             </View>
           )}
@@ -428,7 +438,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
             ]}
           >
             <Text style={[st.syncBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
-              {syncing ? 'Syncing…' : `Sync now (${items.length})`}
+              {syncing ? t('outbox.syncing') : t('outbox.syncNow', { n: items.length })}
             </Text>
           </Pressable>
         </View>
@@ -443,9 +453,9 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       >
         <View style={[st.overlay, { backgroundColor: colors.overlay }]}>
           <View style={[st.confirmCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[st.confirmTitle, { color: colors.text }]}>Remove this saved report?</Text>
+            <Text style={[st.confirmTitle, { color: colors.text }]}>{t('outbox.deleteTitle')}</Text>
             <Text style={[st.confirmBody, { color: colors.textSecondary }]}>
-              It hasn't been uploaded yet. Removing it deletes the information from this phone — this can't be undone.
+              {t('outbox.deleteBody')}
             </Text>
             {!!deleteError && (
               <View style={st.barNoteRow}>
@@ -467,7 +477,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
                   },
                 ]}
               >
-                <Text style={[st.confirmBtnText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>Cancel</Text>
+                <Text style={[st.confirmBtnText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>{t('common.cancel')}</Text>
               </Pressable>
               <Pressable
                 onPress={confirmDelete}
@@ -483,7 +493,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
                 ]}
               >
                 <Text style={[st.confirmBtnText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>
-                  {deleteBusy ? 'Removing…' : 'Remove'}
+                  {deleteBusy ? t('outbox.removing') : t('outbox.remove')}
                 </Text>
               </Pressable>
             </View>
@@ -515,7 +525,7 @@ const st = StyleSheet.create({
   },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTextWrap: { flex: 1 },
-  headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  headerTitle: { fontSize: 22, lineHeight: 30 /* ×1.35+ — Devanagari matras */, fontWeight: '800', letterSpacing: -0.4 },
   headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '600', marginTop: 2 },
   roleRibbon: { height: 4, width: '100%' },
 
@@ -524,7 +534,7 @@ const st = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     marginTop: spacing.sm, marginBottom: spacing.md, minHeight: 20,
   },
-  eyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
+  eyebrow: { fontSize: 12, lineHeight: 17 /* ×1.35+ — Devanagari matras */, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   eyebrowCount: { fontVariant: ['tabular-nums'] },
 
   /* Skeleton */
@@ -548,7 +558,7 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: spacing.sm,
   },
-  attemptsText: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  attemptsText: { fontSize: 12, lineHeight: 17 /* ×1.35+ — Devanagari matras */, fontWeight: '600', fontVariant: ['tabular-nums'] },
   deleteBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: -spacing.sm, marginBottom: -spacing.sm },
 
   /* Failed-upload framing */
@@ -564,7 +574,7 @@ const st = StyleSheet.create({
     borderRadius: radii.pill, alignSelf: 'flex-start',
   },
   pillDot: { width: 6, height: 6, borderRadius: 3 },
-  pillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
+  pillText: { fontSize: 12, lineHeight: 17 /* ×1.35+ — Devanagari matras */, fontWeight: '800', letterSpacing: 0.6 },
 
   /* One-Hand Action Bar */
   actionBar: {

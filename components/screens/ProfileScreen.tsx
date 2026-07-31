@@ -26,6 +26,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { ROLE_ACCENT } from '../dashboards/DashboardShared';
 import { clearExpoPushToken } from '../../lib/services/users';
+import { setAppLanguage } from '../../lib/i18n';
 
 interface ProfileScreenProps {
   profile: Profile;
@@ -35,6 +36,15 @@ interface ProfileScreenProps {
 }
 
 const NOTIFICATIONS_KEY = 'healthdrop:notificationsEnabled';
+const LANGUAGE_KEY = 'healthdrop:language';
+const CRITICAL_OVERRIDE_KEY = 'healthdrop:criticalOverridesDnd';
+
+type AppLanguage = 'en' | 'hi';
+
+const LANGUAGE_OPTIONS: { value: AppLanguage; label: string; sub: string }[] = [
+  { value: 'en', label: 'English', sub: 'Default' },
+  { value: 'hi', label: 'हिन्दी', sub: 'Hindi' },
+];
 
 const ROLE_LABEL: Record<string, string> = {
   super_admin:      'Super Administrator',
@@ -68,6 +78,9 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const { colors, isDark, toggleTheme, reduceMotion } = useTheme();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [criticalOverride, setCriticalOverride] = useState(false);
+  const [language, setLanguage] = useState<AppLanguage>('en');
+  const [showLanguageModal, setShowLanguageModal] = useState(false);
 
   // Modal states
   const [showEditProfile, setShowEditProfile] = useState(false);
@@ -109,11 +122,25 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackCategory, setFeedbackCategory] = useState('general');
 
-  // Load persisted Notifications preference
+  // Load persisted settings (notifications, critical-override, language)
   useEffect(() => {
     AsyncStorage.getItem(NOTIFICATIONS_KEY)
       .then(value => {
         if (value !== null) setNotificationsEnabled(value === 'true');
+      })
+      .catch(() => {
+        /* storage unavailable — keep default */
+      });
+    AsyncStorage.getItem(CRITICAL_OVERRIDE_KEY)
+      .then(value => {
+        if (value !== null) setCriticalOverride(value === 'true');
+      })
+      .catch(() => {
+        /* storage unavailable — keep default */
+      });
+    AsyncStorage.getItem(LANGUAGE_KEY)
+      .then(value => {
+        if (value === 'en' || value === 'hi') setLanguage(value);
       })
       .catch(() => {
         /* storage unavailable — keep default */
@@ -128,6 +155,31 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       });
       return next;
     });
+  };
+
+  const toggleCriticalOverride = () => {
+    setCriticalOverride(prev => {
+      const next = !prev;
+      AsyncStorage.setItem(CRITICAL_OVERRIDE_KEY, String(next)).catch(() => {
+        /* storage unavailable — in-memory toggle still applies */
+      });
+      return next;
+    });
+  };
+
+  const handleSelectLanguage = (lang: AppLanguage) => {
+    setLanguage(lang);
+    AsyncStorage.setItem(LANGUAGE_KEY, lang).catch(() => {
+      /* storage unavailable — in-memory choice still applies this session */
+    });
+    try {
+      Promise.resolve(setAppLanguage(lang)).catch(error => {
+        console.warn('Failed to apply app language:', error);
+      });
+    } catch (error) {
+      console.warn('Failed to apply app language:', error);
+    }
+    setShowLanguageModal(false);
   };
 
   const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
@@ -389,6 +441,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     action: () => void;
     hasSwitch?: boolean;
     switchValue?: boolean;
+    /** Small honest-state line under the label */
+    caption?: string;
+    /** Current value shown before the chevron (e.g. selected language) */
+    valueLabel?: string;
   }
 
   interface MenuSection {
@@ -421,11 +477,31 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
           switchValue: isDark,
         },
         {
+          iconName: 'language-outline',
+          label: 'Language / भाषा',
+          caption: 'हिन्दी अनुवाद जारी है — some screens remain English',
+          valueLabel: language === 'hi' ? 'हिन्दी' : 'English',
+          action: () => setShowLanguageModal(true),
+        },
+      ],
+    },
+    {
+      section: 'Notifications',
+      items: [
+        {
           iconName: 'notifications-outline',
           label: 'Notifications',
           action: toggleNotifications,
           hasSwitch: true,
           switchValue: notificationsEnabled,
+        },
+        {
+          iconName: 'alert-circle-outline',
+          label: 'Critical alerts override silent mode',
+          caption: 'Recommended for field roles — applies from the next app start',
+          action: toggleCriticalOverride,
+          hasSwitch: true,
+          switchValue: criticalOverride,
         },
       ],
     },
@@ -556,7 +632,14 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               >
                 <View style={styles.menuItemLeft}>
                   <Ionicons name={item.iconName} size={22} color={colors.textSecondary} />
-                  <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+                  <View style={styles.menuTextWrap}>
+                    <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+                    {item.caption ? (
+                      <Text style={[styles.menuCaption, { color: colors.textTertiary }]}>
+                        {item.caption}
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
                 {item.hasSwitch ? (
                   <Switch
@@ -567,7 +650,14 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     ios_backgroundColor={colors.surfaceVariant}
                   />
                 ) : (
-                  <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                  <View style={styles.menuItemRight}>
+                    {item.valueLabel ? (
+                      <Text style={[styles.menuValue, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                        {item.valueLabel}
+                      </Text>
+                    ) : null}
+                    <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                  </View>
                 )}
               </Pressable>
             ))}
@@ -795,6 +885,82 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               onPress={handleUpdateLocation}
               onCancel={() => { setShowUpdateLocation(false); setLocationError(''); setGpsMessage(''); }}
             />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Language Picker Modal */}
+      <Modal visible={showLanguageModal} animationType={reduceMotion ? 'none' : 'slide'} transparent onRequestClose={() => setShowLanguageModal(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="language-outline" size={24} color={colors.textSecondary} />
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Language / भाषा</Text>
+            </View>
+
+            {LANGUAGE_OPTIONS.map(option => {
+              const active = language === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={({ pressed }) => [
+                    styles.languageOption,
+                    {
+                      backgroundColor: pressed
+                        ? colors.cardHover
+                        : active
+                        ? colors.primaryLight
+                        : colors.card,
+                      borderColor: active ? colors.primary : colors.border,
+                    },
+                  ]}
+                  onPress={() => handleSelectLanguage(option.value)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: active }}
+                  accessibilityLabel={`${option.label} (${option.sub})`}
+                >
+                  <Ionicons
+                    name={active ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={active ? (isDark ? colors.primary : colors.primaryDark) : colors.textTertiary}
+                  />
+                  <View style={styles.languageOptionTextWrap}>
+                    <Text
+                      style={[
+                        styles.languageOptionLabel,
+                        { color: active ? (isDark ? colors.primary : colors.primaryDark) : colors.text },
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                    <Text style={[styles.languageOptionSub, { color: colors.textTertiary }]}>
+                      {option.sub}
+                    </Text>
+                  </View>
+                  {active && (
+                    <Ionicons name="checkmark" size={18} color={isDark ? colors.primary : colors.primaryDark} />
+                  )}
+                </Pressable>
+              );
+            })}
+
+            {/* Honest partial-coverage note */}
+            <View style={styles.gpsMessageRow}>
+              <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+              <Text style={[styles.gpsMessageText, { color: colors.textSecondary }]}>
+                हिन्दी अनुवाद जारी है — some screens remain English
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={() => setShowLanguageModal(false)}
+              style={[styles.cancelLink, { marginTop: spacing.md }]}
+              accessibilityRole="button"
+              accessibilityLabel="Close language picker"
+              hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}
+            >
+              <Text style={[styles.cancelLinkText, { color: isDark ? colors.primary : colors.primaryDark }]}>Close</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1057,11 +1223,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     flexShrink: 1,
+    flex: 1,
+  },
+  menuTextWrap: {
+    flexShrink: 1,
   },
   menuLabel: {
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '500',
+  },
+  menuCaption: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  menuItemRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  menuValue: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   signOutButton: {
     flexDirection: 'row',
@@ -1247,6 +1433,31 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     textAlign: 'center',
+  },
+  /* Language picker */
+  languageOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 56,
+    borderWidth: 1.5,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.md,
+  },
+  languageOptionTextWrap: {
+    flex: 1,
+  },
+  languageOptionLabel: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  languageOptionSub: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
   },
   /* GPS fetch */
   gpsFetchBtn: {

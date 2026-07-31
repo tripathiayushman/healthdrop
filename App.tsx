@@ -2,6 +2,7 @@
 // HEALTH DROP SURVEILLANCE SYSTEM - MAIN APP
 // =====================================================
 import './global.css';
+import './lib/i18n';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
