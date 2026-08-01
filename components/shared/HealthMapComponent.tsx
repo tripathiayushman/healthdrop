@@ -1189,7 +1189,13 @@ const mp = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 2,
+    paddingLeft: 2,
+    // The shell's floating AI button is pinned to the right edge (56dp wide +
+    // 16 inset) and never scrolls, so anything laid out in that column is
+    // permanently unreachable. Keep the wrapping filter chips clear of it —
+    // at 360dp the "Water" chip used to sit under the button with no scroll
+    // position that could free it.
+    paddingRight: 76,
   },
   chip: {
     flexDirection: 'row',

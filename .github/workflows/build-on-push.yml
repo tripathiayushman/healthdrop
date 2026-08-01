@@ -45,6 +45,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Guards the Bharosa contrast promise. A near-black light-mode headerBg
+      # once shipped with ~1.5:1 header text because nothing checked colour
+      # pairs. Cheap to run, and it fails the build instead of the user.
+      - name: Check token contrast
+        run: node scripts/check-contrast.cjs
+
       - name: Compute version
         id: version
         run: |
