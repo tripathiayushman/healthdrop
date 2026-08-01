@@ -36,7 +36,7 @@ const AUDIENCES: Array<{ key: AudienceKey; label: string }> = [
 export default function AdvisoryComposerScreen({
   profile, onBack,
 }: { profile: Profile; onBack: () => void }) {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const accent = ROLE_ACCENT[profile.role] ?? ROLE_ACCENT.volunteer;
 
   const isOfficial = ADVISORY_SENDER_ROLES.includes(profile.role);
@@ -103,8 +103,11 @@ export default function AdvisoryComposerScreen({
     }
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers read correctly in BOTH modes.
+  // textInverse here would be white-on-paper — invisible — and is banned.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const inputStyle = (field: 'title' | 'message' | 'district', hasError: boolean) => ([
     st.input,
@@ -123,8 +126,11 @@ export default function AdvisoryComposerScreen({
       <View
         style={[
           st.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -391,9 +397,10 @@ const st = StyleSheet.create({
   container: { flex: 1 },
 
   /* Header */
+  /* No status-bar inset here — MainApp already wraps this route in a SafeAreaView. */
   header: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingHorizontal: spacing.lg, paddingTop: 42, paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md,
   },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTextWrap: { flex: 1 },

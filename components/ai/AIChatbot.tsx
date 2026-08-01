@@ -17,7 +17,7 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
-  Dimensions,
+  useWindowDimensions,
   Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,8 +26,9 @@ import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { Profile } from '../../types';
 import { getChatResponse } from '../../lib/services/gemini';
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-const PANEL_HEIGHT = SCREEN_HEIGHT * 0.62;
+// The sheet is measured at render time, not at module load, so a rotation or
+// a resized web window re-lays it out instead of keeping a stale height.
+const PANEL_HEIGHT_RATIO = 0.62;
 
 // FAB sits just above the tab bar + existing add buttons
 const FAB_BOTTOM = 96;
@@ -48,6 +49,8 @@ export interface LocalChatMessage {
 
 export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
+  const panelHeight = Math.round(windowHeight * PANEL_HEIGHT_RATIO);
   const { t, i18n } = useTranslation();
   const messageCounterRef = useRef(0);
   const createMessageId = () => {
@@ -173,7 +176,7 @@ export const AIChatbot: React.FC<AIChatbotProps> = ({ profile, activeTab }) => {
             <View
               style={[
                 styles.sheet,
-                { backgroundColor: colors.card, borderColor: colors.border },
+                { height: panelHeight, backgroundColor: colors.card, borderColor: colors.border },
                 !isDark && styles.cardShadow,
               ]}
             >
@@ -435,7 +438,6 @@ const styles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: 'flex-end' },
   kav: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
-    height: PANEL_HEIGHT,
     borderTopLeftRadius: radii.lg,
     borderTopRightRadius: radii.lg,
     borderWidth: 1,

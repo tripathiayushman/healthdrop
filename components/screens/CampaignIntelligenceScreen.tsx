@@ -89,8 +89,11 @@ const CampaignIntelligenceScreen: React.FC<CampaignIntelligenceScreenProps> = ({
     return colors.warning;
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers read correctly in BOTH modes.
+  // textInverse here would be white-on-paper — invisible — and is banned.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const summaryCards: { label: string; value: number; rule: string }[] = [
     { label: 'Campaigns', value: summary.campaignCount, rule: colors.primary },
@@ -101,11 +104,16 @@ const CampaignIntelligenceScreen: React.FC<CampaignIntelligenceScreenProps> = ({
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* Header — flat headerBg surface. No Role Ribbon on this screen, so the
+          1px hairline is the only separator and must render in both modes. */}
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity

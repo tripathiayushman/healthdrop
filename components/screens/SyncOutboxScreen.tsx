@@ -238,8 +238,10 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
   };
 
   // ── Header copy — reassuring, honest ──
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so plain ink reads in BOTH modes. textInverse is illegal here.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
   const n = items.length;
   const headerLine = loading
     ? t('outbox.headerChecking')
@@ -337,8 +339,12 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
       <View
         style={[
           st.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper needs the hairline in BOTH modes.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -520,8 +526,9 @@ const st = StyleSheet.create({
 
   /* Header */
   header: {
+    // No status-bar inset here — MainApp's SafeAreaView already provides it.
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingHorizontal: spacing.lg, paddingTop: 42, paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md,
   },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTextWrap: { flex: 1 },

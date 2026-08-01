@@ -989,20 +989,25 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     { value: 'volunteer', label: 'Volunteer' },
   ];
 
-  // Header text: navy band in light mode → white; surface band in dark → ink.
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers read correctly in BOTH modes.
+  // textInverse here would be white-on-paper — invisible — and is banned.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const selectedUserActive = selectedUser?.is_active !== false;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat headerBg band */}
+      {/* Header — flat headerBg surface, separated by a 1px hairline in both modes */}
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -1164,10 +1169,14 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                       </Text>
                     </View>
                   )}
+                  {/* Selected = primaryContainer + teal ring + check glyph (the
+                      §2.1 "selected chips" recipe). A role-accent flood-fill
+                      would need textInverse on it, which only clears 4.5:1 in
+                      light mode — ~3:1 in dark. Ink on the container is safe
+                      in both. */}
                   <View style={styles.rolesGrid}>
                     {roles.map((role) => {
                       const active = selectedUser.role === role.value;
-                      const rc = roleColor(role.value);
                       const disabled = active || (selectedUser.id === profile.id && role.value !== profile.role);
                       return (
                         <TouchableOpacity
@@ -1175,7 +1184,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                           style={[
                             styles.roleOption,
                             active
-                              ? { backgroundColor: rc, borderColor: rc }
+                              ? { backgroundColor: colors.primaryContainer, borderColor: colors.primary }
                               : { backgroundColor: colors.card, borderColor: colors.border },
                             (selectedUser.id === profile.id && role.value !== profile.role) && { opacity: 0.4 },
                           ]}
@@ -1185,9 +1194,9 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                           accessibilityState={{ selected: active, disabled }}
                           accessibilityLabel={`Set role ${role.label}`}
                         >
-                          {active && <Ionicons name="checkmark" size={14} color={colors.textInverse} />}
+                          {active && <Ionicons name="checkmark" size={14} color={colors.primary} />}
                           <Text
-                            style={[styles.roleOptionText, { color: active ? colors.textInverse : colors.text }]}
+                            style={[styles.roleOptionText, { color: colors.text }]}
                             numberOfLines={1}
                             maxFontSizeMultiplier={1.3}
                           >
@@ -1466,12 +1475,13 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  /* Header */
+  /* Header — no status-bar inset: MainApp already wraps this route in a
+     SafeAreaView, so the band only needs its own breathing room. */
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 42,
-    paddingBottom: spacing.xl,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
   },
   headerBtn: {

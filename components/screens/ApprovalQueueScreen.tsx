@@ -118,7 +118,7 @@ const waitingAge = (iso: string): { label: string; hours: number } => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialTab }) => {
-  const { colors, isDark, reduceMotion } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
 
   const isClinic = profile.role === 'clinic';
@@ -586,18 +586,23 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const rejectRecipientFirst = rejectRecipientName ? rejectRecipientName.split(/\s+/)[0] : null;
   const rejectNoteEmpty = !rejectReason.trim();
 
-  // Header text: navy band in light mode → white; surface band in dark → ink.
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers read correctly in BOTH modes.
+  // textInverse here would be white-on-paper — invisible — and is banned.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   return (
     <View style={[qst.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat headerBg band */}
+      {/* Header — flat headerBg surface, separated by a 1px hairline in both modes */}
       <View
         style={[
           qst.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -1089,7 +1094,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
 const qst = StyleSheet.create({
   container: { flex: 1 },
   /* Header */
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.xl, paddingTop: 42 },
+  /* No status-bar inset here — MainApp already wraps this route in a SafeAreaView. */
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2, fontVariant: ['tabular-nums'] },

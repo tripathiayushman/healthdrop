@@ -2,7 +2,10 @@
 // HEALTH MAP COMPONENT  v3 — "Prakash" design system
 // - Uses actual lat/lon from DB (NOT district name lookup)
 // - GPS session cache (persists until page reload / logout)
-// - Side-by-side layout via MapAndAlertsSection export
+// - MapAndAlertsSection is WIDTH-DRIVEN, not platform-driven:
+//   below STACK_BREAKPOINT the map card and the alerts column
+//   stack into one column (a phone can never clip the right
+//   column off-screen); side-by-side returns on tablet/desktop
 // - Leaflet 1.9.4 VENDORED inline (leafletAssets.ts) — the map
 //   shell no longer depends on the unpkg CDN at runtime
 // - Leaflet perf: preferCanvas, optimised tile settings
@@ -17,6 +20,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal,
   Platform, ActivityIndicator, ScrollView, Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
@@ -55,6 +59,12 @@ function setCachedLocation(lat: number, lon: number): void {
   _cachedLon = lon;
   _cachedAt = Date.now();
 }
+
+// ── Responsive breakpoint ─────────────────────────────
+// Below this window width the map + alerts stack into ONE column.
+// Phones (360–430dp) and split-screen web viewports all land here;
+// tablets and desktop keep the two-column reading layout.
+const STACK_BREAKPOINT = 600;
 
 // ── Layer type ────────────────────────────────────────
 type Layer = 'alerts' | 'disease' | 'water' | 'campaigns';
@@ -465,9 +475,14 @@ function buildLeafletHtml(
 <script>${LEAFLET_JS}</script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:${mapTheme.pageBg};}
+  body{background:${mapTheme.pageBg};overflow:hidden;}
   #map{width:100%;height:100vh;}
-  .legend{background:${mapTheme.legendBg};border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;color:${mapTheme.legendText};border:1px solid ${mapTheme.legendBorder};max-width:170px;}
+  /* Controls stay clear of the card edges AND of the RN overlays that
+     float above this map: RN owns top-left + top-right, Leaflet owns
+     bottom-left (zoom) and bottom-right (legend). */
+  .leaflet-control-container .leaflet-control{margin:10px;clear:none;}
+  .leaflet-bar a{width:32px;height:32px;line-height:32px;}
+  .legend{background:${mapTheme.legendBg};border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;color:${mapTheme.legendText};border:1px solid ${mapTheme.legendBorder};max-width:150px;}
   .li{display:flex;align-items:center;gap:6px;margin:3px 0;}
   .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
   .count-badge{min-width:26px;height:26px;border-radius:13px;border:2px solid ${mapTheme.badgeRing};color:${mapTheme.badgeText};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;font-family:system-ui,sans-serif;padding:0 5px;}
@@ -482,8 +497,12 @@ var map = L.map('map', {
   fadeAnimation: false,
   markerZoomAnimation: false,
   attributionControl: false,
-  zoomControl: true
+  zoomControl: false
 }).setView(${initView});
+
+// Zoom sits bottom-left: the top-left corner belongs to the RN
+// alert/report overlay and the top-right to the expand button.
+L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
 var baseTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/${tileBase}/{z}/{x}/{y}{r}.png', {
   maxZoom: 13,
@@ -700,6 +719,8 @@ const MapPanel: React.FC<MapPanelProps> = ({
   profile, alerts, userLat, userLon, onRequestLocate, locating, isExpanded, onOpenReport,
 }) => {
   const { colors, isDark } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
+  const isNarrow = windowWidth < STACK_BREAKPOINT;
   const netInfo = useNetInfo();
   // NetInfo reports isInternetReachable === null before the first probe — treat as online.
   const offline = netInfo.isConnected === false || netInfo.isInternetReachable === false;
@@ -881,10 +902,16 @@ const MapPanel: React.FC<MapPanelProps> = ({
   const showReportOverlay = !offline && !activeLayerError && !tilesFailed && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
   const showAlertOverlay = !offline && !activeLayerError && !tilesFailed && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
   const alertItems = React.useMemo(() => alertSource.slice(0, 8), [alertSource]);
-  const mapHeight = isExpanded ? '100%' : (IS_MOBILE ? 250 : 195);
+  // Stacked (narrow) layout gives the map the full card width, so it can
+  // afford a taller frame; side-by-side keeps the shorter one.
+  const mapHeight = isExpanded ? '100%' : (isNarrow ? 240 : 195);
+  // Floating panels are capped as a fraction of the card so they can never
+  // reach past its edges at 360dp — the other corner stays free for the
+  // expand button (top-right) and the Leaflet zoom/legend (bottom row).
+  const overlayWidthCap = { maxWidth: isNarrow ? '64%' : 230 } as const;
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={isExpanded ? mp.rootExpanded : mp.rootInline}>
       <View style={[mp.mapFrame, isExpanded && mp.mapFrameExpanded]}>
         {offline ? (
           /* No connection at all — the shell is local now, but tiles
@@ -970,7 +997,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
           <WebMap html={html} height={mapHeight} onTilesOffline={handleTilesOffline} />
         )}
         {showAlertOverlay && (
-          <View style={[mp.alertOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[mp.floatingOverlay, overlayWidthCap, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[mp.overlayTitle, { color: colors.textSecondary }]}>ALERTS</Text>
             <ScrollView style={mp.alertList} showsVerticalScrollIndicator={false}>
               {alertItems.map((item, index) => {
@@ -1009,7 +1036,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
           </View>
         )}
         {showReportOverlay && (
-          <View style={[mp.reportOverlay, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[mp.floatingOverlay, overlayWidthCap, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[mp.overlayTitle, { color: colors.textSecondary }]}>
               {activeLayer === 'disease' ? 'DISEASE REPORTS' : 'WATER REPORTS'}
             </Text>
@@ -1090,7 +1117,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
 
       {/* Native fallback if WebView unavailable */}
       {Platform.OS !== 'web' && !WebViewComponent && (
-        <View style={[mp.nativeFallback, { backgroundColor: colors.surface, borderColor: colors.borderLight, height: isExpanded ? 400 : 195 }]}>
+        <View style={[mp.nativeFallback, { backgroundColor: colors.surface, borderColor: colors.borderLight, height: isExpanded ? 400 : mapHeight }]}>
           <Ionicons name="map-outline" size={28} color={colors.textSecondary} />
           <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 6, textAlign: 'center', fontVariant: ['tabular-nums'] }}>
             {markers.length} district{markers.length !== 1 ? 's' : ''} with {activeLayer} data
@@ -1107,9 +1134,13 @@ const MapPanel: React.FC<MapPanelProps> = ({
   );
 };
 
-const IS_MOBILE = Platform.OS !== 'web';
-
 const mp = StyleSheet.create({
+  // Full-screen: a strict flex child of the modal (definite height).
+  rootExpanded: { flex: 1 },
+  // Inline: flexBasis 'auto' (NOT flex:1 / basis 0) so the panel is sized by
+  // its own content when the card's height is content-driven — a basis-0 child
+  // in an auto-height parent collapses and the layer chips get clipped.
+  rootInline: { flexGrow: 1, flexBasis: 'auto' },
   mapFrame: { position: 'relative', overflow: 'hidden', borderRadius: 8 },
   mapFrameExpanded: { flex: 1, minHeight: 0 },
   offlinePanel: {
@@ -1172,31 +1203,24 @@ const mp = StyleSheet.create({
   },
   chipTxt:     { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   nativeFallback: { alignItems: 'center', justifyContent: 'center', borderRadius: 8, borderWidth: 1 },
-  reportOverlay: {
+  /* One floating panel recipe, pinned top-left with a 10dp inset.
+     The alert list and the report list are mutually exclusive (they belong
+     to different layers), so they share the corner. Width is capped at
+     render time against the window width — see overlayWidthCap. */
+  floatingOverlay: {
     position: 'absolute',
-    right: 8,
-    bottom: 8,
+    left: 10,
+    top: 10,
     borderWidth: 1,
     borderRadius: 8,
     padding: 8,
-    maxWidth: IS_MOBILE ? 180 : 210,
-    maxHeight: IS_MOBILE ? 140 : 160,
+    maxHeight: 150,
   },
   overlayTitle: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
-  reportList: { maxHeight: IS_MOBILE ? 110 : 130 },
+  reportList: { maxHeight: 110 },
   reportItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, paddingVertical: 6, minHeight: 32 },
   reportLink: { fontSize: 12, lineHeight: 16, fontWeight: '700', textDecorationLine: 'underline', flex: 1 },
-  alertOverlay: {
-    position: 'absolute',
-    left: 8,
-    top: 8,
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 8,
-    maxWidth: IS_MOBILE ? 200 : 230,
-    maxHeight: IS_MOBILE ? 140 : 160,
-  },
-  alertList: { maxHeight: IS_MOBILE ? 110 : 130 },
+  alertList: { maxHeight: 110 },
   alertItem: { paddingVertical: 4 },
   alertTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   alertTitleText: { fontSize: 12, lineHeight: 16, fontWeight: '700', flex: 1 },
@@ -1235,6 +1259,10 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
   emptySubtitle = 'All systems are clear.',
 }) => {
   const { colors, isDark, reduceMotion } = useTheme();
+  // Layout is decided by WINDOW WIDTH, never by platform: a 412dp phone and a
+  // 412px browser window get the same single column, a tablet gets two.
+  const { width: windowWidth } = useWindowDimensions();
+  const isNarrow = windowWidth < STACK_BREAKPOINT;
   const [expanded,    setExpanded   ] = useState(false);
   const [userLat,     setUserLat    ] = useState<number | undefined>(getCachedLocation()?.lat);
   const [userLon,     setUserLon    ] = useState<number | undefined>(getCachedLocation()?.lon);
@@ -1405,11 +1433,12 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
         </Text>
       </View>
 
-      {/* ── Side-by-side row ── */}
-      <View style={s.row}>
-        {/* ── Left: Map ── */}
+      {/* ── Map + alerts: one column on phones, two side by side when wide ── */}
+      <View style={[s.row, isNarrow ? s.rowStacked : s.rowSideBySide]}>
+        {/* ── Map ── */}
         <View style={[
-          s.mapPanel,
+          s.panel,
+          isNarrow ? s.mapPanelStacked : s.mapPanelSide,
           { backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden' },
           !isDark && s.cardShadow,
         ]}>
@@ -1417,7 +1446,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             <Ionicons name="map-outline" size={14} color={colors.textSecondary} />
             <Text style={[s.panelTitle, { color: colors.textSecondary }]}>HEALTH MAP</Text>
           </View>
-          <View style={{ flex: 1, position: 'relative' }}>
+          <View style={s.panelBody}>
             {!expanded ? (
               <MapPanel
                 profile={profile}
@@ -1446,9 +1475,10 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
           </View>
         </View>
 
-        {/* ── Right: Alerts ── */}
+        {/* ── Alerts (below the map on phones, beside it when wide) ── */}
         <View style={[
-          s.alertPanel,
+          s.panel,
+          isNarrow ? s.alertPanelStacked : s.alertPanelSide,
           { backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden' },
           !isDark && s.cardShadow,
         ]}>
@@ -1564,31 +1594,31 @@ const s = StyleSheet.create({
   popupDismiss: { flex: 1, borderWidth: 1.5, borderRadius: 12, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   popupAllow:   { flex: 1.5, borderRadius: 12, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
 
-  // Side-by-side row (stacks vertically on mobile)
-  row:        { flexDirection: IS_MOBILE ? 'column' : 'row', marginHorizontal: 16, marginBottom: 12, minHeight: IS_MOBILE ? undefined : 280 },
-  mapPanel:   {
-    flex: IS_MOBILE ? undefined : 1.1,
-    padding: IS_MOBILE ? 12 : 10,
+  // ── Responsive row ──────────────────────────────────────────────
+  // Narrow (< STACK_BREAKPOINT): one column, each card full width, so
+  // nothing can be pushed off the right edge of a 360dp screen.
+  // Wide: the original two-column reading layout.
+  row:           { marginHorizontal: 16, marginBottom: 12 },
+  rowStacked:    { flexDirection: 'column' },
+  rowSideBySide: { flexDirection: 'row', minHeight: 280 },
+  panel: {
     minWidth: 0,
-    minHeight: IS_MOBILE ? 320 : undefined,
-    borderWidth: 1,
-    borderRadius: 12,
-    marginBottom: IS_MOBILE ? 12 : 0,
-    marginRight: IS_MOBILE ? 0 : 12,
-  },
-  alertPanel: {
-    flex: IS_MOBILE ? undefined : 1,
-    padding: IS_MOBILE ? 12 : 10,
-    minWidth: 0,
-    minHeight: IS_MOBILE ? 200 : undefined,
-    maxHeight: IS_MOBILE ? 300 : undefined,
     borderWidth: 1,
     borderRadius: 12,
   },
+  mapPanelStacked:   { width: '100%', padding: 12, marginBottom: 12 },
+  mapPanelSide:      { flex: 1.1, padding: 10, marginRight: 12 },
+  alertPanelStacked: { width: '100%', padding: 12, minHeight: 200, maxHeight: 320 },
+  alertPanelSide:    { flex: 1, padding: 10 },
   panelHeader:{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
   panelTitle: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', flex: 1 },
+  // Grows into a tall card, but is content-sized when the card's height is
+  // content-driven (stacked) — see MapPanel's rootInline note.
+  panelBody:  { flexGrow: 1, flexBasis: 'auto', position: 'relative' },
   inlineMapPaused: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: 'auto',
+    minHeight: 200,
     borderWidth: 1,
     borderRadius: 8,
     alignItems: 'center',

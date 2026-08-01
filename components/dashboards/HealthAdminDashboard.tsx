@@ -22,6 +22,12 @@ interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
 
+// The home feed scrolls underneath two floating buttons owned by the shell:
+// the violet AI launcher (bottom 96, 56dp tall) and the Create FAB. Without a
+// tail the last card ends up sitting behind them. This is scroll padding, not
+// a spacer view, so it survives any widget being hidden.
+const FAB_SAFE_PAD = 120;
+
 export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
   const { colors } = useTheme();
   const { isWidgetVisible } = useDashboardWidgetVisibility(profile);
@@ -84,6 +90,7 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
+      contentContainerStyle={styles.scrollContent}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       showsVerticalScrollIndicator={false}
     >
@@ -206,13 +213,13 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
       )}
 
       {isWidgetVisible('ai_insights') && <AIInsightsPanel profile={profile} />}
-
-      <View style={{ height: 120 }} />
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
+  /* Tail clearance so the AI / Create FABs never cover the last card */
+  scrollContent: { paddingBottom: FAB_SAFE_PAD },
   statsRow: { flexDirection: 'row', gap: spacing.sm },
   qaRow: { flexDirection: 'row', gap: spacing.sm },
   rowGap: { marginTop: spacing.sm },

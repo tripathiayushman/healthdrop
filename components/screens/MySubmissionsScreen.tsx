@@ -292,8 +292,11 @@ export default function MySubmissionsScreen({
 
   const onRefresh = () => { setRefreshing(true); load(); };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
+  // would render white-on-paper.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
   const totalFailure = failedSources.length > 0 && rows.length === 0;
 
   // ── Row ──
@@ -381,8 +384,12 @@ export default function MySubmissionsScreen({
       <View
         style={[
           ms.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper still needs a hairline to read as separated.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -485,7 +492,9 @@ const ms = StyleSheet.create({
   /* Header */
   header: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingHorizontal: spacing.lg, paddingTop: 42, paddingBottom: spacing.xl,
+    // Rendered inside MainApp's SafeAreaView, which already supplies the
+    // status-bar inset — the old paddingTop: 42 double-counted it.
+    paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md,
   },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTextWrap: { flex: 1 },

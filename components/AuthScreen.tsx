@@ -596,31 +596,27 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     setDistrict(''); setUserState(''); setPincode(''); setPhone('');
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub  = isDark ? colors.textSecondary : colors.primaryLight;
-
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so header ink is plain `text` / `textSecondary` in BOTH modes.
   // ── Render ────────────────────────────────────────────
   return (
     <SafeAreaView style={[s.root, { backgroundColor: colors.background }]}>
-      {/* iOS insets the top with colors.background (paper-light in light mode), so the
-          global light status bar is unreadable there — override per theme while this
-          screen is mounted. Android keeps the global light bar: its translucent status
-          bar sits over the navy header band, where light icons are correct. */}
+      {/* The header band is the same paper as the canvas in light mode, so the
+          status bar must carry dark icons there and light icons in dark mode. */}
       {Platform.OS === 'ios' && <ExpoStatusBar style={isDark ? 'light' : 'dark'} />}
       <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
-        {/* ── Flat header band ── */}
+        {/* ── Header band — surface + 1px hairline (both modes) ── */}
         <View
           style={[
             s.header,
-            { backgroundColor: colors.headerBg },
-            isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+            { backgroundColor: colors.headerBg, borderBottomWidth: 1, borderBottomColor: colors.border },
           ]}
         >
-          <Text style={[s.headerTitle, { color: headerText }]} maxFontSizeMultiplier={1.3}>
+          <Text style={[s.headerTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
             HealthDrop
           </Text>
-          <Text style={[s.headerSub, { color: headerSub }]} maxFontSizeMultiplier={1.3}>
+          <Text style={[s.headerSub, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
             Community health surveillance
           </Text>
         </View>
@@ -1078,8 +1074,10 @@ const s = StyleSheet.create({
      (this screen uses the core RN SafeAreaView, which only insets on iOS) */
   header: {
     paddingHorizontal: spacing.lg,
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? spacing.xl) + spacing.md : spacing.xl,
-    paddingBottom: spacing.lg,
+    // Android has no safe-area inset here (RN's SafeAreaView is iOS-only), so the
+    // status-bar height is added manually; iOS already gets its inset from SafeAreaView.
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? spacing.xl) + spacing.sm : spacing.lg,
+    paddingBottom: spacing.md,
   },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSub:   { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2 },

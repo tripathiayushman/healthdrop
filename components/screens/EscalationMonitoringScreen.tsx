@@ -96,8 +96,11 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
     };
   }, [records]);
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
+  // would render white-on-paper.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const summaryCards: { label: string; value: number; rule: string }[] = [
     { label: 'Pending Items', value: summary.total, rule: colors.primary },
@@ -110,8 +113,12 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper still needs a hairline to read as separated.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -305,8 +312,9 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   header: {
-    paddingTop: 18,
-    paddingBottom: 16,
+    // Rendered inside MainApp's SafeAreaView — no status-bar inset here.
+    paddingTop: 12,
+    paddingBottom: 12,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',

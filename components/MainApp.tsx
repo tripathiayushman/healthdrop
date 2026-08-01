@@ -1,8 +1,10 @@
 // =====================================================
 // MAIN APP - Tab Navigation Container ("Prakash")
-// Flat headerBg shell header + Role Ribbon + Sync Pebble,
-// opaque bottom tab bar (outline icons at rest, filled
-// active, labels always), swipe-to-switch-tabs.
+// headerBg shell header (a mode-appropriate SURFACE —
+// paper in light, dark surface in dark; ink is
+// colors.text, never textInverse) + Role Ribbon +
+// Sync Pebble, opaque bottom tab bar (outline icons at
+// rest, filled active, labels always), swipe-to-switch.
 // =====================================================
 import React, { useState, useRef, useEffect } from 'react';
 import {
@@ -163,7 +165,7 @@ interface MainAppProps {
 }
 
 const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }) => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('tabs');
@@ -587,10 +589,12 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     availableCreateActions.length > 0;
 
   // The home dashboards render their own full DashboardHeader
-  // (greeting band + Role Ribbon), so the shell ribbon and dark-mode
-  // divider only appear on tabs without one — a single ribbon per screen.
+  // (greeting band + Role Ribbon), so the shell ribbon only appears on
+  // tabs without one — a single ribbon per screen. When no ribbon
+  // follows, the shell header needs its own 1px hairline in BOTH modes:
+  // headerBg is paper in light mode, so paper-on-paper would otherwise
+  // read as one undivided slab.
   const showShellRibbon = activeTab !== 'home';
-  const headerText = isDark ? colors.text : colors.textInverse;
   const roleAccent = ROLE_ACCENT[profile.role] ?? ROLE_ACCENT.volunteer;
 
   // Shell-level quick access: My Submissions beside the report lists,
@@ -604,15 +608,19 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* ── Shell header — flat headerBg band + Sync Pebble ── */}
+      {/* ── Shell header — headerBg surface + Sync Pebble ── */}
       <View
         style={[
           styles.shellHeader,
           { backgroundColor: colors.headerBg },
-          isDark && showShellRibbon && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          !showShellRibbon && { borderBottomWidth: 1, borderBottomColor: colors.border },
         ]}
       >
-        <Text style={[styles.brandText, { color: headerText }]} maxFontSizeMultiplier={1.3}>
+        <Text
+          style={[styles.brandText, { color: colors.text }]}
+          maxFontSizeMultiplier={1.3}
+          numberOfLines={1}
+        >
           HealthDrop
         </Text>
         <Pressable
@@ -630,7 +638,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
           hitSlop={{ top: 12, bottom: 12, left: 8, right: 12 }}
           style={{ marginLeft: spacing.sm }}
         >
-          <Ionicons name="notifications-outline" size={22} color={headerText} />
+          <Ionicons name="notifications-outline" size={22} color={colors.text} />
         </Pressable>
       </View>
       {showShellRibbon && (
@@ -727,6 +735,7 @@ const styles = StyleSheet.create({
     minHeight: 56,
   },
   brandText: {
+    flexShrink: 1,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: '800',

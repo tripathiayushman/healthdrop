@@ -809,34 +809,49 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     });
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers read correctly in BOTH modes.
+  // textInverse here would be white-on-paper — invisible — and is banned.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat headerBg band */}
+      {/* Header — flat headerBg surface continuing the shell band above it,
+          closed by a 1px hairline in both modes. */}
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <View style={styles.headerTopRow}>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.headerTitle, { color: headerText }]}>Campaigns</Text>
-            <Text style={[styles.headerSubtitle, { color: headerSub }]}>Health awareness and outreach programs</Text>
+            <Text style={[styles.headerTitle, { color: headerText }]} numberOfLines={1}>Campaigns</Text>
+            <Text style={[styles.headerSubtitle, { color: headerSub }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>
+              Health awareness and outreach programs
+            </Text>
           </View>
           {canViewCampaignIntelligence && (
             <TouchableOpacity
-              style={[styles.headerActionBtn, { borderColor: headerSub }]}
+              style={[styles.headerActionBtn, { borderColor: colors.inputBorder }]}
               onPress={() => onNavigateToForm('campaign-intelligence')}
               accessibilityRole="button"
               accessibilityLabel="Open campaign intelligence"
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="analytics-outline" size={15} color={headerText} />
-              <Text style={[styles.headerActionText, { color: headerText }]}>Intelligence</Text>
+              <Ionicons name="analytics-outline" size={15} color={colors.text} />
+              <Text
+                style={[styles.headerActionText, { color: colors.text }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.3}
+              >
+                Intelligence
+              </Text>
             </TouchableOpacity>
           )}
         </View>
@@ -1130,9 +1145,12 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  /* No status-bar inset: this tab renders below MainApp's shell header, which
+     already sits inside the SafeAreaView. Two stacked 42dp insets was the
+     "wasted vertical space" defect. */
   header: {
-    paddingTop: 42,
-    paddingBottom: spacing.xl,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
   },
   skeletonWrap: {
@@ -1167,6 +1185,7 @@ const styles = StyleSheet.create({
   headerActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 1,
     gap: 5,
     borderWidth: 1,
     borderRadius: radii.pill,

@@ -30,6 +30,12 @@ interface Props {
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
 
+// The home feed scrolls underneath two floating buttons owned by the shell:
+// the violet AI launcher (bottom 96, 56dp tall) and the Create FAB. Without a
+// tail the last card ends up sitting behind them. This is scroll padding, not
+// a spacer view, so it survives any widget being hidden.
+const FAB_SAFE_PAD = 120;
+
 const outbreakDay = (iso: string): number => {
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return 1;
@@ -122,6 +128,7 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
+      contentContainerStyle={styles.scrollContent}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       showsVerticalScrollIndicator={false}
     >
@@ -149,11 +156,19 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
             <View style={styles.signalHeader}>
               <View style={styles.signalEyebrowWrap}>
                 <Ionicons name="settings-outline" size={14} color={colors.warning} />
-                <Text style={[styles.signalEyebrow, { color: colors.warning }]} maxFontSizeMultiplier={1.3}>
+                <Text
+                  style={[styles.signalEyebrow, { color: colors.warning }]}
+                  maxFontSizeMultiplier={1.3}
+                  numberOfLines={1}
+                >
                   AUTO-DETECTED SIGNAL
                 </Text>
               </View>
-              <Text style={[styles.signalAge, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+              <Text
+                style={[styles.signalAge, { color: colors.textSecondary }]}
+                maxFontSizeMultiplier={1.3}
+                numberOfLines={1}
+              >
                 {formatRelative(signalOutbreak.created_at)}
               </Text>
             </View>
@@ -298,13 +313,13 @@ export const DistrictOfficerDashboard: React.FC<Props> = ({ profile, onNavigate,
       )}
 
       {isWidgetVisible('ai_insights') && <AIInsightsPanel profile={profile} />}
-
-      <View style={{ height: 120 }} />
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
+  /* Tail clearance so the AI / Create FABs never cover the last card */
+  scrollContent: { paddingBottom: FAB_SAFE_PAD },
   statsRow: { flexDirection: 'row', gap: spacing.sm },
   qaRow: { flexDirection: 'row', gap: spacing.sm },
   rowGap: { marginTop: spacing.sm },
@@ -330,8 +345,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm, marginBottom: 2,
   },
   signalEyebrowWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1 },
-  signalEyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
-  signalAge: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  /* At 360dp with a 1.3 font scale the eyebrow + age pair is wider than the
+     card: the eyebrow shrinks first, the age keeps its full width. */
+  signalEyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6, flexShrink: 1 },
+  signalAge: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 0 },
   signalTitle: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
   signalMeta: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
   signalBtn: {

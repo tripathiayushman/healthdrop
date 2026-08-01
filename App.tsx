@@ -1,7 +1,8 @@
 // =====================================================
 // HEALTH DROP SURVEILLANCE SYSTEM - MAIN APP
 // =====================================================
-import './global.css';
+// NativeWind is inert (see babel.config.js): no `className=` in this app, so
+// the Tailwind preflight reset is not imported.
 import './lib/i18n';
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -433,11 +434,12 @@ function AppContent() {
     );
   }
 
-  // Authenticated screens sit under MainApp's navy header band, so light
-  // icons are correct there; the auth/loading screens are paper-light in
-  // light mode and need dark icons (iOS renders them over the pale inset).
-  const statusBarStyle: 'light' | 'dark' =
-    isDark || (session && profile) ? 'light' : 'dark';
+  // Every surface — auth, loading and the authenticated shell — is now a
+  // mode-appropriate surface: paper in light, dark in dark. So the status
+  // bar simply follows the theme. (It previously forced 'light' whenever a
+  // session existed, which was correct only while the header was a navy
+  // band; against the paper masthead it painted white icons on white.)
+  const statusBarStyle: 'light' | 'dark' = isDark ? 'light' : 'dark';
 
   return (
     <>

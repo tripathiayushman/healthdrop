@@ -238,8 +238,11 @@ export default function OutbreakSignalScreen({
     }
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
+  // would render white-on-paper.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -247,8 +250,12 @@ export default function OutbreakSignalScreen({
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper still needs a hairline to read as separated.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -654,8 +661,9 @@ const styles = StyleSheet.create({
 
   /* ── Header ── */
   header: {
-    paddingTop: 18,
-    paddingBottom: 16,
+    // Rendered inside MainApp's SafeAreaView — no status-bar inset here.
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',

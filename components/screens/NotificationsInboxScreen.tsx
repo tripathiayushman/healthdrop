@@ -109,8 +109,11 @@ export default function NotificationsInboxScreen({
   };
 
   const unreadCount = items.filter((i) => !i.read).length;
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
+  // would render white-on-paper.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
   const headerLine = loading
     ? 'Checking for updates…'
     : unreadCount > 0
@@ -178,8 +181,12 @@ export default function NotificationsInboxScreen({
       <View
         style={[
           st.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper still needs a hairline to read as separated.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -281,7 +288,9 @@ const st = StyleSheet.create({
   /* Header */
   header: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingHorizontal: spacing.lg, paddingTop: 42, paddingBottom: spacing.xl,
+    // Rendered inside MainApp's SafeAreaView, which already supplies the
+    // status-bar inset — the old paddingTop: 42 double-counted it.
+    paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md,
   },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTextWrap: { flex: 1 },

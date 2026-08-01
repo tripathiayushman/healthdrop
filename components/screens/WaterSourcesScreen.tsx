@@ -392,8 +392,10 @@ export default function WaterSourcesScreen({
     setSheet(null);
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // Header ink — headerBg is a mode-appropriate SURFACE (paper in light, dark
+  // surface in dark), so plain ink reads in BOTH modes. textInverse is illegal here.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   // ── List split: broken promises first ──
   const flaggedSources = useMemo(
@@ -421,8 +423,12 @@ export default function WaterSourcesScreen({
         <View
           style={[
             styles.header,
-            { backgroundColor: colors.headerBg },
-            isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+            {
+              backgroundColor: colors.headerBg,
+              // Paper-on-paper needs the hairline in BOTH modes.
+              borderBottomWidth: 1,
+              borderBottomColor: colors.border,
+            },
           ]}
         >
           <TouchableOpacity
@@ -550,8 +556,12 @@ export default function WaterSourcesScreen({
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper needs the hairline in BOTH modes.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -1439,8 +1449,9 @@ const styles = StyleSheet.create({
 
   /* ── Header ── */
   header: {
-    paddingTop: 18,
-    paddingBottom: 16,
+    // No status-bar inset here — MainApp's SafeAreaView already provides it.
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',

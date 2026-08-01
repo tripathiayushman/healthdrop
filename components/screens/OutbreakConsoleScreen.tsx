@@ -271,8 +271,11 @@ export default function OutbreakConsoleScreen({
     setNoteText('');
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
+  // would render white-on-paper.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
   const tone = outbreak ? statusTone(outbreak.status, colors) : null;
 
   return (
@@ -281,8 +284,12 @@ export default function OutbreakConsoleScreen({
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper still needs a hairline to read as separated.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -758,8 +765,9 @@ const styles = StyleSheet.create({
 
   /* ── Header ── */
   header: {
-    paddingTop: 18,
-    paddingBottom: 16,
+    // Rendered inside MainApp's SafeAreaView — no status-bar inset here.
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
@@ -795,7 +803,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
     paddingHorizontal: spacing.xs,
   },
-  segmentText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  // flexShrink lets "Monitoring" + its checkmark ellipsize instead of
+  // pushing the third segment off-screen at 360dp / large font scales.
+  segmentText: { fontSize: 13, lineHeight: 18, fontWeight: '700', flexShrink: 1 },
   segmentCaption: { fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: spacing.xs, textAlign: 'center' },
 
   actionErrorCard: {

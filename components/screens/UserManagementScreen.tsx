@@ -12,7 +12,7 @@ import {
   TextInput, Modal, Pressable, RefreshControl, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, spacing, radii } from '../../lib/ThemeContext';
+import { useTheme, themes, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
@@ -42,6 +42,15 @@ const ROLE_DISPLAY: Record<string,string> = {
   district_officer: 'District Officer', clinic: 'Clinic',
   asha_worker: 'ASHA Worker', volunteer: 'Volunteer',
 };
+
+/**
+ * Legal ink for a ROLE_ACCENT-FILLED surface. ROLE_ACCENT is the
+ * mode-invariant light/ink tier, so a filled role chip is a dark saturated
+ * swatch in BOTH themes and its foreground is always the light-mode inverse
+ * ink (5.4–6.6:1). `colors.textInverse` must NOT be used: in dark mode it
+ * flips to near-black and lands at ~2.5:1 on the same fill.
+ */
+const ON_ROLE_ACCENT = themes.light.textInverse;
 
 /** Self-signup roles that need admin confirmation before full access. */
 const VERIFIABLE_ROLES = ['clinic', 'asha_worker'];
@@ -333,9 +342,10 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
     );
   };
 
-  // Header text: navy band in light mode → white; surface band in dark → ink.
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // Header ink — headerBg is a mode-appropriate SURFACE (paper in light, dark
+  // surface in dark), so plain ink reads in BOTH modes. textInverse is illegal here.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const selectedActive = selectedUser?.is_active !== false;
   const selectedUnverified =
@@ -358,8 +368,12 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
       <View
         style={[
           s.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper needs the hairline in BOTH modes.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -713,9 +727,9 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
                             accessibilityState={{ selected: active }}
                             accessibilityLabel={`Set role ${ROLE_DISPLAY[r] ?? r}`}
                           >
-                            {active && <Ionicons name="checkmark" size={14} color={colors.textInverse} />}
+                            {active && <Ionicons name="checkmark" size={14} color={ON_ROLE_ACCENT} />}
                             <Text
-                              style={[s.roleBtnText, { color: active ? colors.textInverse : colors.text }]}
+                              style={[s.roleBtnText, { color: active ? ON_ROLE_ACCENT : colors.text }]}
                               numberOfLines={1}
                               maxFontSizeMultiplier={1.3}
                             >
@@ -830,9 +844,9 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
                       accessibilityState={{ selected: active }}
                       accessibilityLabel={`Invite as ${ROLE_DISPLAY[r] ?? r}`}
                     >
-                      {active && <Ionicons name="checkmark" size={14} color={colors.textInverse} />}
+                      {active && <Ionicons name="checkmark" size={14} color={ON_ROLE_ACCENT} />}
                       <Text
-                        style={[s.roleBtnText, { color: active ? colors.textInverse : colors.text }]}
+                        style={[s.roleBtnText, { color: active ? ON_ROLE_ACCENT : colors.text }]}
                         numberOfLines={1}
                         maxFontSizeMultiplier={1.3}
                       >
@@ -1000,7 +1014,8 @@ export const UserManagementScreen: React.FC<Props> = ({ profile, onBack }) => {
 const s = StyleSheet.create({
   container: { flex: 1 },
   /* Header */
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.xl, paddingTop: 42 },
+  // No status-bar inset here — MainApp's SafeAreaView already provides it.
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2, fontVariant: ['tabular-nums'] },

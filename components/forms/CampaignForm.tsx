@@ -70,7 +70,7 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
   onSuccess,
   onCancel,
 }) => {
-  const { colors, isDark, reduceMotion } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -285,17 +285,15 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
     return isNaN(diffDays) ? 0 : diffDays;
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat band */}
+      {/* Header — headerBg surface, ink-on-surface, 1px hairline (both modes) */}
       <View
         style={[
           styles.header,
           {
             backgroundColor: colors.headerBg,
-            borderBottomWidth: isDark ? 1 : 0,
+            borderBottomWidth: 1,
             borderBottomColor: colors.border,
           },
         ]}
@@ -306,11 +304,11 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
-          <Ionicons name="arrow-back" size={24} color={headerText} />
-          <Text style={[styles.backText, { color: headerText }]}>Back</Text>
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
+          <Text style={[styles.backText, { color: colors.text }]}>Back</Text>
         </Pressable>
-        <Text style={[styles.headerTitle, { color: headerText }]}>Create Health Campaign</Text>
-        <Text style={[styles.headerSubtitle, { color: headerText }]}>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Create Health Campaign</Text>
+        <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
           Organize health initiatives for your community
         </Text>
       </View>
@@ -581,7 +579,8 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 16, paddingHorizontal: 16 },
+  // Rendered inside MainApp's SafeAreaView — no status-bar inset re-added here.
+  header: { paddingTop: 24, paddingBottom: 12, paddingHorizontal: 16 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: 12 },
   backText: { fontSize: 16, fontWeight: '500' },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },

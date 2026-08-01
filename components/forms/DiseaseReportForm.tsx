@@ -222,7 +222,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   onCancel,
   refillReportId,
 }) => {
-  const { colors, isDark, reduceMotion } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const { t } = useTranslation();
   const netInfo = useNetInfo();
   // Tolerant null check — isInternetReachable === null (no probe yet) is online.
@@ -578,8 +578,6 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     },
   ];
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-
   // ── A·04 — Confirmation state (replaces the form after save) ───────────────
 
   if (savedResult) {
@@ -729,13 +727,13 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat band */}
+      {/* Header — headerBg surface, ink-on-surface, 1px hairline (both modes) */}
       <View
         style={[
           styles.header,
           {
             backgroundColor: colors.headerBg,
-            borderBottomWidth: isDark ? 1 : 0,
+            borderBottomWidth: 1,
             borderBottomColor: colors.border,
           },
         ]}
@@ -746,13 +744,13 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
           accessibilityRole="button"
           accessibilityLabel={step === 2 ? 'Back to step 1' : 'Go back'}
         >
-          <Ionicons name="arrow-back" size={24} color={headerText} />
-          <Text style={[styles.backText, { color: headerText }]}>{t('common.back')}</Text>
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
+          <Text style={[styles.backText, { color: colors.text }]}>{t('common.back')}</Text>
         </Pressable>
-        <Text style={[styles.headerTitle, { color: headerText }]} accessibilityRole="header">
+        <Text style={[styles.headerTitle, { color: colors.text }]} accessibilityRole="header">
           {t('diseaseForm.headerTitle')}
         </Text>
-        <Text style={[styles.headerSubtitle, { color: headerText }]}>
+        <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
           {step === 1 ? t('diseaseForm.step1') : t('diseaseForm.step2')}
         </Text>
       </View>
@@ -1085,7 +1083,8 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: spacing.lg, paddingHorizontal: spacing.lg },
+  // Rendered inside MainApp's SafeAreaView — no status-bar inset re-added here.
+  header: { paddingTop: spacing.xl, paddingBottom: spacing.md, paddingHorizontal: spacing.lg },
   backBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     minHeight: 48, alignSelf: 'flex-start', paddingRight: spacing.md,

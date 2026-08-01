@@ -24,6 +24,18 @@ interface Props { profile: Profile; onNavigate: (s: string) => void }
 
 const LOAD_ERROR = "Couldn't load dashboard data — check connection";
 
+// The home feed scrolls underneath two floating buttons owned by the shell:
+// the violet AI launcher (bottom 96, 56dp tall) and the Create FAB. Without a
+// tail the last card ends up sitting behind them. This is scroll padding, not
+// a spacer view, so it survives any widget being hidden.
+const FAB_SAFE_PAD = 120;
+
+/**
+ * 8% alpha suffix — the same accent-tinted icon wash the shared dashboard
+ * components use. Derived from a token, never a standalone color.
+ */
+const TINT_ALPHA = '14';
+
 // First-run guidance — per-user dismissal flag on this phone.
 const firstRunKey = (userId: string) => `healthdrop:firstRunDismissed:${userId}`;
 
@@ -107,6 +119,7 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
+      contentContainerStyle={styles.scrollContent}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       showsVerticalScrollIndicator={false}
     >
@@ -220,7 +233,7 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
                       !isDark && styles.cardShadow,
                     ]}
                   >
-                    <View style={[styles.campaignIconWrap, { backgroundColor: colors.success + '14' }]}>
+                    <View style={[styles.campaignIconWrap, { backgroundColor: colors.success + TINT_ALPHA }]}>
                       <Ionicons name="megaphone-outline" size={24} color={colors.success} />
                     </View>
                     <View style={styles.campaignInfo}>
@@ -231,11 +244,20 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
                       <View style={styles.campaignMeta}>
                         {c.district && <>
                           <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
-                          <Text style={[styles.campaignMetaText, { color: colors.textSecondary }]}>{c.district}</Text>
+                          <Text
+                            style={[styles.campaignMetaText, { color: colors.textSecondary }]}
+                            numberOfLines={1}
+                          >
+                            {c.district}
+                          </Text>
                         </>}
                         {c.campaign_type && (
                           <View style={[styles.typePill, { backgroundColor: colors.primaryLight }]}>
-                            <Text style={[styles.typeText, { color: isDark ? colors.primary : colors.primaryDark }]} maxFontSizeMultiplier={1.3}>
+                            <Text
+                              style={[styles.typeText, { color: isDark ? colors.primary : colors.primaryDark }]}
+                              maxFontSizeMultiplier={1.3}
+                              numberOfLines={1}
+                            >
                               {c.campaign_type.replace(/_/g, ' ')}
                             </Text>
                           </View>
@@ -270,13 +292,13 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
       <View style={styles.bannerWrap}>
         <InfoBanner icon="information-circle-outline" color={colors.info} text="As a volunteer you can view alerts, campaigns & AI health insights. Contact your clinic for reporting access." />
       </View>
-
-      <View style={{ height: 120 }} />
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
+  /* Tail clearance so the AI / Create FABs never cover the last card */
+  scrollContent: { paddingBottom: FAB_SAFE_PAD },
   statsRow: { flexDirection: 'row', gap: spacing.sm },
   /* Light-mode-only shadow — single recipe */
   cardShadow: {
@@ -306,8 +328,10 @@ const styles = StyleSheet.create({
   campaignTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700', marginBottom: 2 },
   campaignDesc: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: spacing.xs },
   campaignMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' },
-  campaignMetaText: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
-  typePill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill },
+  campaignMetaText: { fontSize: 12, lineHeight: 16, fontWeight: '600', flexShrink: 1 },
+  /* The meta row wraps, but a long campaign type must shrink rather than
+     push the card past 360dp. */
+  typePill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill, flexShrink: 1 },
   typeText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   skelStat: { flex: 1, width: 'auto' },
   skelGap: { marginBottom: spacing.md },

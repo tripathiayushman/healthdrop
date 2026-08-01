@@ -115,7 +115,7 @@ const DO_STEP_PLACEHOLDERS = [
 ];
 
 export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profile }) => {
-  const { colors, isDark, reduceMotion } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -379,7 +379,6 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
   const selectedUrgency = urgencyLevels.find(u => u.value === formData.urgency_level);
   const urgencyColorFor = (value: string) => getSeverityColor(value, colors);
-  const headerText = isDark ? colors.text : colors.textInverse;
   const isAsha = profile?.role === 'asha_worker';
 
   const showDiseaseFields =
@@ -398,13 +397,13 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat band */}
+      {/* Header — headerBg surface, ink-on-surface, 1px hairline (both modes) */}
       <View
         style={[
           styles.header,
           {
             backgroundColor: colors.headerBg,
-            borderBottomWidth: isDark ? 1 : 0,
+            borderBottomWidth: 1,
             borderBottomColor: colors.border,
           },
         ]}
@@ -415,11 +414,11 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
-          <Ionicons name="arrow-back" size={24} color={headerText} />
-          <Text style={[styles.backText, { color: headerText }]}>Back</Text>
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
+          <Text style={[styles.backText, { color: colors.text }]}>Back</Text>
         </Pressable>
-        <Text style={[styles.headerTitle, { color: headerText }]}>Send Health Alert</Text>
-        <Text style={[styles.headerSubtitle, { color: headerText }]}>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Send Health Alert</Text>
+        <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
           The alert is a poster — write what people should do
         </Text>
       </View>
@@ -933,7 +932,8 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
 const styles = StyleSheet.create({
   container: { flex: 1 },
   // Header — flat band, no radius, no gradient
-  header: { paddingTop: 50, paddingBottom: spacing.lg, paddingHorizontal: spacing.lg },
+  // Rendered inside MainApp's SafeAreaView — no status-bar inset re-added here.
+  header: { paddingTop: spacing.xl, paddingBottom: spacing.md, paddingHorizontal: spacing.lg },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, alignSelf: 'flex-start', paddingRight: spacing.md },
   backText: { fontSize: 16, fontWeight: '500' },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },

@@ -153,6 +153,12 @@ export interface Theme {
   aiBg: string;
   /** §2.1 ai-border — dashed = inferred; violet is reserved for AI alone */
   aiBorder: string;
+  /**
+   * §2.1 header surface — a MODE-APPROPRIATE SURFACE, never an ink slab:
+   * paper in light, dark surface in dark. Header ink is therefore `text`
+   * (titles) and `textSecondary` (subtitles) in BOTH modes; `textInverse`
+   * is illegal here. Separation comes from a 1px `border` bottom hairline.
+   */
   headerBg: string;
   skeleton: string;
   skeletonHighlight: string;
@@ -225,10 +231,12 @@ export const themes = {
     card: '#FFFFFF',
     cardHover: '#F4F4F5',
 
-    // Ink tiers — 16:1 body, 8:1 secondary, 5:1 meta (≥12px only)
+    // Ink tiers on paper — measured: body 19.8:1, secondary 7.7:1,
+    // meta 5.6:1 (≥12px only). textInverse is legal ONLY on a filled
+    // saturated surface (primary button, filled CRITICAL pill).
     text: '#0A0A0B',
     textSecondary: '#52525B',
-    textTertiary: '#71717A',
+    textTertiary: '#67676F',
     textInverse: '#FFFFFF',
 
     // Action — one teal; pressed is a state, not a shadow
@@ -271,11 +279,13 @@ export const themes = {
     aiBg: '#F1EBFC',
     aiBorder: '#CBB6F2',
 
-    // Header — flat ink masthead (zinc-950 family) over paper;
-    // guarantees contrast for the shared textInverse header ink
-    headerBg: '#18181B',
+    // Header — paper, not an ink slab. Bharosa is "calm paper, ink and one
+    // teal": the masthead is the same canvas as the page, separated by a 1px
+    // border hairline (+ the 4px Role Ribbon). Header ink is `text` /
+    // `textSecondary` — 19.8:1 and 7.7:1 here.
+    headerBg: '#FFFFFF',
 
-    // Sidebar — same ink panel family
+    // Sidebar — ink panel (wide/web shell only; the mobile shell has none)
     sidebar: '#18181B',
     sidebarText: '#A1A1AA',
     sidebarTextActive: '#FFFFFF',
@@ -367,7 +377,8 @@ export const themes = {
     card:           '#19191D',
     cardHover:      '#202025',
 
-    // Ink tiers
+    // Ink tiers on the dark canvas — measured on surface/headerBg #131316:
+    // body 17.8:1, secondary 9.0:1, meta 6.3:1 (on card).
     text:          '#FAFAFA',
     textSecondary: '#B4B4BC',
     textTertiary:  '#9B9BA1',
@@ -413,7 +424,8 @@ export const themes = {
     aiBg: '#2B2150',
     aiBorder: '#4A3B7E',
 
-    // Header — flat surface band with strong bottom border
+    // Header — the dark twin of paper: the surface tier, separated by a 1px
+    // border hairline. Header ink is `text` / `textSecondary` (17.8:1 / 9.0:1).
     headerBg: '#131316',
 
     // Sidebar

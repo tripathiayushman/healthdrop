@@ -247,9 +247,11 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
     );
   };
 
-  // Header text: navy band in light mode → white; surface band in dark → ink.
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers read correctly in BOTH modes.
+  // textInverse here would be white-on-paper — invisible — and is banned.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   // ── Poster derivations for the selected alert ──
   const selHindi = selected ? directiveHindiOf(selected) : null;
@@ -260,12 +262,16 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
 
   return (
     <View style={[as.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat headerBg band */}
+      {/* Header — flat headerBg surface. No Role Ribbon on this screen, so the
+          1px hairline is the only separator and must render in both modes. */}
       <View
         style={[
           as.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -608,8 +614,10 @@ const as = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.xl, paddingTop: 42 },
-  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  /* No status-bar inset here — MainApp already wraps this route in a SafeAreaView. */
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  /* -8 pulls the 44dp target back so the glyph optically sits on the 16dp gutter */
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '600', marginTop: 2, fontVariant: ['tabular-nums'] },
   searchRow: {

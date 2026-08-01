@@ -37,6 +37,12 @@ interface ProfileScreenProps {
   onNavigateToForm?: (formType: string) => void;
 }
 
+/**
+ * 8% alpha suffix — the accent-tinted role-chip wash, matching the dashboard
+ * header. Derived from the role-accent token, never a standalone color.
+ */
+const ACCENT_TINT_ALPHA = '14';
+
 const NOTIFICATIONS_KEY = 'healthdrop:notificationsEnabled';
 const LANGUAGE_KEY = 'healthdrop:language';
 const CRITICAL_OVERRIDE_KEY = 'healthdrop:criticalOverridesDnd';
@@ -630,9 +636,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     { label: 'Improvement', value: 'improvement' },
   ];
 
-  // Header text: navy band in light mode → white; surface band in dark → ink.
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // Header ink — headerBg is a mode-appropriate SURFACE (paper in light, dark
+  // surface in dark), so plain ink reads in BOTH modes. textInverse is illegal here.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   // One-Hand Action Bar for modals: 56dp primary at bottom, Cancel above as text link
   const ActionBar: React.FC<{
@@ -682,12 +689,16 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       style={[styles.container, { backgroundColor: colors.background }]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header — flat headerBg band, avatar ring in role accent */}
+      {/* Header — flat headerBg surface, avatar ring in role accent */}
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper needs the hairline in BOTH modes.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <View style={[styles.avatar, { borderColor: accent, backgroundColor: colors.headerBg }]}>
@@ -701,9 +712,12 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
             ? `${profile.district}${profile.state ? ', ' + profile.state : ''}`
             : profile.phone || 'No location set'}
         </Text>
-        <View style={[styles.rolePill, { borderColor: accent }]}>
+        {/* Role chip — accent carries the border + glyph; the LABEL is plain ink.
+            The accent ink tier is only ~2.8:1 on the dark header surface, so it
+            may never be the text color here. */}
+        <View style={[styles.rolePill, { borderColor: accent, backgroundColor: accent + ACCENT_TINT_ALPHA }]}>
           <Ionicons name={roleIcon} size={12} color={accent} />
-          <Text style={[styles.rolePillText, { color: accent }]} maxFontSizeMultiplier={1.3}>
+          <Text style={[styles.rolePillText, { color: colors.text }]} maxFontSizeMultiplier={1.3} numberOfLines={1}>
             {roleLabel}
           </Text>
         </View>
@@ -1426,8 +1440,9 @@ const styles = StyleSheet.create({
   },
   /* Header */
   header: {
-    paddingTop: 42,
-    paddingBottom: spacing.xl,
+    // No status-bar inset here — MainApp's SafeAreaView + shell header sit above.
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
   },
@@ -1439,7 +1454,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   userName: {
     fontSize: 22,

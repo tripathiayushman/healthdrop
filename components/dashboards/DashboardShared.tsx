@@ -1,6 +1,6 @@
 // =====================================================
 // SHARED DASHBOARD COMPONENTS — "Bharosa" design language
-// Flat headerBg masthead + Role Ribbon, Big Number stat
+// Paper headerBg masthead + Role Ribbon, Big Number stat
 // cards, eyebrow section headers, directive-first alert
 // cards, skeleton / error / quiet-zero states, the §9.4
 // Sync Ledger (SyncPebble), and the two §9.6 provenance
@@ -23,17 +23,27 @@ import { Profile } from '../../types';
 //  The role accent appears in exactly two places per
 //  screen: the 4px Role Ribbon and the avatar/badge ring.
 // ─────────────────────────────────────────────────────
-// Accents are drawn from the Bharosa ladders (dark-mode tier:
-// vivid enough on the ink masthead and on dark surfaces alike).
-// Violet is reserved for AI and may never be a role accent.
+// Accents are drawn from the Bharosa ladders. They used to use the
+// dark-mode (pastel) tier because the masthead was an ink slab; on the
+// paper header those pastels collapse to ~1.7:1 — an invisible ribbon,
+// an invisible pill icon. The light/ink tier is the only tier that is
+// legible on BOTH canvases: ≥4.5:1 on paper (so it may even carry text
+// and take white text when filled) and ≥2.7:1 as a solid strip/glyph on
+// the dark surface. Violet is reserved for AI and is never a role accent.
 export const ROLE_ACCENT: Record<string, string> = {
-  super_admin:      themes.dark.info,         // sky
-  health_admin:     themes.dark.primary,      // action teal
-  clinic:           themes.dark.waterSafe,    // cyan
-  asha_worker:      themes.dark.severityHigh, // warm ochre
-  volunteer:        themes.dark.success,      // green
-  district_officer: themes.dark.warning,      // amber
+  super_admin:      themes.light.info,         // sky
+  health_admin:     themes.light.primary,      // action teal
+  clinic:           themes.light.waterSafe,    // cyan
+  asha_worker:      themes.light.severityHigh, // warm ochre
+  volunteer:        themes.light.success,      // green
+  district_officer: themes.light.warning,      // amber
 };
+
+/**
+ * 8% alpha suffix — the accent-tinted pill/avatar wash used across the
+ * dashboards. Derived from a token, never a standalone color.
+ */
+const TINT_ALPHA = '14';
 
 const ROLE_LABEL: Record<string, string> = {
   super_admin:      'Super Administrator',
@@ -41,6 +51,18 @@ const ROLE_LABEL: Record<string, string> = {
   clinic:           'Clinic Staff',
   asha_worker:      'ASHA Worker',
   volunteer:        'Community Volunteer',
+  district_officer: 'District Officer',
+};
+
+// Eyebrow chips are short by design: the pill now shares its row with the
+// user's name, and a truncated role reads as broken. The full ROLE_LABEL
+// still goes to the screen reader.
+const ROLE_CHIP: Record<string, string> = {
+  super_admin:      'Super Admin',
+  health_admin:     'Health Admin',
+  clinic:           'Clinic',
+  asha_worker:      'ASHA Worker',
+  volunteer:        'Volunteer',
   district_officer: 'District Officer',
 };
 
@@ -117,15 +139,22 @@ const formatShortDateTime = (iso: string): string => {
 };
 
 // ─────────────────────────────────────────────────────
-//  DashboardHeader — flat headerBg band + 4px Role Ribbon
+//  DashboardHeader — paper headerBg band + 4px Role Ribbon
+//  One tight block: greeting + name on the left, role pill
+//  on the right, location underneath. No ink slab, no dead
+//  space — the whole header is ~92dp at default font scale
+//  so the first stat card is visible without scrolling.
 // ─────────────────────────────────────────────────────
 interface HeaderProps { profile: Profile; subtitle?: string }
 
 export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) => {
-  const { colors, isDark, reduceMotion } = useTheme();
+  const { colors, reduceMotion } = useTheme();
   const role   = profile.role ?? 'volunteer';
   const accent = ROLE_ACCENT[role] ?? ROLE_ACCENT.volunteer;
   const greeting = getGreeting();
+  const location =
+    subtitle ??
+    (profile.district ? `${profile.district}${profile.state ? `, ${profile.state}` : ''}` : '');
 
   const fadeAnim = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
 
@@ -137,12 +166,11 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
     Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
   }, [reduceMotion]);
 
-  // Ink masthead in light mode → white text; surface band in dark mode → ink text.
-  // Both modes end on a strong bottom border — the divider carries the meaning,
-  // never a shadow.
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub  = isDark ? colors.textSecondary : colors.primaryLight;
-
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark), so the ordinary ink tiers are correct in both modes: `text` for
+  // the name, `textSecondary` for greeting and location. textInverse would
+  // be white-on-paper — invisible — and is banned here. Separation is a 1px
+  // border hairline plus the Role Ribbon; never a shadow.
   return (
     <View>
       <View
@@ -151,31 +179,60 @@ export const DashboardHeader: React.FC<HeaderProps> = ({ profile, subtitle }) =>
           {
             backgroundColor: colors.headerBg,
             borderBottomWidth: 1,
-            borderBottomColor: colors.borderStrong,
+            borderBottomColor: colors.border,
           },
         ]}
       >
         <Animated.View style={{ opacity: fadeAnim }}>
-          {/* Role pill — Eyebrow type. Accent stays on the border/icon ring;
-              the label renders in the guaranteed-contrast header ink (F17) —
-              several ROLE_ACCENT hues fall below 4.5:1 on the ink masthead. */}
-          <View style={[styles.rolePill, { borderColor: accent }]}>
-            <Ionicons name={ROLE_ICON[role]} size={12} color={accent} />
-            <Text style={[styles.rolePillText, { color: headerText }]} maxFontSizeMultiplier={1.3}>
-              {ROLE_LABEL[role]}
-            </Text>
+          <View style={styles.headerRow}>
+            <View style={styles.identityBlock}>
+              <Text
+                style={[styles.greeting, { color: colors.text }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.3}
+              >
+                {greeting}
+              </Text>
+              <Text
+                style={[styles.userName, { color: colors.text }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.3}
+              >
+                {profile.full_name || 'User'}
+              </Text>
+            </View>
+
+            {/* Role pill — Eyebrow type. The accent carries the border and the
+                icon; the LABEL is ink, because the accent itself never has to
+                pass a text ratio on its own tint. */}
+            <View
+              style={[
+                styles.rolePill,
+                { borderColor: accent, backgroundColor: accent + TINT_ALPHA },
+              ]}
+              accessible
+              accessibilityLabel={`Role: ${ROLE_LABEL[role]}`}
+            >
+              <Ionicons name={ROLE_ICON[role]} size={14} color={accent} />
+              <Text
+                style={[styles.rolePillText, { color: colors.text }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.3}
+              >
+                {ROLE_CHIP[role] ?? ROLE_LABEL[role]}
+              </Text>
+            </View>
           </View>
 
-          <Text style={[styles.greeting, { color: headerSub }]}>{greeting}</Text>
-          <Text style={[styles.userName, { color: headerText }]} numberOfLines={1}>
-            {profile.full_name || 'User'}
-          </Text>
-
-          {(subtitle || profile.district) && (
+          {!!location && (
             <View style={styles.locationRow}>
-              <Ionicons name="location-outline" size={16} color={headerSub} />
-              <Text style={[styles.locationText, { color: headerSub }]} numberOfLines={1}>
-                {subtitle ?? `${profile.district}${profile.state ? `, ${profile.state}` : ''}`}
+              <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+              <Text
+                style={[styles.locationText, { color: colors.textSecondary }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.3}
+              >
+                {location}
               </Text>
             </View>
           )}
@@ -267,7 +324,7 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, icon, color, i
         },
       ]}
     >
-      <View style={[styles.statIconWrap, { backgroundColor: color + '14' }]}>
+      <View style={[styles.statIconWrap, { backgroundColor: color + TINT_ALPHA }]}>
         {iconFamily === 'material'
           ? <MaterialCommunityIcons name={icon as any} size={24} color={color} />
           : <Ionicons name={icon as any} size={24} color={color} />
@@ -315,7 +372,7 @@ export const QuickActionBtn: React.FC<QuickActionProps> = ({ icon, label, color,
         },
       ]}
     >
-      <View style={[styles.qaIcon, { backgroundColor: color + '14' }]}>
+      <View style={[styles.qaIcon, { backgroundColor: color + TINT_ALPHA }]}>
         {iconFamily === 'material'
           ? <MaterialCommunityIcons name={icon as any} size={24} color={color} />
           : <Ionicons name={icon as any} size={24} color={color} />
@@ -586,7 +643,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({ icon, iconColor, title, subt
         },
       ]}
     >
-      <View style={[styles.toolIcon, { backgroundColor: iconColor + '14' }]}>
+      <View style={[styles.toolIcon, { backgroundColor: iconColor + TINT_ALPHA }]}>
         <Ionicons name={icon as any} size={24} color={iconColor} />
         {badge !== undefined && badge > 0 && (
           <View style={[styles.toolBadge, { backgroundColor: colors.danger }]}>
@@ -926,24 +983,32 @@ export const SectionDivider: React.FC = () => {
 //  Styles
 // ─────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  /* ── Header ── */
+  /* ── Header — 16 gutter, 12 vertical rhythm. The shell header above
+        already clears the status bar, so there is no inset padding to
+        repeat here: ~92dp total at 1.0 scale, ~110dp at 1.3. Heights are
+        content-driven (minHeight only), never fixed. ── */
   header: {
     paddingHorizontal: spacing.lg,
-    paddingTop: 42,
-    paddingBottom: spacing.xl,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
   },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  identityBlock: { flex: 1 },
   roleRibbon: { height: 4, width: '100%' },
   rolePill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10, paddingVertical: 6,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: 10, paddingVertical: spacing.sm,
     borderRadius: radii.pill, borderWidth: 1,
-    marginBottom: spacing.lg,
+    minHeight: 44,
+    // Never let the chip eat the name: it shrinks first and is capped at
+    // half the row.
+    flexShrink: 1, maxWidth: '50%',
   },
-  rolePillText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
-  greeting: { fontSize: 13, lineHeight: 18, fontWeight: '600', marginBottom: 2 },
-  userName: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4, marginBottom: spacing.sm },
-  locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  rolePillText: { fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', flexShrink: 1 },
+  greeting: { fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  userName: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
   locationText: { fontSize: 13, lineHeight: 18, fontWeight: '500', flexShrink: 1 },
 
   /* ── Section ── */

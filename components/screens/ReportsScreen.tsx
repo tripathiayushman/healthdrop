@@ -536,18 +536,24 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
     ));
   };
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // Header ink — headerBg is a mode-appropriate SURFACE (paper in light, dark
+  // surface in dark), so plain ink reads in BOTH modes. textInverse is illegal here.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
   const activeCount = activeTab === 'disease' ? diseaseReports.length : waterReports.length;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header — flat headerBg band */}
+      {/* Header — flat headerBg surface + hairline */}
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper needs the hairline in BOTH modes.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <Text style={[styles.headerTitle, { color: headerText }]}>Reports</Text>
@@ -605,6 +611,7 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
       {/* Content */}
       <ScrollView
         style={styles.content}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
@@ -626,7 +633,6 @@ const ReportsScreen: React.FC<ReportsScreenProps> = ({ profile, onNavigateToForm
           <>
             {loadError && <ErrorCard message={loadError} onRetry={loadReports} />}
             {activeTab === 'disease' ? renderDiseaseReports() : renderWaterReports()}
-            <View style={styles.bottomSpacer} />
           </>
         )}
       </ScrollView>
@@ -823,8 +829,9 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   header: {
-    paddingTop: 42,
-    paddingBottom: spacing.xl,
+    // No status-bar inset here — MainApp's SafeAreaView + shell header sit above.
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
   },
   headerTitle: {
@@ -867,6 +874,11 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: spacing.lg,
+  },
+  // Clears the shell's floating "Create" button (56dp tall, docked 88/96dp
+  // from the safe-area bottom) so it can never cover a card's last row.
+  scrollContent: {
+    paddingBottom: 96,
   },
   sectionEyebrow: {
     fontSize: 12,
@@ -988,9 +1000,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
-  },
-  bottomSpacer: {
-    height: 80,
   },
   tapHint: {
     flexDirection: 'row',

@@ -156,8 +156,11 @@ const MapTabScreen: React.FC<MapTabScreenProps> = ({ profile, onNavigateToForm }
     };
   }, [alerts, aiAlerts]);
 
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
+  // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
+  // would render white-on-paper.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const metricCards: { label: string; value: number; rule: string }[] = [
     { label: 'Visible Alerts', value: metrics.totalAlerts, rule: colors.primary },
@@ -175,8 +178,12 @@ const MapTabScreen: React.FC<MapTabScreenProps> = ({ profile, onNavigateToForm }
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper still needs a hairline to read as separated.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <Text style={[styles.headerTitle, { color: headerText }]}>Map Intelligence</Text>
@@ -318,8 +325,10 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   header: {
-    paddingTop: 20,
-    paddingBottom: 20,
+    // Sits directly under MainApp's 56dp shell header + Role Ribbon, so it
+    // carries no status-bar inset and stays compact.
+    paddingTop: 12,
+    paddingBottom: 12,
     paddingHorizontal: 16,
   },
   headerTitle: {

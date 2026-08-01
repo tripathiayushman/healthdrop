@@ -52,7 +52,7 @@ export default function WeeklySummaryScreen({
   profile: Profile;
   onBack: () => void;
 }) {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
 
   const district = (profile.district ?? '').trim();
   const [weekOffset, setWeekOffset] = useState(0);
@@ -223,9 +223,10 @@ export default function WeeklySummaryScreen({
     }
   };
 
-  // ── Header ink (navy/ink band in light → white text) ─
-  const headerText = isDark ? colors.text : colors.textInverse;
-  const headerSub = isDark ? colors.textSecondary : colors.primaryLight;
+  // ── Header ink — headerBg is a mode-appropriate SURFACE (paper in light,
+  // dark surface in dark), so plain ink reads in BOTH modes. No textInverse here.
+  const headerText = colors.text;
+  const headerSub = colors.textSecondary;
 
   const atCurrentWeek = weekOffset <= 0;
   const atOldestWeek = weekOffset >= MAX_WEEKS_BACK;
@@ -287,8 +288,12 @@ export default function WeeklySummaryScreen({
       <View
         style={[
           styles.header,
-          { backgroundColor: colors.headerBg },
-          isDark && { borderBottomWidth: 1, borderBottomColor: colors.border },
+          {
+            backgroundColor: colors.headerBg,
+            // Paper-on-paper needs the hairline in BOTH modes.
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          },
         ]}
       >
         <TouchableOpacity
@@ -561,8 +566,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingTop: 18,
-    paddingBottom: 16,
+    // No status-bar inset here — MainApp's SafeAreaView already provides it.
+    paddingTop: 12,
+    paddingBottom: 12,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
