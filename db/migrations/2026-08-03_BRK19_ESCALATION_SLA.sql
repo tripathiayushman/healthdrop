@@ -1,0 +1,77 @@
+-- =====================================================================
+-- BRK-19 — the approval SLA becomes data, plus two defects found on the way
+-- Applied live to project ekfdimdlxifatsaubvbh on 2026-08-03.
+--
+-- The escalation screen decided "overdue" from a constant in code, so a
+-- district with a two-day approval rhythm and one with a two-hour rhythm got
+-- the same red badge, and nobody could change it without a release.
+--
+-- The full DDL is in the applied migration `brk19_escalation_sla_as_data`.
+-- What follows is why each part is here, because two of the three were found
+-- while implementing the first and matter more than it does.
+-- =====================================================================
+
+-- ── 1. escalation_sla_thresholds ────────────────────────────────────────
+-- getEscalationSlaPolicy() in lib/services/advancedAnalytics.ts was written
+-- against exactly this shape; the table was the missing half. The role tour
+-- caught it as 7 x HTTP 404 on /rest/v1/escalation_sla_thresholds — the code
+-- shipped, the table did not.
+--
+-- Seeded with NOTHING, deliberately. An empty table makes the screen say
+-- "App default — no threshold set for this district yet", which is true.
+-- Seeding rows would make it claim an official chose those hours.
+--
+-- RLS: read for any signed-in user (the rule deciding whether YOUR report is
+-- late is not a secret from the person who filed it, and it keeps an RLS
+-- denial from being mistaken for an unconfigured table); write for the admin
+-- tier anywhere, and for a district_officer inside their own district only —
+-- the officer who owns the approval rhythm is the one who sets it.
+-- UNIQUE ... NULLS NOT DISTINCT (PG15+, this is 17.6) because the default NULL
+-- handling would allow unlimited duplicate national rows and make "which hours
+-- are in force" unanswerable.
+
+-- ── 2. health_alerts was the ONLY approval table with no vocabulary ─────
+-- Verified against the live catalogue: disease_reports, water_quality_reports
+-- and health_campaigns all carry an approval_status CHECK. health_alerts
+-- carried none AND was nullable.
+--
+-- That matters because the escalation screen filters on equality. A NULL or a
+-- typo'd value drops out of the filter, so the screen renders "Queue clear"
+-- over a public alert that no official has approved — the same silent-zero
+-- shape this audit has been removing all day, pointed at the most dangerous
+-- table in the schema. Now NOT NULL with a CHECK.
+
+-- ── 3. calculate_response_time() could store a NEGATIVE response time ──
+-- It was BEFORE UPDATE with no column list and no lower bound, so ANY edit
+-- recomputed the measurement: touching created_at on an approved row was
+-- probed at -2998 hours. This is the trigger whose column Phase 2 added, so
+-- the officer-response metric would have been wrong from its first real use.
+-- Now it recomputes only on the approval transition, and clamps at 0.
+
+-- =====================================================================
+-- VERIFICATION (live, 2026-08-03)
+--   J1 escalation_sla_thresholds readable            PASS
+--   J2 seeded rows (0)                               PASS - no invented authority
+--   K1 3h approval gap measured (3.0000)             PASS
+--   K2 approved-before-created clamped (0)           PASS - never negative
+--   K3 unrelated edit does not rewrite it (2.0000)   PASS
+--   chk_approval_status_alert + NOT NULL             PASS (read from catalogue)
+--
+-- TWO OF MY OWN TESTS WERE WRONG FIRST, and the reasons are worth keeping:
+--
+--   * "insert a NULL approval_status and expect a rejection" APPEARED to fail.
+--     auto_approve_alert_fn is BEFORE INSERT and always sets the column, so
+--     the explicit NULL is overwritten before the constraint is ever checked.
+--     The constraint is real — confirmed from pg_constraint — but that test
+--     could never reach it.
+--
+--   * "approve, then read response_time_hours" returned NULL and looked like
+--     a dead trigger. now() is transaction-stable in Postgres, so inside one
+--     DO block the INSERT and the UPDATE share a timestamp; approved_at did
+--     not change, and the trigger correctly declined to recompute. Measuring
+--     against created_at + interval made it pass immediately.
+--
+--   Both are the same lesson as the auto-approve trap in Phase 2: a test that
+--   fails for the wrong reason is as misleading as one that passes for the
+--   wrong reason, and the only way to tell them apart is to look.
+-- =====================================================================
