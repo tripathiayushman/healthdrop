@@ -29,13 +29,22 @@ interface AuthScreenProps { onAuthSuccess: () => void; }
 // ── Indian States ─────────────────────────────────────
 /**
  * Email OTP length is a SERVER setting (Supabase → Authentication → Email
- * OTP Length), configurable from 6 to 10 digits. The client must accept the
- * full range: a fixed 6 silently truncated the 8-digit codes this project
- * was issuing, so every reset attempt failed with "incorrect code".
- * Set the project to 6 to give field workers the shortest code to type.
+ * OTP Length), configurable from 6 to 10 digits.
+ *
+ * The project is now set to 6 — the shortest code a field worker has to copy
+ * off a screen — and OTP_EXPECTED_LENGTH below is what the UI tells them.
+ *
+ * The ACCEPTED range stays 6..10 on purpose, and is deliberately wider than
+ * the message. A hard-coded 6 is what broke this before: the project was
+ * issuing 8-digit codes, the input silently truncated them to 6, and every
+ * reset failed as "incorrect code" with nothing on screen to explain why. If
+ * the server setting ever changes again, a longer code still types and still
+ * verifies; only the hint goes stale, which is a copy fix rather than a
+ * lockout.
  */
 const OTP_MIN_LENGTH = 6;
 const OTP_MAX_LENGTH = 10;
+const OTP_EXPECTED_LENGTH = 6;
 
 const INDIAN_STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh',
@@ -479,7 +488,9 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     // for longer codes — the field silently truncated an 8-digit email code to
     // 6 and every attempt failed. Accept whatever the server issues.
     if (!new RegExp(`^\\d{${OTP_MIN_LENGTH},${OTP_MAX_LENGTH}}$`).test(code)) {
-      setErrors({ rCode: `Enter the ${OTP_MIN_LENGTH}–${OTP_MAX_LENGTH} digit code from the email` });
+      // Accept 6..10, but name the length the server actually issues — being
+      // told "6–10 digits" when every code is 6 reads like the app is unsure.
+      setErrors({ rCode: `Enter the ${OTP_EXPECTED_LENGTH}-digit code from the email` });
       return;
     }
     setLoading(true);

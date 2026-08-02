@@ -82,9 +82,11 @@ DECLARE
   --    done here. Delete these four entries the moment the tables go; the
   --    suite will then fail if anyone reintroduces the dead role.
   k_role_literal_allow CONSTANT text[] := ARRAY[
-    'campaigns :: campaigns_insert|admin',
-    'campaign_volunteers :: Users can update own enrollment|admin',
-    'campaign_volunteers :: Volunteers can view own enrollments|admin',
+    -- Three entries lived here for policies on `campaigns` and
+    -- `campaign_volunteers`. Both tables were dropped on 2026-08-02 once the
+    -- last thing depending on them (a view built on the wrong table) was
+    -- corrected, so the policies went with them and the excuses are gone.
+    --
     -- notify_users_push is different from the rest: its 'admin' sits in a
     -- district-BYPASS list (`OR p.role IN (...)`), not in a permission guard.
     -- A dead literal there can only fail to WIDEN a recipient list, and the
@@ -103,17 +105,11 @@ DECLARE
   k_multi_check_allow CONSTANT text[] := ARRAY[]::text[];
 
   -- ── ALLOWLIST A5: foreign-key constraint names that may go unindexed.
-  --    16 of the original 19 now have covering indexes. These three do not,
-  --    and deliberately so: both tables hold ZERO rows and are superseded by
-  --    health_campaigns (5 rows) and campaign_participants (10 rows). An
-  --    index on a dead table is upkeep that makes a corpse look maintained.
-  --    Delete these three entries when the tables are dropped — at which
-  --    point the constraints go with them and the suite stays honest.
-  k_fk_index_allow CONSTANT text[] := ARRAY[
-    'campaigns_created_by_fkey',
-    'campaigns_approved_by_fkey',
-    'campaign_volunteers_volunteer_id_fkey'
-  ];
+  --    Empty. 16 of the original 19 foreign keys were given covering indexes;
+  --    the other 3 were on `campaigns` and `campaign_volunteers`, which were
+  --    dropped on 2026-08-02, taking their constraints with them. Every
+  --    foreign key that still exists is now indexed, so this needs no excuses.
+  k_fk_index_allow CONSTANT text[] := ARRAY[]::text[];
 
   -- ── ALLOWLIST A6: tables in `public` permitted to run without RLS.
   --    Extension-owned tables (PostGIS `spatial_ref_sys`) are excluded
@@ -457,14 +453,12 @@ BEGIN
       ('health_alerts',          ARRAY['a'],         'created_by',   'components/forms/AlertForm.tsx'),
       ('health_campaigns',       ARRAY['a','w','d'], 'organizer_id', 'components/forms/CampaignForm.tsx, components/screens/{CampaignsScreen,ApprovalQueueScreen,AdminManagementScreen}.tsx'),
       ('campaign_participants',  ARRAY['a','w'],     'user_id',      'components/screens/CampaignsScreen.tsx'),
-      -- campaign_volunteers is deliberately ABSENT. Its only writer was
-      -- lib/services/campaigns.ts, a dead parallel enrolment path (it wrote to
-      -- a 0-row table and called an increment_volunteers RPC that does not
-      -- exist), deleted 2026-08-02. The live path is campaign_participants,
-      -- one row above. A8 asks "is every write the client performs actually
-      -- permitted" — with no client write, the missing DELETE policy it used
-      -- to report is no longer a defect, and adding the policy would have
-      -- preserved a dead path instead of removing it.
+      -- campaign_volunteers is deliberately ABSENT: the TABLE no longer
+      -- exists. Its only writer was lib/services/campaigns.ts, a dead
+      -- parallel enrolment path (it wrote to a 0-row table and called an
+      -- increment_volunteers RPC that does not exist), deleted 2026-08-02;
+      -- the table itself was dropped the same day. The live path is
+      -- campaign_participants, one row above.
       ('profiles',               ARRAY['a','w'],     'id',           'components/AuthScreen.tsx, lib/services/users.ts'),
       ('user_feedback',          ARRAY['a','w'],     'user_id',      'components/screens/ProfileScreen.tsx'),
       ('app_events',             ARRAY['a'],         'user_id',      'lib/services/analytics.ts'),

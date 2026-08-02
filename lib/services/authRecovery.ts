@@ -18,9 +18,12 @@
 // NOTE (server config): the code only appears in the reset
 // email if the "Magic Link" template includes {{ .Token }}
 // (Dashboard → Auth → Templates). Its LENGTH is also a
-// server setting — Auth → Email OTP Length, 6-10 digits.
-// The client accepts the whole range; 6 is kindest to a
-// field worker typing it from a phone.
+// server setting — Auth → Email OTP Length, 6-10 digits —
+// and this project is set to 6, the kindest length for a
+// field worker copying it off a phone screen.
+// The client still accepts the whole 6-10 range: hard-coding
+// one length is what silently truncated the 8-digit codes
+// this project used to issue and failed every reset.
 // =====================================================
 import 'react-native-url-polyfill/auto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
