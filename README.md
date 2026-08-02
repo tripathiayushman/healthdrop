@@ -80,7 +80,7 @@ CI lives in [.github/workflows/](.github/workflows/):
 
 - **`build-on-push.yml`** — every push to `main` (except changes only to Markdown, `database_structure/`, or `mesc/`) builds an Android APK on EAS (`preview` profile) and publishes a GitHub Release tagged `v<version>-build.<n>` with the APK attached. Include `[skip build]` in the commit message to skip. Superseded queued builds are cancelled.
 - **`versionCode` = git commit count** — strictly increasing across all builds, so Android always accepts the newest APK as an update.
-- **`prepare-release.yml`** (manual dispatch) bumps `package.json`/`app.json` and pushes a `v*` tag; **`build-android-release.yml`** builds and releases from that tag.
+- **`prepare-release.yml`** (manual dispatch) bumps `package.json`/`app.json` and pushes a `v*` tag. The tag no longer triggers a build of its own: `build-on-push.yml` already builds and releases from the version bump's own push to `main`, so a second tag-triggered lane could only produce a duplicate EAS build competing for the same tag. (`build-android-release.yml` was that lane — it ran four times, failed four times, and was deleted.)
 
 Manual build: `eas build --platform android --profile preview` (`preview` = APK, `production` = app-bundle; see `eas.json`).
 

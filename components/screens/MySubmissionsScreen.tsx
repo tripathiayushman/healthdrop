@@ -42,7 +42,11 @@ interface SubmissionRow {
 interface OutbreakPayback {
   district: string;
   disease: string;
-  alertSent: boolean;
+  /**
+   * The detection rule filed in-app notices to district officials.
+   * NOT "a public alert went out" — see OutbreakLite.alert_sent.
+   */
+  officialsNotified: boolean;
 }
 
 interface OutbreakLite {
@@ -50,6 +54,23 @@ interface OutbreakLite {
   district: string | null;
   window_start: string | null;
   window_end: string | null;
+  /**
+   * BRK-10: this column is misnamed. `detect_outbreak_after_report()` runs
+   * `UPDATE outbreaks SET alert_sent = TRUE` immediately after inserting
+   * `notifications` rows for super_admin / health_admin (unscoped) and
+   * clinic / district_officer (district-scoped) — before any human decides
+   * anything, and without creating a `health_alerts` row. It is the only
+   * function in the schema that writes the column, and the app never sends
+   * it in an update. So TRUE means exactly one thing: officials got an
+   * in-app notice. It says nothing about whether the public was warned, and
+   * this screen must never render it as "district alert issued".
+   *
+   * Whether an approved public alert exists is a separate fact, resolved by
+   * lib/services/outbreaks.ts from `health_alerts.metadata->>'outbreak_id'`.
+   * This screen deliberately does not make that claim: it would need its own
+   * query with its own four states, and getting it wrong here — on the ASHA
+   * worker's own screen — is the most expensive place in the app to lie.
+   */
   alert_sent: boolean | null;
   triggered_by_report_id: string | null;
 }
@@ -238,6 +259,12 @@ export default function MySubmissionsScreen({
               .order('created_at', { ascending: false })
               .limit(100);
 
+            if (obError) {
+              // Not surfaced as a failed source: the payback caption is a
+              // bonus badge, and its absence claims nothing. Logged so the
+              // failure is not invisible.
+              console.error('[MySubmissions] outbreak payback query failed:', obError);
+            }
             if (!obError && outbreaks) {
               for (const r of approvedDisease) {
                 const id = String(r.id ?? '');
@@ -256,7 +283,7 @@ export default function MySubmissionsScreen({
                   paybackNext[id] = {
                     district: (match.district ?? str(r, 'district') ?? '').trim(),
                     disease: (match.disease_name ?? str(r, 'disease_name') ?? '').trim(),
-                    alertSent: match.alert_sent === true,
+                    officialsNotified: match.alert_sent === true,
                   };
                 }
               }
@@ -370,7 +397,9 @@ export default function MySubmissionsScreen({
               timestamp={formatDateTime(item.approved_at) || undefined}
             />
             <Text style={[ms.paybackCaption, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-              {`Counted toward the ${paybackInfo.district} ${paybackInfo.disease.toLowerCase()} outbreak signal${paybackInfo.alertSent ? ' → district alert issued' : ''}`}
+              {`Counted toward the ${paybackInfo.district} ${paybackInfo.disease.toLowerCase()} outbreak signal${
+                paybackInfo.officialsNotified ? ' · district officials were notified in the app' : ''
+              }`}
             </Text>
           </View>
         )}

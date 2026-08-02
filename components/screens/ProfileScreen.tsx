@@ -6,6 +6,7 @@
 // =====================================================
 import React, { useState, useEffect } from 'react';
 import {
+  AccessibilityInfo,
   View,
   Text,
   StyleSheet,
@@ -62,6 +63,14 @@ const ROLE_LABEL: Record<string, string> = {
   volunteer:        'Community Volunteer',
   district_officer: 'District Officer',
 };
+
+/**
+ * Roles that notify_users_push waves through its district clause unconditionally
+ * (`p.role IN ('admin','super_admin','health_admin')`), so they receive EVERY
+ * health-alert push from EVERY district — not "your district". Verified against
+ * pg_get_functiondef('notify_users_push') on the live project, not assumed.
+ */
+const NATIONAL_PUSH_ROLES = new Set(['admin', 'super_admin', 'health_admin']);
 
 const ROLE_ION_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
   super_admin:      'shield-checkmark-outline',
@@ -156,25 +165,36 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   // teaches people to swipe alerts away. Until the server fan-out honours the
   // preference (BRK-18's server half), the only control that truly silences a
   // push is the operating system's, so that is the one we offer.
+  //
+  // Web has no per-app OS settings page to open — the browser owns the
+  // permission. That is an expected platform limit, not a failure, so on web
+  // the row is informational: no press, no chevron, and NO danger ink. Colour
+  // is spent only on meaning, and nothing here went wrong.
+  const canOpenOsSettings =
+    Platform.OS !== 'web' && typeof Linking.openSettings === 'function';
+
+  // A real failure to open the OS screen. Announced as well as drawn: on the
+  // failing path the inline text is the only outcome of the press, so a screen
+  // reader must hear it without hunting for newly inserted text.
+  const failOpenSettings = () => {
+    const message = t('notifications.openFailed', {
+      defaultValue:
+        "Couldn't open settings — open your phone's Settings, then Apps, then Health Drop, then Notifications.",
+    });
+    setNotificationSettingsError(message);
+    try {
+      AccessibilityInfo.announceForAccessibility(message);
+    } catch {
+      /* announcement is best-effort — the inline live region carries it too */
+    }
+  };
+
   const handleOpenNotificationSettings = () => {
     setNotificationSettingsError('');
-    // react-native-web has no openSettings(); guard before calling it.
-    if (Platform.OS === 'web' || typeof Linking.openSettings !== 'function') {
-      setNotificationSettingsError(
-        'Open your browser or device settings to change notifications for this app.',
-      );
-      return;
-    }
     try {
-      Promise.resolve(Linking.openSettings()).catch(() => {
-        setNotificationSettingsError(
-          "Couldn't open settings — go to your phone's Settings → Apps → Health Drop → Notifications.",
-        );
-      });
+      Promise.resolve(Linking.openSettings()).catch(failOpenSettings);
     } catch {
-      setNotificationSettingsError(
-        "Couldn't open settings — go to your phone's Settings → Apps → Health Drop → Notifications.",
-      );
+      failOpenSettings();
     }
   };
 
@@ -215,6 +235,46 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const completenessCaption = t('completeness.caption', {
     pct: completeness.pct,
     missing: completeness.missing.map(field => t(`completeness.fields.${field}`)).join(', '),
+  });
+
+  // What a push ACTUALLY reaches this role. Every clause below was read off the
+  // live send path (project ekfdimdlxifatsaubvbh), not inferred from the UI:
+  //   • push_on_alert_created → notify_users_push(p_target_district := alert.district)
+  //     with NO role filter, and notify_users_push's district clause is
+  //     `p.district = p_target_district OR p.role IN ('admin','super_admin','health_admin')`
+  //     — so those three roles get every alert nationally, everyone else only
+  //     their own district's, and a profile with no district gets none.
+  //   • notify_on_unsafe_water → notify_users_push(p_target_role := 'district_officer')
+  //     and the role clause is `p.role = p_target_role` — asha_worker, volunteer
+  //     and clinic PROVABLY never receive an unsafe-water push, so the caption
+  //     must not promise them one.
+  //   • push_on_report_approved → p_target_user_id := NEW.reporter_id — any role
+  //     can get this one, for a report they filed themselves.
+  // If the fan-out changes, this caption changes with it or it starts lying.
+  const districtKnown = !completeness.missing.includes('district');
+  const notificationReach = NATIONAL_PUSH_ROLES.has(profile.role)
+    ? t('notifications.reachNational', {
+        defaultValue:
+          'You get a push for every health alert, in every district, and when a report you filed is approved.',
+      })
+    : !districtKnown
+    ? t('notifications.reachNoDistrict', {
+        defaultValue:
+          'Alerts are sent district by district and your profile has no district yet — add it under Update Location. Until then only your own reports being approved will reach you.',
+      })
+    : profile.role === 'district_officer'
+    ? t('notifications.reachDistrictOfficer', {
+        district: profile.district,
+        defaultValue:
+          'You get a push for health alerts and unsafe-water reports in {{district}}, and when a report you filed is approved.',
+      })
+    : t('notifications.reachDistrict', {
+        district: profile.district,
+        defaultValue:
+          'You get a push for health alerts in {{district}}, and when a report you filed is approved.',
+      });
+  const notificationLabel = t('notifications.settingsLabel', {
+    defaultValue: 'Notification settings',
   });
 
   const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
@@ -345,13 +405,24 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     },
   ];
 
-  const InlineError: React.FC<{ message: string }> = ({ message }) =>
-    message ? (
-      <View style={styles.inlineErrorRow}>
-        <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
-        <Text style={[styles.inlineErrorText, { color: colors.danger }]}>{message}</Text>
-      </View>
-    ) : null;
+  // The container stays MOUNTED and empty so the live region already exists
+  // when the message appears — assistive tech only announces changes inside a
+  // region it was already watching, so a region inserted together with its
+  // text is routinely missed. Empty it carries no style, so it costs no layout.
+  const InlineError: React.FC<{ message: string }> = ({ message }) => (
+    <View
+      style={message ? styles.inlineErrorRow : undefined}
+      accessibilityLiveRegion="polite"
+      accessibilityRole={message ? 'alert' : undefined}
+    >
+      {message ? (
+        <>
+          <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+          <Text style={[styles.inlineErrorText, { color: colors.danger }]}>{message}</Text>
+        </>
+      ) : null}
+    </View>
+  );
 
   // Profile update handler
   const handleEditProfile = async () => {
@@ -548,18 +619,33 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   interface MenuItem {
     iconName: keyof typeof Ionicons.glyphMap;
     label: string;
-    action: () => void;
+    /**
+     * Omitted when the row is informational on this platform. A row with no
+     * action renders as text, not as a button that does nothing when pressed.
+     */
+    action?: () => void;
     hasSwitch?: boolean;
     switchValue?: boolean;
     /** Small honest-state line under the label */
     caption?: string;
     /** Current value shown before the chevron (e.g. selected language) */
     valueLabel?: string;
+    /** Overrides the spoken label — used where the caption IS the content */
+    a11yLabel?: string;
+    /** Spoken after the label. Say so when the row leaves Health Drop. */
+    a11yHint?: string;
+    /** Trailing glyph; 'open-outline' marks a row that exits the app */
+    trailingIcon?: keyof typeof Ionicons.glyphMap;
   }
 
   interface MenuSection {
     section: string;
     items: MenuItem[];
+    /**
+     * Secondary-ink guidance under the card. NOT an error — it never uses
+     * danger ink, so a platform limit and a failure never look the same.
+     */
+    note?: string;
     /** Inline error shown under the card — never a popup */
     error?: string;
   }
@@ -600,13 +686,31 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     {
       section: 'Notifications',
       error: notificationSettingsError,
+      note: canOpenOsSettings
+        ? t('notifications.phoneControls', {
+            defaultValue:
+              "Health Drop cannot switch these off for you — your phone's settings decide whether they arrive.",
+          })
+        : t('notifications.browserControls', {
+            defaultValue:
+              "On the web your browser decides whether these arrive. Change it in the browser's own site settings for this page — Health Drop cannot open that for you.",
+          }),
       items: [
         {
           iconName: 'notifications-outline',
-          label: 'Notification settings',
-          caption:
-            'Health Drop sends alerts about outbreaks and unsafe water in your district. Your phone controls whether they arrive.',
-          action: handleOpenNotificationSettings,
+          label: notificationLabel,
+          caption: notificationReach,
+          // The caption IS the content of this row, so it must be spoken.
+          a11yLabel: `${notificationLabel}. ${notificationReach}`,
+          action: canOpenOsSettings ? handleOpenNotificationSettings : undefined,
+          a11yHint: canOpenOsSettings
+            ? t('notifications.a11yHint', {
+                defaultValue: "Leaves Health Drop and opens your phone's settings",
+              })
+            : undefined,
+          // Not a chevron: every other chevron on this screen opens an in-app
+          // modal, this one exits the application.
+          trailingIcon: 'open-outline',
         },
       ],
     },
@@ -774,52 +878,93 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               !isDark && styles.cardShadow,
             ]}
           >
-            {section.items.map((item, itemIndex) => (
-              <Pressable
-                key={itemIndex}
-                style={({ pressed }) => [
-                  styles.menuItem,
-                  pressed && { backgroundColor: colors.cardHover },
-                  itemIndex < section.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight },
-                ]}
-                onPress={item.action}
-                accessibilityRole={item.hasSwitch ? 'switch' : 'button'}
-                accessibilityLabel={item.label}
-                accessibilityState={item.hasSwitch ? { checked: item.switchValue } : undefined}
-              >
-                <View style={styles.menuItemLeft}>
-                  <Ionicons name={item.iconName} size={22} color={colors.textSecondary} />
-                  <View style={styles.menuTextWrap}>
-                    <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
-                    {item.caption ? (
-                      <Text style={[styles.menuCaption, { color: colors.textTertiary }]}>
-                        {item.caption}
-                      </Text>
-                    ) : null}
+            {section.items.map((item, itemIndex) => {
+              const interactive = typeof item.action === 'function';
+              const divider =
+                itemIndex < section.items.length - 1
+                  ? { borderBottomWidth: 1, borderBottomColor: colors.borderLight }
+                  : null;
+              const body = (
+                <>
+                  <View style={styles.menuItemLeft}>
+                    <Ionicons name={item.iconName} size={22} color={colors.textSecondary} />
+                    <View style={styles.menuTextWrap}>
+                      <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+                      {item.caption ? (
+                        <Text style={[styles.menuCaption, { color: colors.textTertiary }]}>
+                          {item.caption}
+                        </Text>
+                      ) : null}
+                    </View>
                   </View>
-                </View>
-                {item.hasSwitch ? (
-                  <Switch
-                    value={item.switchValue}
-                    onValueChange={item.action}
-                    trackColor={{ false: colors.surfaceVariant, true: colors.primary }}
-                    thumbColor={colors.card}
-                    ios_backgroundColor={colors.surfaceVariant}
-                  />
-                ) : (
-                  <View style={styles.menuItemRight}>
-                    {item.valueLabel ? (
-                      <Text style={[styles.menuValue, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                        {item.valueLabel}
-                      </Text>
-                    ) : null}
-                    <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                  {item.hasSwitch ? (
+                    <Switch
+                      value={item.switchValue}
+                      onValueChange={item.action}
+                      trackColor={{ false: colors.surfaceVariant, true: colors.primary }}
+                      thumbColor={colors.card}
+                      ios_backgroundColor={colors.surfaceVariant}
+                    />
+                  ) : item.valueLabel || interactive ? (
+                    <View style={styles.menuItemRight}>
+                      {item.valueLabel ? (
+                        <Text style={[styles.menuValue, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                          {item.valueLabel}
+                        </Text>
+                      ) : null}
+                      {interactive ? (
+                        <Ionicons
+                          name={item.trailingIcon ?? 'chevron-forward'}
+                          size={20}
+                          color={colors.textTertiary}
+                        />
+                      ) : null}
+                    </View>
+                  ) : null}
+                </>
+              );
+
+              // No action on this platform → not a button. Rendering it as a
+              // Pressable would announce an affordance that cannot do anything
+              // and would draw a chevron that leads nowhere.
+              if (!interactive) {
+                return (
+                  <View key={itemIndex} style={[styles.menuItem, divider]}>
+                    {body}
                   </View>
-                )}
-              </Pressable>
-            ))}
+                );
+              }
+
+              return (
+                <Pressable
+                  key={itemIndex}
+                  style={({ pressed }) => [
+                    styles.menuItem,
+                    pressed && { backgroundColor: colors.cardHover },
+                    divider,
+                  ]}
+                  onPress={item.action}
+                  accessibilityRole={item.hasSwitch ? 'switch' : 'button'}
+                  accessibilityLabel={item.a11yLabel ?? item.label}
+                  accessibilityHint={item.a11yHint}
+                  accessibilityState={item.hasSwitch ? { checked: item.switchValue } : undefined}
+                >
+                  {body}
+                </Pressable>
+              );
+            })}
           </View>
-          {section.error ? <InlineError message={section.error} /> : null}
+          {/* Guidance about who controls delivery — secondary ink, never danger */}
+          {section.note ? (
+            <View style={styles.sectionNoteRow}>
+              <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+              <Text style={[styles.sectionNoteText, { color: colors.textSecondary }]}>
+                {section.note}
+              </Text>
+            </View>
+          ) : null}
+          {/* Mounted always so the live region pre-exists the message */}
+          <InlineError message={section.error ?? ''} />
         </View>
       ))}
 
@@ -1657,6 +1802,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     fontSize: 15,
+  },
+  /* Secondary-ink guidance under a card — the same recipe as the GPS message
+     row, deliberately NOT the inline-error recipe. Guidance is not a failure,
+     so it never borrows danger ink or the alert glyph. */
+  sectionNoteRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  sectionNoteText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   inlineErrorRow: {
     flexDirection: 'row',

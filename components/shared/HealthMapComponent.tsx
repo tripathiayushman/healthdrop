@@ -18,8 +18,12 @@
 // - Honest EMPTY states (BRK-05): an empty alert list only earns
 //   the green "all clear" when the server really has no active
 //   alert. A district filter that emptied a non-empty result, a
-//   profile with no district, and a check that never completed
-//   each say so in their own words.
+//   profile with no district, a list that failed to load rows the
+//   server does have for this profile, and a check that never
+//   completed each say so in their own words. The check re-runs
+//   the caller's own scope predicate (not a bare head-count), is
+//   skipped while known-offline, and is abort-timeout capped so
+//   the skeleton always resolves.
 // =====================================================
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -29,6 +33,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
+import { useTranslation } from 'react-i18next';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { useTheme, Theme } from '../../lib/ThemeContext';
@@ -725,6 +730,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
   profile, alerts, userLat, userLon, onRequestLocate, locating, isExpanded, onOpenReport,
 }) => {
   const { colors, isDark } = useTheme();
+  const { t } = useTranslation();
   const { width: windowWidth } = useWindowDimensions();
   const isNarrow = windowWidth < STACK_BREAKPOINT;
   const netInfo = useNetInfo();
@@ -923,15 +929,32 @@ const MapPanel: React.FC<MapPanelProps> = ({
   const alertScopeNotice = React.useMemo(() => {
     if (activeLayer !== 'alerts' || offline || activeLayerError) return null;
     if (districtNotSet) {
-      return "Your district isn't set, so no alert can be matched to you. Add it in Profile — an empty map here is not an all-clear.";
+      return t('alertScope.mapNoDistrict', {
+        defaultValue: "Your district isn't set, so no alert can be matched to you. Add it in Profile — an empty map here is not an all-clear.",
+      });
     }
     if (alertsHiddenByScope > 0) {
       const n = alertsHiddenByScope;
-      const where = profile.district ? `${profile.district} and ${ALERT_RADIUS_KM} km around it` : `your area`;
-      return `${n} active alert${n === 1 ? ' is' : 's are'} not on this map — ${n === 1 ? 'it is' : 'they are'} outside ${where}.`;
+      const where = profile.district
+        ? t('alertScope.whereDistrict', {
+            defaultValue: '{{district}} and {{km}} km around it',
+            district: profile.district,
+            km: ALERT_RADIUS_KM,
+          })
+        : t('alertScope.whereUnknown', { defaultValue: 'your area' });
+      return n === 1
+        ? t('alertScope.mapHiddenOne', {
+            defaultValue: '1 active alert is not on this map — it is outside {{where}}.',
+            where,
+          })
+        : t('alertScope.mapHiddenMany', {
+            defaultValue: '{{n}} active alerts are not on this map — they are outside {{where}}.',
+            n,
+            where,
+          });
     }
     return null;
-  }, [activeLayer, offline, activeLayerError, districtNotSet, alertsHiddenByScope, profile.district]);
+  }, [activeLayer, offline, activeLayerError, districtNotSet, alertsHiddenByScope, profile.district, t]);
 
   const showReportOverlay = !offline && !activeLayerError && !tilesFailed && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
   const showAlertOverlay = !offline && !activeLayerError && !tilesFailed && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
@@ -1304,21 +1327,45 @@ const mp = StyleSheet.create({
 // The `alerts` we are handed have already been through
 // filterAlertsForProfile on the caller's side: an exact district-string match,
 // widened to ALERT_RADIUS_KM only for the pairs that both appear in a 105-entry
-// hardcoded gazetteer. So an empty array means one of four different things,
+// hardcoded gazetteer. So an empty array means one of several different things,
 // and exactly one of them deserves the green tick. Telling a health worker her
 // district is clear when three alerts are live is the most dangerous lie this
 // app can tell, so when the list is empty we go and ask the server whether it
 // really is.
+//
+// A head-count of "any active alerts at all?" is NOT enough to earn the
+// specific sentence "all N are outside your area": an empty list can also mean
+// the caller's own fetch failed (MapTabScreen renders <MapAndAlertsSection
+// alerts={[]}> beside its ErrorCard when the alert query errors), and then
+// "none are near you" is a worse lie than the vague one it replaced. So the
+// probe re-runs THE SAME predicate the caller's filter uses — it fetches the
+// rows and applies filterAlertsForProfile itself:
+//   in-scope rows exist but the list is empty  → the LIST failed, say so
+//   rows exist and none are in scope           → genuinely scoped out
+//   no rows at all                             → genuinely clear
+const PROBE_LIMIT = 200;
+const PROBE_TIMEOUT_MS = 8000;
+
 type AlertsEmptyReason =
   | { kind: 'probing' }                        // we don't know yet — skeleton, never a tick
   | { kind: 'clear' }                          // server has none: the calm state is TRUE
-  | { kind: 'scoped-out'; hidden: number }     // rows exist, the district filter ate them
+  // Rows exist and the probe proved none of them are in scope. `checked` is how
+  // many rows were actually examined and `total` the server's exact count — when
+  // they differ we may not claim "ALL n are outside", only that the ones we read
+  // were. (Keeps the sentence true if a caller ever adds a limit or predicate.)
+  | { kind: 'scoped-out'; total: number; checked: number }
+  // The server HAS alerts matching this profile's scope, and they are not in the
+  // list we were handed — the list, not the world, is empty.
+  | { kind: 'missing'; inScope: number }
   | { kind: 'no-district' }                    // profile has no district: nothing can match
-  | { kind: 'unconfirmed'; offline: boolean }; // the check failed — say so, offer retry
+  | { kind: 'unconfirmed'; cause: 'offline' | 'timeout' | 'error' }; // check failed — retry
 
-/** Server-side truth for "are there any active alerts at all?".
- *  Runs only while the list is empty, and counts with head:true — no rows,
- *  no payload; the cost of honesty here is one HEAD request. */
+interface ProbeRow { district?: string | null; state?: string | null; location_name?: string | null }
+
+/** Server-side truth for "is this list empty because the world is quiet?".
+ *  Runs only while the list is empty; skipped entirely when we already know we
+ *  are offline, and hard-capped by PROBE_TIMEOUT_MS so the skeleton always
+ *  resolves into one of the sanctioned states. */
 function useAlertsEmptyReason(profile: Profile, isEmpty: boolean, offline: boolean) {
   const [reason, setReason] = useState<AlertsEmptyReason>({ kind: 'probing' });
   const [retryToken, setRetryToken] = useState(0);
@@ -1327,35 +1374,60 @@ function useAlertsEmptyReason(profile: Profile, isEmpty: boolean, offline: boole
   // in green, that all is well forever.
   const districtNotSet =
     isRadiusScopedRole(profile.role) && computeCompleteness(profile).missing.includes('district');
+  const { role, district, state } = profile;
 
   useEffect(() => {
     if (!isEmpty) return;
     if (districtNotSet) { setReason({ kind: 'no-district' }); return; }
+    // Known-offline: opening a socket that cannot connect just parks the
+    // skeleton until the OS TCP timeout. Answer immediately, and re-run by
+    // itself when `offline` flips back to false.
+    if (offline) { setReason({ kind: 'unconfirmed', cause: 'offline' }); return; }
 
     let cancelled = false;
+    let timedOut = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, PROBE_TIMEOUT_MS);
     setReason({ kind: 'probing' });
+
     (async () => {
       try {
-        const { count, error } = await supabase
+        const { data, count, error } = await supabase
           .from('health_alerts')
-          .select('id', { count: 'exact', head: true })
+          .select('district,state,location_name', { count: 'exact' })
           .eq('status', 'active')
-          .eq('approval_status', 'approved');
+          .eq('approval_status', 'approved')
+          .order('created_at', { ascending: false })
+          .limit(PROBE_LIMIT)
+          .abortSignal(controller.signal);
         if (cancelled) return;
-        if (error || count === null) {
+        if (error || !data) {
           console.error('Alert all-clear check failed:', error);
-          setReason({ kind: 'unconfirmed', offline });
+          setReason({ kind: 'unconfirmed', cause: timedOut ? 'timeout' : 'error' });
           return;
         }
-        setReason(count > 0 ? { kind: 'scoped-out', hidden: count } : { kind: 'clear' });
+        const rows = data as unknown as ProbeRow[];
+        const total = typeof count === 'number' ? count : rows.length;
+        if (total === 0) { setReason({ kind: 'clear' }); return; }
+        // Counted rows we were not given: we cannot judge scope on zero
+        // evidence, and guessing is what this whole item is about.
+        if (rows.length === 0) { setReason({ kind: 'unconfirmed', cause: 'error' }); return; }
+        // Same predicate the caller filtered with. If it finds anything, the
+        // caller's list should have contained it and does not.
+        const inScope = filterAlertsForProfile(rows, { role, district, state }).length;
+        if (inScope > 0) { setReason({ kind: 'missing', inScope }); return; }
+        setReason({ kind: 'scoped-out', total, checked: rows.length });
       } catch (e) {
         if (cancelled) return;
         console.error('Alert all-clear check failed:', e);
-        setReason({ kind: 'unconfirmed', offline });
+        setReason({ kind: 'unconfirmed', cause: timedOut ? 'timeout' : 'error' });
+      } finally {
+        clearTimeout(timer);
       }
     })();
-    return () => { cancelled = true; };
-  }, [isEmpty, districtNotSet, offline, retryToken]);
+
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+  }, [isEmpty, districtNotSet, offline, retryToken, role, district, state]);
 
   const retry = useCallback(() => setRetryToken(n => n + 1), []);
   return { reason, retry };
@@ -1387,6 +1459,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
   emptySubtitle = 'All systems are clear.',
 }) => {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   // Layout is decided by WINDOW WIDTH, never by platform: a 412dp phone and a
   // 412px browser window get the same single column, a tablet gets two.
   const { width: windowWidth } = useWindowDimensions();
@@ -1490,14 +1563,37 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
     }
   }, [showLocationAlert]);
 
-  // The four legitimate faces of an empty alert list. Only 'clear' has earned
-  // the green tick; every other branch names what actually happened, because a
+  const linkColor = isDark ? colors.primary : colors.primaryDark;
+
+  /** "Open the alert list" — deliberately NOT "see the full list": for a
+   *  radius-scoped role that screen scopes too, and only offers the wider view
+   *  behind an explicit tap. The label may promise no more than that. */
+  const openListAction = (a11yLabel: string, borderColor: string) => onViewAllAlerts ? (
+    <TouchableOpacity
+      style={[s.emptyAction, { borderColor, backgroundColor: colors.surface }]}
+      onPress={onViewAllAlerts}
+      accessibilityRole="button"
+      accessibilityLabel={a11yLabel}
+    >
+      <Ionicons name="list-outline" size={16} color={linkColor} />
+      <Text style={[s.emptyActionText, { color: linkColor }]} maxFontSizeMultiplier={1.3}>
+        {t('alertScope.openListAction', { defaultValue: 'Open the alert list' })}
+      </Text>
+    </TouchableOpacity>
+  ) : null;
+
+  // The legitimate faces of an empty alert list. Only 'clear' has earned the
+  // green tick; every other branch names what actually happened, because a
   // worker who reads "District is Clear" will stop looking.
   const renderEmptyAlerts = () => {
     switch (emptyReason.kind) {
       case 'probing':
         return (
-          <View style={s.emptyProbing} accessible accessibilityLabel="Checking whether any alerts are active">
+          <View
+            style={s.emptyProbing}
+            accessible
+            accessibilityLabel={t('alertScope.probingA11y', { defaultValue: 'Checking whether any alerts are active' })}
+          >
             <SkeletonBlock height={72} radius={12} />
             <SkeletonBlock height={72} radius={12} style={s.emptyProbingGap} />
           </View>
@@ -1509,69 +1605,135 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             <EmptyState
               icon="location-outline"
               color={colors.warning}
-              title="Your district isn't set"
-              subtitle="Alerts are matched to your district, so none can reach you yet. This is not an all-clear — open Profile and set your district."
+              title={t('alertScope.noDistrictTitle', { defaultValue: "Your district isn't set" })}
+              subtitle={t('alertScope.noDistrictBody', {
+                defaultValue: 'Alerts are matched to your district, so none can reach you yet. This is not an all-clear — open Profile and set your district.',
+              })}
             />
           </View>
         );
 
       case 'scoped-out': {
-        const n = emptyReason.hidden;
-        const plural = n === 1 ? '' : 's';
-        const scoped = isRadiusScopedRole(profile.role);
+        const n = emptyReason.total;
+        // The probe only read `checked` of `total` rows. If those differ we
+        // cannot claim ALL of them are elsewhere — only the ones we read.
+        const partial = emptyReason.checked < n;
+        const where = profile.district
+          ? t('alertScope.whereDistrict', {
+              defaultValue: '{{district}} and {{km}} km around it',
+              district: profile.district,
+              km: ALERT_RADIUS_KM,
+            })
+          : t('alertScope.whereUnknown', { defaultValue: 'your area' });
         return (
           <View accessibilityLiveRegion="polite">
             <EmptyState
               icon="alert-circle-outline"
               color={colors.warning}
-              title={scoped
-                ? `${n} active alert${plural} — none in your area`
-                : `${n} active alert${plural} not shown here`}
-              subtitle={scoped
-                ? `This list only covers ${profile.district} and ${ALERT_RADIUS_KM} km around it. ${n === 1 ? 'The one active alert is' : `All ${n} active alerts are`} outside that, so this is not an all-clear.`
-                : `The server has ${n} active alert${plural}, but none of them reached this list. This is not an all-clear.`}
+              title={n === 1
+                ? t('alertScope.scopedOutTitleOne', { defaultValue: '1 active alert — not in your area' })
+                : t('alertScope.scopedOutTitleMany', { defaultValue: '{{n}} active alerts — none in your area', n })}
+              subtitle={partial
+                ? t('alertScope.scopedOutBodyPartial', {
+                    defaultValue: 'This list only covers {{where}}. None of the {{checked}} most recent of {{n}} active alerts are inside it, so this is not an all-clear.',
+                    where, n, checked: emptyReason.checked,
+                  })
+                : n === 1
+                  ? t('alertScope.scopedOutBodyOne', {
+                      defaultValue: 'This list only covers {{where}}. The one active alert is outside that, so this is not an all-clear.',
+                      where,
+                    })
+                  : t('alertScope.scopedOutBodyMany', {
+                      defaultValue: 'This list only covers {{where}}. All {{n}} active alerts are outside that, so this is not an all-clear.',
+                      where, n,
+                    })}
             />
-            {onViewAllAlerts && (
-              <TouchableOpacity
-                style={[s.emptyAction, { borderColor: colors.warning, backgroundColor: colors.surface }]}
-                onPress={onViewAllAlerts}
-                accessibilityRole="button"
-                accessibilityLabel={`See all ${n} active alert${plural}`}
-              >
-                <Ionicons name="list-outline" size={16} color={isDark ? colors.primary : colors.primaryDark} />
-                <Text style={[s.emptyActionText, { color: isDark ? colors.primary : colors.primaryDark }]} maxFontSizeMultiplier={1.3}>
-                  See the full alert list
-                </Text>
-              </TouchableOpacity>
+            {openListAction(
+              n === 1
+                ? t('alertScope.openListA11yOne', { defaultValue: 'Open the alert list, where you can show the 1 alert outside your area' })
+                : t('alertScope.openListA11yMany', { defaultValue: 'Open the alert list, where you can show the {{n}} alerts outside your area', n }),
+              colors.warning,
             )}
           </View>
         );
       }
 
-      case 'unconfirmed':
+      case 'missing': {
+        // The server has alerts that DO match this profile's scope — so the
+        // empty list in front of the user is a load failure, not a quiet world.
+        const n = emptyReason.inScope;
         return (
           <View accessibilityLiveRegion="polite">
             <EmptyState
-              icon={emptyReason.offline ? 'cloud-offline-outline' : 'alert-circle-outline'}
+              icon="alert-circle-outline"
               color={colors.danger}
-              title={emptyReason.offline
-                ? "You're offline — alerts not confirmed"
-                : "Couldn't check for active alerts"}
-              subtitle="Nothing is listed, but we could not reach the server to confirm that. Do not read this as an all-clear."
+              title={n === 1
+                ? t('alertScope.missingTitleOne', { defaultValue: '1 alert in your area is not shown here' })
+                : t('alertScope.missingTitleMany', { defaultValue: '{{n}} alerts in your area are not shown here', n })}
+              subtitle={n === 1
+                ? t('alertScope.missingBodyOne', {
+                    defaultValue: 'The server has 1 active alert that matches your area, but this list did not load it. This is not an all-clear.',
+                  })
+                : t('alertScope.missingBodyMany', {
+                    defaultValue: 'The server has {{n}} active alerts that match your area, but this list did not load them. This is not an all-clear.',
+                    n,
+                  })}
+            />
+            {openListAction(
+              n === 1
+                ? t('alertScope.openListA11yMissingOne', { defaultValue: 'Open the alert list to see the 1 alert in your area that is missing here' })
+                : t('alertScope.openListA11yMissingMany', { defaultValue: 'Open the alert list to see the {{n}} alerts in your area that are missing here', n }),
+              colors.danger,
+            )}
+            <TouchableOpacity
+              style={[s.emptyAction, { borderColor: colors.danger, backgroundColor: colors.surface }]}
+              onPress={retryEmptyReason}
+              accessibilityRole="button"
+              accessibilityLabel={t('alertScope.checkAgainA11y', { defaultValue: 'Check again for active alerts' })}
+            >
+              <Ionicons name="refresh-outline" size={16} color={colors.danger} />
+              <Text style={[s.emptyActionText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+                {t('alertScope.checkAgain', { defaultValue: 'Check again' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      case 'unconfirmed': {
+        const offlineCause = emptyReason.cause === 'offline';
+        return (
+          <View accessibilityLiveRegion="polite">
+            <EmptyState
+              icon={offlineCause ? 'cloud-offline-outline' : 'alert-circle-outline'}
+              color={colors.danger}
+              title={offlineCause
+                ? t('alertScope.unconfirmedOfflineTitle', { defaultValue: "You're offline — alerts not confirmed" })
+                : emptyReason.cause === 'timeout'
+                  ? t('alertScope.unconfirmedTimeoutTitle', { defaultValue: 'The alert check timed out' })
+                  : t('alertScope.unconfirmedErrorTitle', { defaultValue: "Couldn't check for active alerts" })}
+              subtitle={offlineCause
+                ? t('alertScope.unconfirmedOfflineBody', {
+                    defaultValue: 'Nothing is listed, but we could not reach the server to confirm that. This will check itself again when you are back online — do not read it as an all-clear.',
+                  })
+                : t('alertScope.unconfirmedBody', {
+                    defaultValue: 'Nothing is listed, but we could not reach the server to confirm that. Do not read this as an all-clear.',
+                  })}
             />
             <TouchableOpacity
               style={[s.emptyAction, { borderColor: colors.danger, backgroundColor: colors.surface }]}
               onPress={retryEmptyReason}
               accessibilityRole="button"
-              accessibilityLabel="Check again for active alerts"
+              accessibilityLabel={t('alertScope.checkAgainA11y', { defaultValue: 'Check again for active alerts' })}
             >
               <Ionicons name="refresh-outline" size={16} color={colors.danger} />
               <Text style={[s.emptyActionText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
-                Check again
+                {t('alertScope.checkAgain', { defaultValue: 'Check again' })}
               </Text>
             </TouchableOpacity>
           </View>
         );
+      }
 
       case 'clear':
       default:
@@ -1707,9 +1869,16 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
         ]}>
           <View style={s.panelHeader}>
             <Ionicons name="warning-outline" size={14} color={colors.textSecondary} />
+            {/* The count is a fact about the list, so it is only printed when
+                the list has rows. A bare "· 0" beside a body that says "4
+                active alerts — none in your area" is the same silent zero this
+                item exists to remove: the header is scanned first and would
+                contradict the sentence underneath it. */}
             <Text style={[s.panelTitle, { color: colors.textSecondary }]} numberOfLines={1}>
               {alertSectionTitle.toUpperCase()}
-              <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${alerts.length}`}</Text>
+              {alerts.length > 0 && (
+                <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${alerts.length}`}</Text>
+              )}
             </Text>
           </View>
           <ScrollView

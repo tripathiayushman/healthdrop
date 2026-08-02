@@ -9,6 +9,10 @@
 // Fully translated (EN/हिन्दी) with the language toggle
 // in the header band — the first screen a Hindi speaker
 // sees must not require English to get past (INC-06).
+// Everything held in state is stored as a translation KEY
+// (see MsgSpec) and resolved at render, so the toggle also
+// re-languages errors that are already on screen. The one
+// exception is raw SERVER text, which is shown verbatim.
 // =====================================================
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -122,64 +126,104 @@ const WEB_NO_OUTLINE = Platform.OS === 'web' ? ({ outlineStyle: 'none', outline:
 // Same mechanism as the ProfileScreen picker, deliberately: setAppLanguage()
 // switches i18next and persists 'healthdrop:language', which survives
 // sign-out, so the choice made here is still in force at the next cold start.
-// There is no profile row to write to yet; the sign-up path below sends the
-// choice to profiles.preferred_language the moment one exists.
 const LanguageToggle: React.FC = () => {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { t, i18n } = useTranslation();
   const current: AppLanguage = i18n.language?.startsWith('hi') ? 'hi' : 'en';
+  // Fourth state for this control: the switch can fail, and a tap that does
+  // nothing at all is indistinguishable from a dead button. Previously the
+  // only output was console.warn.
+  const [switchFailed, setSwitchFailed] = useState(false);
 
   const pick = (lang: AppLanguage) => {
     if (lang === current) return;
-    setAppLanguage(lang).catch(error => {
+    setSwitchFailed(false);
+    setAppLanguage(lang).catch(() => {
       // changeLanguage failed — the screen stays in the current language
-      // rather than half-switching. Storage failures are already swallowed
-      // inside setAppLanguage.
-      console.warn('Failed to apply app language:', error);
+      // rather than half-switching, and says so. Storage failures are already
+      // swallowed inside setAppLanguage (the in-session switch still worked).
+      setSwitchFailed(true);
     });
   };
 
   return (
-    <View
-      style={[s.langWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}
-      accessibilityRole="radiogroup"
-      accessibilityLabel={t('auth.languageA11y')}
-    >
-      {LANGUAGE_CHOICES.map(opt => {
-        const active = current === opt.value;
-        return (
-          <Pressable
-            key={opt.value}
-            style={({ pressed }) => [
-              s.langBtn,
-              active
-                ? { backgroundColor: colors.primaryLight }
-                : pressed && { backgroundColor: colors.cardHover },
-            ]}
-            onPress={() => pick(opt.value)}
-            accessibilityRole="radio"
-            accessibilityState={{ checked: active }}
-            accessibilityLabel={opt.a11y}
-          >
-            <Text
-              style={[
-                s.langTxt,
-                {
-                  color: active ? (isDark ? colors.primary : colors.primaryDark) : colors.textSecondary,
-                  fontWeight: active ? '700' : '600',
-                },
+    <View style={s.langCol}>
+      <View
+        style={[s.langWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        accessibilityRole="radiogroup"
+        accessibilityLabel={t('auth.languageA11y')}
+      >
+        {LANGUAGE_CHOICES.map(opt => {
+          const active = current === opt.value;
+          return (
+            <Pressable
+              key={opt.value}
+              style={({ pressed }) => [
+                s.langBtn,
+                active
+                  ? { backgroundColor: colors.primaryLight }
+                  : pressed && { backgroundColor: colors.cardHover },
               ]}
-              maxFontSizeMultiplier={1.3}
-              numberOfLines={1}
+              onPress={() => pick(opt.value)}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: active }}
+              accessibilityLabel={opt.a11y}
             >
-              {opt.label}
-            </Text>
-          </Pressable>
-        );
-      })}
+              <Text
+                style={[
+                  s.langTxt,
+                  {
+                    // `primaryDark` is the STRONGER teal in both themes (it
+                    // darkens on paper, brightens on ink), so one token clears
+                    // the 7:1 body floor on the primaryLight fill in both:
+                    // light 7.30:1, dark 8.03:1. The old dark-mode branch used
+                    // `primary` on `primaryLight` = 6.92:1 — under the floor,
+                    // and at 14px/700 this is NOT WCAG "large text", so 4.5
+                    // does not apply. scripts/check-contrast.cjs now guards
+                    // this pair so it cannot drift back.
+                    color: active ? colors.primaryDark : colors.textSecondary,
+                    fontWeight: active ? '700' : '600',
+                  },
+                ]}
+                maxFontSizeMultiplier={1.3}
+                numberOfLines={1}
+              >
+                {opt.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {switchFailed && (
+        <View style={s.langErrRow} accessibilityLiveRegion="polite">
+          {/* Colour carries the meaning on the icon; the sentence itself stays
+              `text` because `danger` on the header band is 6.54:1 in light
+              mode — under the 7:1 body floor. */}
+          <Ionicons name="alert-circle" size={13} color={colors.danger} />
+          <Text style={[s.langErrTxt, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+            {t('auth.languageSwitchFailed')}
+          </Text>
+        </View>
+      )}
     </View>
   );
 };
+
+// ── Deferred message ──────────────────────────────────
+// Anything held in state is stored as a translation KEY (plus params), never
+// as a finished sentence. Resolving with t() at validation time froze the
+// message in whatever language was active then: tapping EN/हिन्दी re-renders
+// every live t() call but cannot touch a string already sitting in state, so
+// the red field errors stayed English on a Hindi screen until the field was
+// edited or the form resubmitted — exactly the moment she is deciding whether
+// this app speaks her language. `{ text }` is the deliberate escape hatch for
+// raw SERVER strings, which have no key and are shown verbatim rather than
+// guessed at.
+type MsgSpec =
+  | { key: string; params?: Record<string, string | number> }
+  | { text: string };
+
+const msgKey = (key: string, params?: Record<string, string | number>): MsgSpec => ({ key, params });
 
 // ── Inline field error (spec: no Alert.alert for validation) ──
 const FieldError: React.FC<{ message?: string }> = ({ message }) => {
@@ -405,12 +449,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [showRPw2, setShowRPw2]     = useState(false);
   const [codeFocused, setCodeFocused] = useState(false);
   const [resendIn, setResendIn]     = useState(0);
-  const [resendNote, setResendNote] = useState('');
+  // A flag, not a sentence — the note re-renders in the current language.
+  const [resendSent, setResendSent] = useState(false);
   // Quiet success row after a completed reset, shown on the sign-in card
   const [pwChanged, setPwChanged]   = useState(false);
 
-  // Inline field-validation errors (spec: no alert modals for validation)
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  // Inline field-validation errors (spec: no alert modals for validation).
+  // Keys, not sentences — see MsgSpec above.
+  const [errors, setErrors] = useState<Record<string, MsgSpec>>({});
   const scrollRef = useRef<ScrollView>(null);
   // Field y-positions (relative to the card) for scroll-to-first-error
   const fieldYRef = useRef<Record<string, number>>({});
@@ -429,15 +475,20 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   // Message modal — server/system responses only, never field validation
   const [msgVisible, setMsgVisible]   = useState(false);
   const [msgType, setMsgType]         = useState<'error' | 'success'>('error');
-  const [msgTitle, setMsgTitle]       = useState('');
-  const [msgText, setMsgText]         = useState('');
+  const [msgTitle, setMsgTitle]       = useState<MsgSpec | null>(null);
+  const [msgText, setMsgText]         = useState<MsgSpec | null>(null);
   const [msgCallback, setMsgCallback] = useState<(() => void) | null>(null);
 
-  const showMsg = (type: 'error' | 'success', title: string, text: string, cb?: () => void) => {
+  const showMsg = (type: 'error' | 'success', title: MsgSpec, text: MsgSpec, cb?: () => void) => {
     setMsgType(type); setMsgTitle(title); setMsgText(text);
     setMsgCallback(() => cb ?? null); setMsgVisible(true);
   };
   const closeMsg = () => { setMsgVisible(false); msgCallback?.(); };
+
+  /** Resolve a stored message at RENDER time, so it follows the language toggle. */
+  const say = (m?: MsgSpec | null): string | undefined =>
+    m == null ? undefined : 'key' in m ? t(m.key, m.params) : m.text;
+
   const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
   const clearError = (key: string) => {
@@ -465,7 +516,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       } else {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          showMsg('error', t('auth.msgPermissionTitle'), t('auth.msgPermissionBody'));
+          showMsg('error', msgKey('auth.msgPermissionTitle'), msgKey('auth.msgPermissionBody'));
           return;
         }
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -475,7 +526,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
       const geo = await reverseGeocode(lat, lon);
       if (!geo || (!geo.district && !geo.state)) {
-        showMsg('error', t('auth.msgLocationUnavailableTitle'), t('auth.msgLocationUnavailableBody'));
+        showMsg('error', msgKey('auth.msgLocationUnavailableTitle'), msgKey('auth.msgLocationUnavailableBody'));
         return;
       }
 
@@ -488,14 +539,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       }
       if (geo.pincode) setPincode(geo.pincode);
     } catch {
-      showMsg('error', t('auth.msgLocationErrorTitle'), t('auth.msgLocationErrorBody'));
+      showMsg('error', msgKey('auth.msgLocationErrorTitle'), msgKey('auth.msgLocationErrorBody'));
     } finally {
       setFetchLoc(false);
     }
   };
 
   // ── Validation — inline errors, scroll to the FIRST errored field ──
-  const scrollToFirstError = (next: Record<string, string>, order: string[]) => {
+  const scrollToFirstError = (next: Record<string, MsgSpec>, order: string[]) => {
     const first = order.find(k => next[k]);
     const fieldY = first != null ? fieldYRef.current[first] : undefined;
     const y = fieldY != null ? Math.max(0, cardYRef.current + fieldY - spacing.md) : 0;
@@ -503,16 +554,16 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   };
 
   const validate = (): boolean => {
-    const next: Record<string, string> = {};
-    if (!email.trim()) next.email = t('auth.errEmailRequired');
-    else if (!isValidEmail(email)) next.email = t('auth.errEmailInvalid');
-    if (!password) next.password = t('auth.errPasswordRequired');
+    const next: Record<string, MsgSpec> = {};
+    if (!email.trim()) next.email = msgKey('auth.errEmailRequired');
+    else if (!isValidEmail(email)) next.email = msgKey('auth.errEmailInvalid');
+    if (!password) next.password = msgKey('auth.errPasswordRequired');
     if (!isLogin) {
-      if (!fullName.trim()) next.fullName = t('auth.errNameRequired');
-      if (password && password.length < 8) next.password = t('auth.errPasswordShort');
-      if (password && confirmPw !== password) next.confirmPw = t('auth.errPasswordMismatch');
-      if (!district.trim()) next.district = t('auth.errDistrictRequired');
-      if (!userState) next.state = t('auth.errStateRequired');
+      if (!fullName.trim()) next.fullName = msgKey('auth.errNameRequired');
+      if (password && password.length < 8) next.password = msgKey('auth.errPasswordShort');
+      if (password && confirmPw !== password) next.confirmPw = msgKey('auth.errPasswordMismatch');
+      if (!district.trim()) next.district = msgKey('auth.errDistrictRequired');
+      if (!userState) next.state = msgKey('auth.errStateRequired');
     }
     setErrors(next);
     if (Object.keys(next).length > 0) {
@@ -531,7 +582,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const resetRecoveryState = () => {
     setRCode(''); setRPw(''); setRPw2('');
     setShowRPw(false); setShowRPw2(false);
-    setResendIn(0); setResendNote('');
+    setResendIn(0); setResendSent(false);
     setErrors({});
   };
 
@@ -549,24 +600,25 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   };
 
   const handleSendCode = async (isResend: boolean) => {
-    if (!rEmail.trim()) { setErrors({ rEmail: t('auth.errEmailRequired') }); return; }
-    if (!isValidEmail(rEmail.trim())) { setErrors({ rEmail: t('auth.errEmailInvalid') }); return; }
+    if (!rEmail.trim()) { setErrors({ rEmail: msgKey('auth.errEmailRequired') }); return; }
+    if (!isValidEmail(rEmail.trim())) { setErrors({ rEmail: msgKey('auth.errEmailInvalid') }); return; }
     setLoading(true);
     const res = await requestResetCode(rEmail);
     setLoading(false);
     if (!res.ok) {
       // Same surface the user is looking at: email field on step 1,
       // under the code input on a resend.
-      setErrors(isResend ? { rCode: res.message } : { rEmail: res.message });
+      const failure = msgKey(res.messageKey);
+      setErrors(isResend ? { rCode: failure } : { rEmail: failure });
       return;
     }
     setErrors({});
     setResendIn(60);
     if (isResend) {
-      setResendNote(t('auth.resendSent'));
+      setResendSent(true);
     } else {
       setRCode('');
-      setResendNote('');
+      setResendSent(false);
       setResetStep('code');
     }
   };
@@ -580,29 +632,29 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     if (!new RegExp(`^\\d{${OTP_MIN_LENGTH},${OTP_MAX_LENGTH}}$`).test(code)) {
       // Accept 6..10, but name the length the server actually issues — being
       // told "6–10 digits" when every code is 6 reads like the app is unsure.
-      setErrors({ rCode: t('auth.errCodeFormat', { n: OTP_EXPECTED_LENGTH }) });
+      setErrors({ rCode: msgKey('auth.errCodeFormat', { n: OTP_EXPECTED_LENGTH }) });
       return;
     }
     setLoading(true);
     const res = await verifyResetCode(rEmail, code);
     setLoading(false);
-    if (!res.ok) { setErrors({ rCode: res.message }); return; }
+    if (!res.ok) { setErrors({ rCode: msgKey(res.messageKey) }); return; }
     setErrors({});
-    setResendNote('');
+    setResendSent(false);
     setResetStep('password');
   };
 
   const handleSetNewPassword = async () => {
-    const next: Record<string, string> = {};
-    if (!rPw) next.rPw = t('auth.errPasswordRequired');
-    else if (rPw.length < 8) next.rPw = t('auth.errPasswordShort');
-    if (rPw && rPw2 !== rPw) next.rPw2 = t('auth.errPasswordMismatch');
+    const next: Record<string, MsgSpec> = {};
+    if (!rPw) next.rPw = msgKey('auth.errPasswordRequired');
+    else if (rPw.length < 8) next.rPw = msgKey('auth.errPasswordShort');
+    if (rPw && rPw2 !== rPw) next.rPw2 = msgKey('auth.errPasswordMismatch');
     setErrors(next);
     if (Object.keys(next).length > 0) return;
     setLoading(true);
     const res = await setNewPassword(rPw);
     setLoading(false);
-    if (!res.ok) { setErrors({ rPw: res.message }); return; }
+    if (!res.ok) { setErrors({ rPw: msgKey(res.messageKey) }); return; }
     // The service signed the temporary recovery session out — the normal
     // sign-in flow now completes with the new password.
     setEmail(rEmail.trim());
@@ -625,12 +677,12 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         if (error) {
           setLoading(false);
           if (error.message.includes('Invalid login credentials'))
-            showMsg('error', t('auth.msgLoginFailedTitle'), t('auth.msgLoginFailedBody'));
+            showMsg('error', msgKey('auth.msgLoginFailedTitle'), msgKey('auth.msgLoginFailedBody'));
           else if (error.message.includes('Email not confirmed'))
-            showMsg('error', t('auth.msgEmailUnverifiedTitle'), t('auth.msgEmailUnverifiedBody'));
+            showMsg('error', msgKey('auth.msgEmailUnverifiedTitle'), msgKey('auth.msgEmailUnverifiedBody'));
           // Unrecognised server text is shown verbatim, in English — a
           // translated guess about an unknown failure would be a lie.
-          else showMsg('error', t('auth.msgLoginErrorTitle'), error.message);
+          else showMsg('error', msgKey('auth.msgLoginErrorTitle'), { text: error.message });
           return;
         }
         if (data?.session) {
@@ -648,26 +700,37 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           } catch { /* fail open */ }
           setLoading(false);
           if (deactivated) {
-            showMsg('error', t('auth.msgDeactivatedTitle'), t('auth.msgDeactivatedBody'));
+            showMsg('error', msgKey('auth.msgDeactivatedTitle'), msgKey('auth.msgDeactivatedBody'));
             return;
           }
           onAuthSuccess();
         } else {
           setLoading(false);
-          showMsg('error', t('auth.msgLoginFailedTitle'), t('auth.msgSignInUnavailableBody'));
+          showMsg('error', msgKey('auth.msgLoginFailedTitle'), msgKey('auth.msgSignInUnavailableBody'));
         }
       } else {
         const { data: sd, error: se } = await supabase.auth.signUp({
           email, password,
           options: { data: { full_name: fullName, role, district, state: userState, phone, pincode } },
         });
-        if (se) { setLoading(false); showMsg('error', t('auth.msgSignUpErrorTitle'), se.message); return; }
+        if (se) { setLoading(false); showMsg('error', msgKey('auth.msgSignUpErrorTitle'), { text: se.message }); return; }
         if (sd?.user) {
           if (sd.session) {
             // Surface the profile write honestly — never pretend success.
-            // preferred_language carries the choice made on THIS screen to the
-            // server, so push notifications reach her in the language she
-            // signed up in without a detour through Profile.
+            //
+            // preferred_language records the choice made on THIS screen so the
+            // account starts out matching the toggle instead of the 'en'
+            // column default, and so Profile opens already showing हिन्दी.
+            // That is the WHOLE of what it does today: verified 2026-08-02 on
+            // ekfdimdlxifatsaubvbh, NOTHING server-side reads this column —
+            // 0 functions/procedures, 0 views and 0 RLS policies mention it,
+            // and none of the four deployed edge functions
+            // (push-notifications, openrouter-proxy, delete-account,
+            // bright-action) do either. push-notifications takes its title and
+            // body straight from the caller. An earlier version of this comment
+            // claimed pushes would "reach her in the language she signed up
+            // in"; they will not until something actually reads the column, so
+            // the claim is gone rather than left here as decoration.
             const { error: profileError } = await supabase.from('profiles').upsert({
               id: sd.user.id, email, full_name: fullName, role,
               phone: phone || null, district: district || null,
@@ -678,27 +741,27 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               setLoading(false);
               showMsg(
                 'error',
-                t('auth.msgProfileNotSavedTitle'),
-                t('auth.msgProfileNotSavedBody', { reason: profileError.message }),
+                msgKey('auth.msgProfileNotSavedTitle'),
+                msgKey('auth.msgProfileNotSavedBody', { reason: profileError.message }),
                 () => setIsLogin(true)
               );
               return;
             }
             await new Promise(r => setTimeout(r, 500));
             setLoading(false);
-            showMsg('success', t('auth.msgAccountCreatedTitle'), t('auth.msgAccountCreatedBody'), () => onAuthSuccess());
+            showMsg('success', msgKey('auth.msgAccountCreatedTitle'), msgKey('auth.msgAccountCreatedBody'), () => onAuthSuccess());
           } else {
             setLoading(false);
-            showMsg('success', t('auth.msgCheckEmailTitle'), t('auth.msgCheckEmailBody'), () => setIsLogin(true));
+            showMsg('success', msgKey('auth.msgCheckEmailTitle'), msgKey('auth.msgCheckEmailBody'), () => setIsLogin(true));
           }
         } else {
           setLoading(false);
-          showMsg('error', t('auth.msgSignUpErrorTitle'), t('auth.msgSignUpErrorBody'));
+          showMsg('error', msgKey('auth.msgSignUpErrorTitle'), msgKey('auth.msgSignUpErrorBody'));
         }
       }
     } catch {
       setLoading(false);
-      showMsg('error', t('auth.msgUnexpectedTitle'), t('auth.msgUnexpectedBody'));
+      showMsg('error', msgKey('auth.msgUnexpectedTitle'), msgKey('auth.msgUnexpectedBody'));
     }
   };
 
@@ -826,7 +889,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.emailLabel')} icon="at-outline" value={rEmail}
                   onChange={(txt) => { setREmail(txt); clearError('rEmail'); }}
                   placeholder={t('auth.emailPlaceholder')} keyboardType="email-address" autoComplete="email"
-                  error={errors.rEmail}
+                  error={say(errors.rEmail)}
                 />
               </>
 
@@ -864,13 +927,13 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                     onBlur={() => setCodeFocused(false)}
                     accessibilityLabel={t('auth.codeLabel')}
                   />
-                  <FieldError message={errors.rCode} />
+                  <FieldError message={say(errors.rCode)} />
                 </View>
-                {!!resendNote && (
+                {resendSent && (
                   <View style={s.errorRow}>
                     <Ionicons name="checkmark-circle" size={14} color={colors.success} />
                     <Text style={[s.errorText, { color: colors.success }]} maxFontSizeMultiplier={1.3}>
-                      {resendNote}
+                      {t('auth.resendSent')}
                     </Text>
                   </View>
                 )}
@@ -904,7 +967,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.newPasswordLabel')} icon="lock-closed-outline" value={rPw}
                   onChange={(txt) => { setRPw(txt); clearError('rPw'); }}
                   placeholder={t('auth.newPasswordPlaceholder')} secure={!showRPw} autoComplete="new-password"
-                  error={errors.rPw}
+                  error={say(errors.rPw)}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowRPw(p => !p)}
@@ -920,7 +983,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.confirmNewPasswordLabel')} icon="lock-closed-outline" value={rPw2}
                   onChange={(txt) => { setRPw2(txt); clearError('rPw2'); }}
                   placeholder={t('auth.confirmNewPasswordPlaceholder')} secure={!showRPw2} autoComplete="new-password"
-                  error={errors.rPw2 || (rPw2.length > 0 && rPw2 !== rPw ? t('auth.errPasswordMismatch') : undefined)}
+                  error={say(errors.rPw2) || (rPw2.length > 0 && rPw2 !== rPw ? t('auth.errPasswordMismatch') : undefined)}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowRPw2(p => !p)}
@@ -941,14 +1004,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.emailLabel')} icon="at-outline" value={email}
                   onChange={(txt) => { setEmail(txt); clearError('email'); }}
                   placeholder={t('auth.emailPlaceholder')} keyboardType="email-address" autoComplete="email"
-                  error={errors.email}
+                  error={say(errors.email)}
                   onLayout={trackY('email')}
                 />
                 <LabeledField
                   label={t('auth.passwordLabel')} icon="lock-closed-outline" value={password}
                   onChange={(txt) => { setPassword(txt); clearError('password'); }}
                   placeholder={t('auth.passwordPlaceholder')} secure={!showPw} autoComplete="password"
-                  error={errors.password}
+                  error={say(errors.password)}
                   onLayout={trackY('password')}
                   rightElement={
                     <TouchableOpacity
@@ -980,14 +1043,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.fullNameLabel')} icon="person-outline" value={fullName}
                   onChange={(txt) => { setFullName(txt); clearError('fullName'); }}
                   placeholder={t('auth.fullNamePlaceholder')} autoCapitalize="words"
-                  error={errors.fullName}
+                  error={say(errors.fullName)}
                   onLayout={trackY('fullName')}
                 />
                 <LabeledField
                   label={t('auth.emailLabel')} icon="at-outline" value={email}
                   onChange={(txt) => { setEmail(txt); clearError('email'); }}
                   placeholder={t('auth.emailPlaceholder')} keyboardType="email-address" autoComplete="email"
-                  error={errors.email}
+                  error={say(errors.email)}
                   onLayout={trackY('email')}
                 />
                 <LabeledField
@@ -1058,13 +1121,13 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   onChange={(txt) => { setDistrict(txt); clearError('district'); }}
                   loading={fetchingLoc}
                   onGPS={fetchLocation}
-                  error={errors.district}
+                  error={say(errors.district)}
                   onLayout={trackY('district')}
                 />
                 <StatesDropdown
                   value={userState}
                   onSelect={(st) => { setUserState(st); clearError('state'); }}
-                  error={errors.state}
+                  error={say(errors.state)}
                   onLayout={trackY('state')}
                 />
                 <LabeledField
@@ -1081,7 +1144,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.passwordLabel')} icon="lock-closed-outline" value={password}
                   onChange={(txt) => { setPassword(txt); clearError('password'); }}
                   placeholder={t('auth.createPasswordPlaceholder')} secure={!showPw} autoComplete="new-password"
-                  error={errors.password}
+                  error={say(errors.password)}
                   onLayout={trackY('password')}
                   rightElement={
                     <TouchableOpacity
@@ -1098,7 +1161,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   label={t('auth.confirmPasswordLabel')} icon="lock-closed-outline" value={confirmPw}
                   onChange={(txt) => { setConfirmPw(txt); clearError('confirmPw'); }}
                   placeholder={t('auth.confirmPasswordPlaceholder')} secure={!showCPw} autoComplete="new-password"
-                  error={errors.confirmPw || (confirmPw.length > 0 && confirmPw !== password ? t('auth.errPasswordMismatch') : undefined)}
+                  error={say(errors.confirmPw) || (confirmPw.length > 0 && confirmPw !== password ? t('auth.errPasswordMismatch') : undefined)}
                   onLayout={trackY('confirmPw')}
                   rightElement={
                     <TouchableOpacity
@@ -1172,10 +1235,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 style={{ marginBottom: spacing.md }}
               />
               <Text style={[s.modalTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                {msgTitle}
+                {say(msgTitle)}
               </Text>
               <Text style={[s.modalSub, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                {msgText}
+                {say(msgText)}
               </Text>
               <Pressable
                 style={({ pressed }) => [
@@ -1217,6 +1280,7 @@ const s = StyleSheet.create({
   headerSub:   { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2 },
 
   /* Language toggle — segmented, one 48dp target per language */
+  langCol: { alignItems: 'flex-end' },
   langWrap: {
     flexDirection: 'row',
     borderRadius: radii.md,
@@ -1231,6 +1295,15 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   langTxt: { fontSize: 14, lineHeight: 20 },
+  /* Capped at 152 so the failure line cannot squeeze "HealthDrop" out of the
+     header: at the 360dp floor that still leaves 164dp for the title block
+     (328 content − 12 gap − 152). Deliberately NOT numberOfLines-clamped —
+     truncating an error message is its own failure; the band grows instead. */
+  langErrRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xs,
+    marginTop: spacing.xs, maxWidth: 152,
+  },
+  langErrTxt: { fontSize: 12, lineHeight: 16, fontWeight: '600', flexShrink: 1 },
 
   /* Mode switcher */
   topBar: { flexDirection: 'row', borderBottomWidth: 1 },

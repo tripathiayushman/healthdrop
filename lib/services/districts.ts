@@ -8,10 +8,18 @@
 // steer users toward canonical names so outbreak joins and
 // officer scoping stop fragmenting ("Shimla"/"shimla "/"Simla").
 //
-// Contract: every function degrades SILENTLY to an empty result
-// on any failure — suggestions are an enhancement, never a
-// blocker, so nothing here throws and nothing here surfaces an
-// error state to the UI.
+// Contract: the plain functions degrade SILENTLY to an empty
+// result on any failure — suggestions are an enhancement, never a
+// blocker, so none of them throws.
+//
+// EXCEPTION (added for BRK-12): a caller that uses the registry as
+// a PICKER, not a suggestion, cannot live with that contract — a
+// dead lookup and a genuinely empty registry both arrive as [], so
+// the screen has to guess, and guessing "error" renders an empty
+// registry as a failed fetch (and guessing "empty" hides a real
+// failure). `districtsForChecked` therefore reports the outcome
+// instead of flattening it. Nothing else about this module changed;
+// listAll / search / statesFor / districtsFor still never throw.
 // =====================================================
 import { supabase } from '../supabase';
 
@@ -20,6 +28,16 @@ export interface DistrictEntry {
   district: string;
   state: string;
 }
+
+/**
+ * Outcome of a registry read that REFUSES to hide failure.
+ * `{ status: 'ok', districts: [] }` means the registry is genuinely
+ * empty; `{ status: 'error' }` means the lookup never completed.
+ * A caller must render those two as different states.
+ */
+export type DistrictListResult =
+  | { status: 'ok'; districts: string[] }
+  | { status: 'error'; message: string };
 
 // ── In-module cache (5 min TTL, single-flight) ───────────────
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -66,6 +84,42 @@ async function fetchAll(): Promise<DistrictEntry[]> {
   return rows;
 }
 
+/**
+ * Cache-aware registry read that PROPAGATES failure. `listAll` wraps this
+ * with the silent degrade the module contract promises; `districtsForChecked`
+ * lets it through so a picker can tell "empty" from "broken".
+ * Single-flight is shared between both — a silent caller and a checked
+ * caller in flight together each handle the same settled promise their
+ * own way.
+ */
+async function loadAll(): Promise<DistrictEntry[]> {
+  const fresh = _cache !== null && Date.now() - _cacheAt < CACHE_TTL_MS;
+  if (_cache !== null && fresh) return _cache;
+
+  if (!_inflight) {
+    _inflight = fetchAll()
+      .then((rows) => {
+        _cache = rows;
+        _cacheAt = Date.now();
+        return rows;
+      })
+      .finally(() => {
+        _inflight = null;
+      });
+  }
+  return _inflight;
+}
+
+/** Unique, sorted district names from `entries`, optionally scoped to one state. */
+function pickDistricts(entries: DistrictEntry[], state?: string): string[] {
+  const q = normalizePlace(state);
+  const districts = new Set<string>();
+  for (const entry of entries) {
+    if (!q || normalizePlace(entry.state) === q) districts.add(entry.district);
+  }
+  return [...districts].sort((a, b) => a.localeCompare(b));
+}
+
 export const districtsService = {
   /**
    * All registry entries, cached in-module for 5 minutes.
@@ -74,26 +128,13 @@ export const districtsService = {
    * Treat the returned array as read-only.
    */
   async listAll(): Promise<DistrictEntry[]> {
-    const fresh = _cache !== null && Date.now() - _cacheAt < CACHE_TTL_MS;
-    if (_cache !== null && fresh) return _cache;
-
-    if (!_inflight) {
-      _inflight = fetchAll()
-        .then((rows) => {
-          _cache = rows;
-          _cacheAt = Date.now();
-          return rows;
-        })
-        .catch(() => {
-          // Silent degrade: stale suggestions beat no suggestions,
-          // and no suggestions beat a visible error.
-          return _cache ?? [];
-        })
-        .finally(() => {
-          _inflight = null;
-        });
+    try {
+      return await loadAll();
+    } catch {
+      // Silent degrade: stale suggestions beat no suggestions,
+      // and no suggestions beat a visible error.
+      return _cache ?? [];
     }
-    return _inflight;
   },
 
   /**
@@ -152,13 +193,25 @@ export const districtsService = {
    * registry. Unique, sorted; [] on failure.
    */
   async districtsFor(state?: string): Promise<string[]> {
-    const q = normalizePlace(state);
-    const all = await districtsService.listAll();
-    const districts = new Set<string>();
-    for (const entry of all) {
-      if (!q || normalizePlace(entry.state) === q) districts.add(entry.district);
+    return pickDistricts(await districtsService.listAll(), state);
+  },
+
+  /**
+   * `districtsFor` for callers that MUST tell an empty registry from a
+   * dead lookup — a picker, where "nothing to choose" and "we couldn't
+   * ask" need different words and only one of them deserves a Retry.
+   * This is the one function in this module that reports failure.
+   */
+  async districtsForChecked(state?: string): Promise<DistrictListResult> {
+    try {
+      return { status: 'ok', districts: pickDistricts(await loadAll(), state) };
+    } catch (error: any) {
+      console.error('[districts] registry lookup failed:', error);
+      return {
+        status: 'error',
+        message: error?.message ?? 'Could not read the district registry.',
+      };
     }
-    return [...districts].sort((a, b) => a.localeCompare(b));
   },
 };
 

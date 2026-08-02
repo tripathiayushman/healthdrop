@@ -27,6 +27,16 @@ const isAppLanguage = (value: unknown): value is AppLanguage =>
   value === 'en' || value === 'hi';
 
 /**
+ * Set the instant a human picks a language, BEFORE any await. The persisted
+ * choice is restored asynchronously (see initI18n below), and the language
+ * toggle is now the first interactive control on the first screen — a tap
+ * landing before AsyncStorage answers used to be silently reverted by that
+ * late restore, which reads as "the toggle is broken". A live choice always
+ * wins over a stored one.
+ */
+let userPickedLanguage = false;
+
+/**
  * Idempotent init — safe to call explicitly from App wiring; the module
  * also calls it once at load so `import './lib/i18n'` is sufficient.
  */
@@ -55,6 +65,8 @@ export const initI18n = (): typeof i18next => {
   // react-i18next languageChanged binding.
   AsyncStorage.getItem(STORAGE_KEY)
     .then((stored) => {
+      // A tap that beat the storage read owns the language — do not undo it.
+      if (userPickedLanguage) return undefined;
       if (isAppLanguage(stored) && stored !== i18next.language) {
         return i18next.changeLanguage(stored).then(() => undefined);
       }
@@ -74,7 +86,19 @@ initI18n();
  * ProfileScreen language picker — do not rename.
  */
 export const setAppLanguage = async (lang: AppLanguage): Promise<void> => {
-  await i18next.changeLanguage(lang);
+  // Synchronous, before the first await — the deferred restore in initI18n
+  // may resolve at any point from here on.
+  const wasPicked = userPickedLanguage;
+  userPickedLanguage = true;
+  try {
+    await i18next.changeLanguage(lang);
+  } catch (error) {
+    // The switch did not happen, so this was not a choice — release the claim
+    // rather than suppressing the user's own persisted language for the rest
+    // of the session. The caller surfaces the failure.
+    userPickedLanguage = wasPicked;
+    throw error;
+  }
   try {
     await AsyncStorage.setItem(STORAGE_KEY, lang);
   } catch {

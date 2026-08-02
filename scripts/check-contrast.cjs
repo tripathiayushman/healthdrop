@@ -68,6 +68,11 @@ const PAIRS = [
   ['onPrimary', 'primary', 4.5, 'primary button label'],
   ['onPrimary', 'primaryDark', 4.5, 'primary button pressed'],
   ['primary', 'background', 4.5, 'link / outline label'],
+  // Selected segment in a segmented control (AuthScreen language toggle):
+  // 14px/700 label on the primaryLight fill. Not WCAG "large text", so it is
+  // held to the 7:1 body floor. This pair was unguarded and dark mode had
+  // drifted to `primary` on `primaryLight` = 6.92:1 before anyone measured it.
+  ['primaryDark', 'primaryLight', 7, 'selected segment label'],
   ['danger', 'dangerBg', 4.5, 'danger text on its tint'],
   ['success', 'successBg', 4.5, 'success text on its tint'],
   ['warning', 'warningBg', 4.5, 'warning text on its tint'],

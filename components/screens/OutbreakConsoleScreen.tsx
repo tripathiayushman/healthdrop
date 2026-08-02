@@ -22,15 +22,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { DiseaseReport, Profile } from '../../types';
 import { useTheme, Theme, radii, spacing } from '../../lib/ThemeContext';
 import { ErrorCard, SkeletonBlock } from '../dashboards/DashboardShared';
-import { supabase } from '../../lib/supabase';
 import { alertAcks } from '../../lib/services/alertAcks';
 import {
   Outbreak,
   OutbreakStatus,
   OUTBREAK_CONFIRM_MARKER,
+  isAlertPubliclyIssued,
+  linkedAlertOf,
   outbreaksService,
   parseResponseNotes,
 } from '../../lib/services/outbreaks';
+import { AlertStatusCard } from './OutbreakSignalScreen';
 
 const OUTBREAK_ERROR = "Couldn't load this outbreak — check connection.";
 
@@ -133,38 +135,26 @@ export default function OutbreakConsoleScreen({
 
   /**
    * D·02 — "% of staff acknowledged", the outbreak's real-time reach.
-   * Only when an alert is live (alert_sent): find the newest approved
-   * live health_alert for the district, preferring one that names this
-   * disease in disease_or_issue/title, then count acks vs. active
-   * field staff. Any failure → 'unavailable', never a fake number.
+   *
+   * The reach is counted against THE linked alert and nothing else:
+   * `outbreak.alert_link.alert.id`, resolved by the service from
+   * `health_alerts.metadata->>'outbreak_id'`. The old code searched the
+   * district's ten newest approved alerts for one whose title or
+   * disease_or_issue merely CONTAINED the disease name and, failing that,
+   * fell through to `|| data[0]` — the newest alert in the district,
+   * whatever it was about. That fallback reported an unrelated notice's
+   * acknowledgement rate as this outbreak's reach. It is deleted, along
+   * with the query that fed it. No link ⇒ no number.
    */
   const loadReach = async (ob: Outbreak) => {
-    if (!ob.alert_sent) return;
+    const alert = isAlertPubliclyIssued(ob.alert_link) ? linkedAlertOf(ob.alert_link) : null;
+    if (!alert) {
+      setReach({ kind: 'unavailable' });
+      return;
+    }
     setReach({ kind: 'loading' });
     try {
-      const { data, error } = await supabase
-        .from('health_alerts')
-        .select('id, title, disease_or_issue, created_at')
-        .eq('approval_status', 'approved')
-        .eq('status', 'active')
-        .eq('district', ob.district)
-        .order('created_at', { ascending: false })
-        .limit(10);
-      if (error) throw error;
-      if (!data || data.length === 0) {
-        setReach({ kind: 'unavailable' });
-        return;
-      }
-      const disease = (ob.disease_name ?? '').trim().toLowerCase();
-      const linked =
-        (disease &&
-          data.find(
-            (a: { title?: string | null; disease_or_issue?: string | null }) =>
-              String(a.disease_or_issue ?? '').toLowerCase().includes(disease) ||
-              String(a.title ?? '').toLowerCase().includes(disease),
-          )) ||
-        data[0];
-      const res = await alertAcks.reachForDistrict(linked.id, ob.district);
+      const res = await alertAcks.reachForDistrict(alert.id, ob.district);
       if (res.error || !res.data) {
         setReach({ kind: 'unavailable' });
         return;
@@ -434,38 +424,22 @@ export default function OutbreakConsoleScreen({
                 delta={null}
                 deltaCaption="all verified by people"
               />
-              {outbreak.alert_sent ? <ReachTile state={reach} /> : <View style={{ flex: 1 }} />}
+              {isAlertPubliclyIssued(outbreak.alert_link) ? (
+                <ReachTile state={reach} />
+              ) : (
+                <View style={{ flex: 1 }} />
+              )}
             </View>
 
-            {/* ── Linked alert ── */}
-            {outbreak.alert_sent ? (
-              <View
-                style={[
-                  styles.alertBanner,
-                  { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.info },
-                  !isDark && styles.cardShadow,
-                ]}
-              >
-                <Ionicons name="megaphone-outline" size={18} color={colors.info} />
-                <Text style={[styles.alertBannerText, { color: colors.text }]}>
-                  An alert has been sent for this outbreak — field staff in {outbreak.district} were notified.
-                </Text>
-              </View>
-            ) : (
-              <View
-                style={[
-                  styles.alertBanner,
-                  { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.borderDark },
-                  !isDark && styles.cardShadow,
-                ]}
-              >
-                <Ionicons name="megaphone-outline" size={18} color={colors.textTertiary} />
-                <Text style={[styles.alertBannerText, { color: colors.textSecondary }]}>
-                  No alert has been sent for this outbreak. Alerts are issued separately and never
-                  fire automatically.
-                </Text>
-              </View>
-            )}
+            {/* ── Linked public alert ──
+                Four states, and the same words D·01 uses: linked+approved,
+                linked+draft, checked-and-none, and check-failed (error card
+                with a Retry). The previous two-way banner rendered a
+                confident "No alert has been sent for this outbreak" whenever
+                the alert query failed — a failure and a genuine zero looked
+                identical. It no longer can: a failed link check resolves to
+                'unknown', which is an error state, not a negative. */}
+            <AlertStatusCard outbreak={outbreak} onRetry={retry} />
 
             {/* ── Response log — vertical stepper timeline ── */}
             <View style={styles.sectionHeaderRow}>
@@ -823,14 +797,6 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 24, lineHeight: 28, fontWeight: '800', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
   statLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700', marginTop: 2 },
   deltaText: { fontSize: 12, lineHeight: 16, fontWeight: '600', marginTop: 2, fontVariant: ['tabular-nums'] },
-
-  /* ── Linked alert banner ── */
-  alertBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    borderWidth: 1, borderLeftWidth: 3, borderRadius: radii.md,
-    padding: spacing.md, marginTop: spacing.md,
-  },
-  alertBannerText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' },
 
   /* ── Sections ── */
   sectionHeaderRow: { marginTop: spacing.lg, marginBottom: spacing.md, minHeight: 20, justifyContent: 'center' },

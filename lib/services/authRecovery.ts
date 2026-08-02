@@ -57,15 +57,34 @@ const getRecoveryClient = (): SupabaseClient => {
   return recoveryClient;
 };
 
-export type RecoveryResult = { ok: true } | { ok: false; message: string };
+// ── Error → message KEY mapping ───────────────────────
+// These sentences are the APP's own copy, not server text, and they render on
+// a screen that can be in Hindi. Returning finished English here put lines like
+// 'Start again from "Forgot password?"' under a button labelled
+// "पासवर्ड भूल गए?" — an English instruction pointing at a control the reader
+// cannot match. So this module returns i18n KEYS and never a sentence; the
+// caller resolves them with t() at RENDER time, which also means the message
+// follows the EN/हिन्दी toggle instead of freezing in the language that was
+// active when the request failed.
+export type RecoveryMessageKey =
+  | 'auth.recovery.rateLimit'
+  | 'auth.recovery.offline'
+  | 'auth.recovery.sendFailed'
+  | 'auth.recovery.verifyFailed'
+  | 'auth.recovery.updateFailed'
+  | 'auth.recovery.sessionExpired'
+  | 'auth.recovery.codeIncorrect'
+  | 'auth.recovery.samePassword'
+  | 'auth.recovery.weakPassword';
 
-// ── Error → human sentence mapping ────────────────────
-const MSG_RATE_LIMIT = 'Too many attempts — try again in a minute.';
-const MSG_OFFLINE = 'You appear to be offline. Check your connection and try again.';
-const MSG_SEND_FAIL = 'Could not send the code right now. Please try again.';
-const MSG_VERIFY_FAIL = 'Could not verify the code. Please try again.';
-const MSG_UPDATE_FAIL = 'Could not update the password. Please try again.';
-const MSG_SESSION_EXPIRED = 'Your reset session expired. Start again from "Forgot password?".';
+export type RecoveryResult = { ok: true } | { ok: false; messageKey: RecoveryMessageKey };
+
+const MSG_RATE_LIMIT: RecoveryMessageKey = 'auth.recovery.rateLimit';
+const MSG_OFFLINE: RecoveryMessageKey = 'auth.recovery.offline';
+const MSG_SEND_FAIL: RecoveryMessageKey = 'auth.recovery.sendFailed';
+const MSG_VERIFY_FAIL: RecoveryMessageKey = 'auth.recovery.verifyFailed';
+const MSG_UPDATE_FAIL: RecoveryMessageKey = 'auth.recovery.updateFailed';
+const MSG_SESSION_EXPIRED: RecoveryMessageKey = 'auth.recovery.sessionExpired';
 
 const errCode = (error: unknown): string => String((error as any)?.code ?? '');
 const errText = (error: unknown): string => String((error as any)?.message ?? error ?? '');
@@ -98,11 +117,11 @@ export const requestResetCode = async (email: string): Promise<RecoveryResult> =
       options: { shouldCreateUser: false },
     });
     if (!error || isUnknownEmail(error)) return { ok: true };
-    if (isRateLimited(error)) return { ok: false, message: MSG_RATE_LIMIT };
-    if (isNetworkish(error)) return { ok: false, message: MSG_OFFLINE };
-    return { ok: false, message: MSG_SEND_FAIL };
+    if (isRateLimited(error)) return { ok: false, messageKey: MSG_RATE_LIMIT };
+    if (isNetworkish(error)) return { ok: false, messageKey: MSG_OFFLINE };
+    return { ok: false, messageKey: MSG_SEND_FAIL };
   } catch (error) {
-    return { ok: false, message: isNetworkish(error) ? MSG_OFFLINE : MSG_SEND_FAIL };
+    return { ok: false, messageKey: isNetworkish(error) ? MSG_OFFLINE : MSG_SEND_FAIL };
   }
 };
 
@@ -119,20 +138,17 @@ export const verifyResetCode = async (email: string, code: string): Promise<Reco
       type: 'email',
     });
     if (error) {
-      if (isRateLimited(error)) return { ok: false, message: MSG_RATE_LIMIT };
+      if (isRateLimited(error)) return { ok: false, messageKey: MSG_RATE_LIMIT };
       if (errCode(error) === 'otp_expired' || /expired|invalid/i.test(errText(error))) {
-        return {
-          ok: false,
-          message: 'That code is incorrect or has expired. Check the digits, or resend a new code.',
-        };
+        return { ok: false, messageKey: 'auth.recovery.codeIncorrect' };
       }
-      if (isNetworkish(error)) return { ok: false, message: MSG_OFFLINE };
-      return { ok: false, message: MSG_VERIFY_FAIL };
+      if (isNetworkish(error)) return { ok: false, messageKey: MSG_OFFLINE };
+      return { ok: false, messageKey: MSG_VERIFY_FAIL };
     }
-    if (!data?.session) return { ok: false, message: MSG_VERIFY_FAIL };
+    if (!data?.session) return { ok: false, messageKey: MSG_VERIFY_FAIL };
     return { ok: true };
   } catch (error) {
-    return { ok: false, message: isNetworkish(error) ? MSG_OFFLINE : MSG_VERIFY_FAIL };
+    return { ok: false, messageKey: isNetworkish(error) ? MSG_OFFLINE : MSG_VERIFY_FAIL };
   }
 };
 
@@ -146,17 +162,17 @@ export const setNewPassword = async (password: string): Promise<RecoveryResult> 
     const { error } = await client.auth.updateUser({ password });
     if (error) {
       if (errCode(error) === 'same_password' || /different from the old/i.test(errText(error))) {
-        return { ok: false, message: 'Your new password must be different from the old one.' };
+        return { ok: false, messageKey: 'auth.recovery.samePassword' };
       }
       if (errCode(error) === 'weak_password' || /at least|too weak|should contain/i.test(errText(error))) {
-        return { ok: false, message: 'That password is too weak — use at least 8 characters.' };
+        return { ok: false, messageKey: 'auth.recovery.weakPassword' };
       }
       if (/session missing|not authenticated|no user/i.test(errText(error))) {
-        return { ok: false, message: MSG_SESSION_EXPIRED };
+        return { ok: false, messageKey: MSG_SESSION_EXPIRED };
       }
-      if (isRateLimited(error)) return { ok: false, message: MSG_RATE_LIMIT };
-      if (isNetworkish(error)) return { ok: false, message: MSG_OFFLINE };
-      return { ok: false, message: MSG_UPDATE_FAIL };
+      if (isRateLimited(error)) return { ok: false, messageKey: MSG_RATE_LIMIT };
+      if (isNetworkish(error)) return { ok: false, messageKey: MSG_OFFLINE };
+      return { ok: false, messageKey: MSG_UPDATE_FAIL };
     }
     // Password is set — the sign-out is best-effort: even if it fails
     // (e.g. connection dropped right after the update), the in-memory
@@ -164,7 +180,7 @@ export const setNewPassword = async (password: string): Promise<RecoveryResult> 
     await client.auth.signOut().catch(() => {});
     return { ok: true };
   } catch (error) {
-    return { ok: false, message: isNetworkish(error) ? MSG_OFFLINE : MSG_UPDATE_FAIL };
+    return { ok: false, messageKey: isNetworkish(error) ? MSG_OFFLINE : MSG_UPDATE_FAIL };
   }
 };
 

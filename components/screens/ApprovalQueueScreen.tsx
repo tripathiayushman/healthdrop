@@ -110,15 +110,68 @@ const COLUMNS: Record<QueueTab, string> = {
     'precautionary_measures,created_at',
 };
 
-/** How far a tab has been paged / how many rows sit behind it, per stream. */
-type TabCursor = { pending: number; decided: number };
-type TabCursors = Record<QueueTab, TabCursor>;
-const zeroCursors = (): TabCursors => ({
-  disease:   { pending: 0, decided: 0 },
-  water:     { pending: 0, decided: 0 },
-  campaigns: { pending: 0, decided: 0 },
-  alerts:    { pending: 0, decided: 0 },
+/**
+ * The one text column each tab is searched by, alongside `district`. Every one
+ * of them is already in that tab's COLUMNS list.
+ *
+ * The filter runs ON THE SERVER. A client-side filter over the rows that
+ * happen to be on the phone would shrink a health_admin's reach from the whole
+ * national table to the current page — the officer would read "no items match"
+ * when the match is simply on page three.
+ */
+const SEARCH_COLUMN: Record<QueueTab, string> = {
+  disease:   'disease_name',
+  water:     'source_name',
+  campaigns: 'campaign_name',
+  alerts:    'title',
+};
+
+/**
+ * PostgREST `or()` operands are comma-separated inside parentheses, so a typed
+ * comma or bracket would rewrite the filter itself. Double-quoting the value
+ * makes it opaque to that grammar — verified live against this project:
+ * `or=(disease_name.ilike."*a,b(x)*",…)` answers 200, not 400, and `*` still
+ * behaves as the wildcard inside the quotes. `*` and `%` are stripped from
+ * what was typed: the wildcards are ours, not the typist's.
+ */
+const searchOr = (t: QueueTab, term: string): string | null => {
+  const cleaned = term.replace(/[%*]/g, '').trim();
+  if (!cleaned) return null;
+  const v = `"*${cleaned.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}*"`;
+  return `${SEARCH_COLUMN[t]}.ilike.${v},district.ilike.${v}`;
+};
+
+/**
+ * One paged stream of one tab.
+ *
+ * `total` is the server COUNT that came back WITH the rows, so `null` means
+ * "the response carried no content-range" — unknown, never zero. Nothing is
+ * gated on it: the rows are asked for first and the count rides along, so a
+ * count that never arrives can degrade a label but can never empty the list.
+ *
+ * `done` is proven by a short read, not inferred from arithmetic on a count we
+ * might not have.
+ */
+type StreamState = { offset: number; total: number | null; done: boolean };
+type TabState = { pending: StreamState; decided: StreamState };
+type TabStates = Record<QueueTab, TabState>;
+
+const zeroStream = (): StreamState => ({ offset: 0, total: null, done: false });
+const zeroTab = (): TabState => ({ pending: zeroStream(), decided: zeroStream() });
+const zeroStates = (): TabStates => ({
+  disease: zeroTab(), water: zeroTab(), campaigns: zeroTab(), alerts: zeroTab(),
 });
+
+/** A stream's length when it is knowable: the server count, or — once the
+ *  stream is proven exhausted — the rows it actually handed over. */
+const streamTotal = (s: StreamState): number | null =>
+  s.total != null ? s.total : s.done ? s.offset : null;
+
+/** Per-tab flags. A page that fails belongs to the tab it was asked for. */
+const noneBusy = (): Record<QueueTab, boolean> =>
+  ({ disease: false, water: false, campaigns: false, alerts: false });
+const noErrors = (): Record<QueueTab, string | null> =>
+  ({ disease: null, water: null, campaigns: null, alerts: null });
 
 /** Legacy disease-severity vocab → severity token key */
 const severityKey = (s: string): string => {
@@ -189,35 +242,74 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch]       = useState('');
+  // What the rows on screen were actually fetched with. `search` runs ahead of
+  // it while the officer is still typing; the gap is shown, never papered over.
+  const [appliedSearch, setAppliedSearch] = useState('');
+  // Decided history is opt-in (BRK-21). While it is off a page is spent
+  // entirely on the pending block and each tab costs exactly ONE request.
+  const [showDecided, setShowDecided] = useState(false);
 
   // Rows loaded SO FAR, already in queue order. Not the whole table any more.
   const [diseaseReports, setDiseaseReports] = useState<DiseaseReport[]>([]);
   const [waterReports, setWaterReports]     = useState<WaterReport[]>([]);
   const [campaigns, setCampaigns]           = useState<Campaign[]>([]);
   const [alerts, setAlerts]                 = useState<HealthAlert[]>([]);
-  // Paging truth: how much is on the phone, and how much exists behind it.
-  const [loadedCounts, setLoadedCounts] = useState<TabCursors>(zeroCursors);
-  const [totalCounts, setTotalCounts]   = useState<TabCursors>(zeroCursors);
-  const [loadingMore, setLoadingMore]   = useState(false);
-  const [moreError, setMoreError]       = useState<string | null>(null);
+  // Paging truth per tab: how far each stream has been read, how long it is,
+  // and whether it has proven itself finished.
+  const [tabStates, setTabStates] = useState<TabStates>(zeroStates);
+  // Per-tab, so a page that fails on Disease can never caption Water's footer.
+  const [loadingMore, setLoadingMore] = useState<Record<QueueTab, boolean>>(noneBusy);
+  const [moreError, setMoreError]     = useState<Record<QueueTab, string | null>>(noErrors);
   // Every load() invalidates whatever page fetch is still in flight. Without
   // this, a page that lands after an approve-triggered reload appends itself
   // onto a list that no longer matches its cursor — and the rows the cursor
   // then skips are pending items nobody ever sees.
   const loadGen = useRef(0);
+  // The question the rows on screen are the answer to. When it changes the old
+  // rows are dropped BEFORE the fetch, so a failure can never leave yesterday's
+  // rows sitting under today's caption.
+  const rowsTerm = useRef('');
+  const rowsDecided = useRef(false);
 
-  // Badges and the "PENDING · n" header read a head:true COUNT of the whole
-  // filtered table, never the length of whichever page happens to be down.
-  // A paged list that counted its own rows would under-report the backlog.
-  const pendingCounts = {
-    disease:   totalCounts.disease.pending,
-    water:     totalCounts.water.pending,
-    campaigns: totalCounts.campaigns.pending,
-    alerts:    totalCounts.alerts.pending,
+  const searchActive  = appliedSearch !== '';
+  const searchSettling = search.trim() !== appliedSearch;
+
+  const rowsOf = (t: QueueTab): QueueItem[] =>
+    t === 'disease' ? diseaseReports : t === 'water' ? waterReports : t === 'campaigns' ? campaigns : alerts;
+
+  /**
+   * The pending backlog of a tab. Exact when the server counted it; otherwise
+   * the pending rows actually in hand, flagged inexact so the UI can render
+   * "7+" instead of a bare number it cannot stand behind.
+   */
+  const pendingOf = (t: QueueTab): { n: number; exact: boolean } => {
+    const total = streamTotal(tabStates[t].pending);
+    if (total != null) return { n: total, exact: true };
+    return { n: rowsOf(t).filter(r => r.approval_status === 'pending_approval').length, exact: false };
   };
-  const loadedOfTab = loadedCounts[tab].pending + loadedCounts[tab].decided;
-  const totalOfTab  = totalCounts[tab].pending + totalCounts[tab].decided;
-  const hasMore     = loadedOfTab < totalOfTab;
+  const countText = (c: { n: number; exact: boolean }) => (c.exact ? `${c.n}` : `${c.n}+`);
+
+  const hasMoreOf = (t: QueueTab): boolean => {
+    const s = tabStates[t];
+    return !s.pending.done || (showDecided && !s.decided.done);
+  };
+  /** Rows behind this tab, or null when any stream's length is unknown. */
+  const totalOf = (t: QueueTab): number | null => {
+    const s = tabStates[t];
+    const p = streamTotal(s.pending);
+    if (p == null) return null;
+    if (!showDecided) return p;
+    const d = streamTotal(s.decided);
+    return d == null ? null : p + d;
+  };
+  // The rows ACTUALLY on screen — the array itself, not a server offset. An
+  // offset counts what was handed over, including rows the dedupe dropped.
+  const loadedOfTab = rowsOf(tab).length;
+  const totalOfTab  = totalOf(tab);
+  const hasMore     = hasMoreOf(tab);
+  /** How many rows the server says are still behind this tab — null when it
+   *  has not said. The button offers a number only when there is one. */
+  const remaining   = totalOfTab != null ? Math.max(0, totalOfTab - loadedOfTab) : null;
 
   // C·02 evidence meta — supplementary; the card never blocks on these.
   const [reporterStats, setReporterStats] = useState<Map<string, ReporterTrackRecord>>(new Map());
@@ -261,6 +353,13 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     ? allTabs.filter(t => ['disease','water'].includes(t.id))
     : allTabs;
 
+  // A dashboard can route in with a tab this role does not have (initialTab is
+  // free-form). Never leave the screen parked on a tab it will never load —
+  // that would be an empty list with a Load-more button that fetches nothing.
+  useEffect(() => {
+    if (!visibleTabs.some(v => v.id === tab)) setTab(visibleTabs[0]?.id ?? 'disease');
+  }, [tab, visibleTabs.length]);
+
   // ── Load ─────────────────────────────────────────────────────────────────
   // Scoping is unchanged: only a district_officer with a district actually set
   // is narrowed, and only on the three district-carrying tables. Alerts stay
@@ -278,72 +377,137 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
    * everything else — NULL `approval_status` included, so a legacy row with no
    * status can never fall out of BOTH filters and vanish from the screen.
    */
-  const queueQuery = (t: QueueTab, stream: 'pending' | 'decided', columns: string, countOnly = false) => {
-    let q: any = supabase
-      .from(TABLES[t])
-      .select(columns, countOnly ? { count: 'exact', head: true } : undefined);
+  const queueQuery = (t: QueueTab, stream: 'pending' | 'decided', term: string) => {
+    // count:'exact' rides along WITH the rows — one round trip, not two, and
+    // the rows are never waiting on a count that might not arrive.
+    let q: any = supabase.from(TABLES[t]).select(COLUMNS[t], { count: 'exact' });
     q = stream === 'pending'
       ? q.eq('approval_status', 'pending_approval')
       : q.or('approval_status.neq.pending_approval,approval_status.is.null');
     if (scopeToDistrict(t)) q = q.eq('district', profile.district);
+    // A second or= AND-combines with the first — verified live against this
+    // project: or=(approval_status.eq.pending_approval,…)&or=(…ilike."*a*")
+    // returned 0 rows where an OR of the two would have returned 4.
+    const so = searchOr(t, term);
+    if (so) q = q.or(so);
     return q;
   };
 
-  /** head:true — the server counts, no rows cross the wire. */
-  const countStream = async (t: QueueTab, stream: 'pending' | 'decided'): Promise<number> => {
-    const { count, error } = await queueQuery(t, stream, 'id', true);
-    if (error) throw error;
-    return count ?? 0;
-  };
-
-  const fetchStream = async (t: QueueTab, stream: 'pending' | 'decided', from: number, take: number): Promise<any[]> => {
+  /**
+   * One window of one stream, with its COUNT attached. No head-count round
+   * trip, and — the point — nothing here is skipped when the count is absent.
+   */
+  const fetchStream = async (
+    t: QueueTab, stream: 'pending' | 'decided', term: string, from: number, take: number,
+  ): Promise<{ rows: any[]; count: number | null; exhausted: boolean; overshot: boolean }> => {
     const asc = stream === 'pending';
-    const { data, error } = await queueQuery(t, stream, COLUMNS[t])
+    const { data, error, count, status } = await queueQuery(t, stream, term)
       .order('created_at', { ascending: asc })
       // Stable tiebreak — without it two rows sharing a created_at can repeat
       // or skip across page boundaries.
       .order('id', { ascending: asc })
       .range(from, from + take - 1);
+    // 416 is PostgREST's answer to "your offset is past the end of this set"
+    // (confirmed live: offset 25 of 4 rows → 416, and postgrest-js reports it
+    // as status 416 with an unparseable body). It means the stream shrank
+    // under our cursor, not that the fetch broke. Every OTHER error is a real
+    // failure and is thrown, so it surfaces as an error card — never as rows
+    // that quietly aren't there.
+    if (status === 416) return { rows: [], count: null, exhausted: true, overshot: true };
     if (error) throw error;
-    return data ?? [];
+    const rows: any[] = data ?? [];
+    return { rows, count: count ?? null, exhausted: rows.length < take, overshot: false };
+  };
+
+  /**
+   * Page one stream forward, repairing offset drift.
+   *
+   * An offset is only true for the list that produced it. When another admin
+   * decides or deletes a row BEHIND our cursor the stream shortens and the
+   * rows that shift across the boundary would be stepped over — pending items
+   * nobody on this screen would ever see until the next refresh. The count
+   * that came back with these rows says by how much the stream shrank, so we
+   * re-read exactly that window; the id-dedupe in setRowsFor drops whatever we
+   * already hold, and byQueueOrder puts the recovered rows back in place.
+   */
+  const pageStream = async (
+    t: QueueTab, stream: 'pending' | 'decided', term: string, cur: StreamState, take: number,
+  ): Promise<{ rows: any[]; next: StreamState }> => {
+    const res = await fetchStream(t, stream, term, cur.offset, take);
+    const rows = [...res.rows];
+
+    // A 416 means it shrank past the cursor entirely and PostgREST refused the
+    // window; treat that as a full page of drift so the re-read still happens.
+    const shrank = res.overshot
+      ? take
+      : cur.total != null && res.count != null
+      ? cur.total - res.count
+      : 0;
+    const back = Math.min(Math.max(0, shrank), cur.offset);
+    let repairCount: number | null = null;
+    if (back > 0) {
+      const again = await fetchStream(t, stream, term, cur.offset - back, back);
+      rows.push(...again.rows);
+      repairCount = again.count;
+    }
+
+    const count = res.overshot ? repairCount : res.count;
+    const offset = res.overshot
+      ? Math.min(cur.offset, count ?? cur.offset)
+      : cur.offset + res.rows.length;
+    return {
+      rows,
+      next: { offset, total: count, done: res.exhausted || (count != null && offset >= count) },
+    };
   };
 
   /**
    * One page, in the order the screen actually shows: the pending block
    * oldest-first — the triage order the "OLDEST FIRST ↓" header promises —
-   * then decided history newest-first. Paging the two streams separately is
-   * what makes the cap honest: a single newest-first page would cut off
-   * exactly the oldest pending rows the officer opened this screen to clear.
+   * then decided history newest-first, and only when history was asked for.
+   * Paging the two streams separately is what makes the cap honest: a single
+   * newest-first page would cut off exactly the oldest pending rows the
+   * officer opened this screen to clear.
    */
-  const fetchPage = async (t: QueueTab, from: TabCursor, totals: TabCursor) => {
+  const fetchPage = async (t: QueueTab, term: string, cur: TabState, wantDecided: boolean) => {
     const rows: any[] = [];
-    const next: TabCursor = { ...from };
+    const next: TabState = { pending: { ...cur.pending }, decided: { ...cur.decided } };
 
-    const takePending = Math.min(PAGE_SIZE, Math.max(0, totals.pending - from.pending));
-    if (takePending > 0) {
-      const got = await fetchStream(t, 'pending', from.pending, takePending);
-      rows.push(...got);
-      next.pending = from.pending + got.length;
+    // The pending block is asked for FIRST and UNCONDITIONALLY. No count gates
+    // it, so a count that fails to parse can never render as "Queue clear".
+    if (!cur.pending.done) {
+      const r = await pageStream(t, 'pending', term, cur.pending, PAGE_SIZE);
+      rows.push(...r.rows);
+      next.pending = r.next;
     }
     // Only once the pending block is exhausted does a page start spending
     // itself on history.
-    const takeDecided = Math.min(PAGE_SIZE - rows.length, Math.max(0, totals.decided - from.decided));
-    if (takeDecided > 0) {
-      const got = await fetchStream(t, 'decided', from.decided, takeDecided);
-      rows.push(...got);
-      next.decided = from.decided + got.length;
+    const room = PAGE_SIZE - rows.length;
+    if (wantDecided && room > 0 && !cur.decided.done) {
+      const r = await pageStream(t, 'decided', term, cur.decided, room);
+      rows.push(...r.rows);
+      next.decided = r.next;
     }
     return { rows, next };
   };
 
   /** Rows land in the tab's own array; `append` is the "Load more" path.
-   *  De-duped by id because a row another admin decides mid-page could
-   *  otherwise arrive in both streams. */
+   *  De-duped by id on BOTH paths and WITHIN the page itself: the pending and
+   *  decided fetches are sequential, so a row another admin approves between
+   *  them comes back from both streams and would otherwise be rendered twice
+   *  under one key. A drift repair deliberately re-reads rows we already hold,
+   *  and lands here too. */
   const setRowsFor = (t: QueueTab, rows: any[], append: boolean) => {
     const merge = <T extends { id: string }>(prev: T[]): T[] => {
-      if (!append) return rows as T[];
-      const seen = new Set(prev.map(r => r.id));
-      return [...prev, ...(rows as T[]).filter(r => !seen.has(r.id))];
+      const base: T[] = append ? prev : [];
+      const seen = new Set(base.map(r => r.id));
+      const out = base.slice();
+      for (const r of rows as T[]) {
+        if (!r || r.id == null || seen.has(r.id)) continue;
+        seen.add(r.id);
+        out.push(r);
+      }
+      return out;
     };
     if (t === 'disease')        setDiseaseReports(merge);
     else if (t === 'water')     setWaterReports(merge);
@@ -358,24 +522,28 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
    */
   const load = async () => {
     const gen = ++loadGen.current;
+    const term = appliedSearch;
+    const wantDecided = showDecided;
+    // The rows on screen answer the previous question. If the question just
+    // changed, drop them now rather than let a failed fetch leave them sitting
+    // under a caption that no longer describes them.
+    if (rowsTerm.current !== term || rowsDecided.current !== wantDecided) {
+      setDiseaseReports([]); setWaterReports([]); setCampaigns([]); setAlerts([]);
+      setTabStates(zeroStates());
+    }
+    rowsTerm.current = term;
+    rowsDecided.current = wantDecided;
     setLoading(true);
-    setLoadingMore(false);
-    setMoreError(null);
+    setLoadingMore(noneBusy());
+    setMoreError(noErrors());
     try {
       const tabs = allTabs.map(t => t.id).filter(tabLoads);
-      const pages = await Promise.all(tabs.map(async t => {
-        const [pending, decided] = await Promise.all([countStream(t, 'pending'), countStream(t, 'decided')]);
-        const totals: TabCursor = { pending, decided };
-        return { t, totals, page: await fetchPage(t, { pending: 0, decided: 0 }, totals) };
-      }));
+      const pages = await Promise.all(tabs.map(async t => ({
+        t, page: await fetchPage(t, term, zeroTab(), wantDecided),
+      })));
       if (gen !== loadGen.current) return; // a newer load already owns the list
       pages.forEach(p => setRowsFor(p.t, p.page.rows, false));
-      setTotalCounts(prev => {
-        const next = { ...prev };
-        pages.forEach(p => { next[p.t] = p.totals; });
-        return next;
-      });
-      setLoadedCounts(prev => {
+      setTabStates(prev => {
         const next = { ...prev };
         pages.forEach(p => { next[p.t] = p.page.next; });
         return next;
@@ -396,27 +564,39 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
    * rows remain, and a quiet closing line at the end.
    */
   const loadMore = async () => {
-    if (loadingMore || !hasMore) return;
     const t = tab;
+    // tabLoads is the same role gate load() honours — a tab this role never
+    // fetches must not be pageable either.
+    if (!tabLoads(t) || loadingMore[t] || !hasMoreOf(t)) return;
     const gen = loadGen.current;
-    setLoadingMore(true);
-    setMoreError(null);
+    const term = appliedSearch;
+    setLoadingMore(prev => ({ ...prev, [t]: true }));
+    setMoreError(prev => ({ ...prev, [t]: null }));
     try {
-      const page = await fetchPage(t, loadedCounts[t], totalCounts[t]);
+      const page = await fetchPage(t, term, tabStates[t], showDecided);
       if (gen !== loadGen.current) return; // the list was reset under us
       setRowsFor(t, page.rows, true);
-      setLoadedCounts(prev => ({ ...prev, [t]: page.next }));
-      // The counts were taken moments ago. An empty page means the backlog
-      // they promised has since been decided or deleted by someone else —
-      // snap the totals to what actually exists so the button can't sit there
-      // offering rows that will never arrive.
-      if (page.rows.length === 0) setTotalCounts(prev => ({ ...prev, [t]: { ...page.next } }));
+      // A short read marks the stream done, so the button retires itself —
+      // it cannot sit there offering rows that will never arrive.
+      setTabStates(prev => ({ ...prev, [t]: page.next }));
     } catch {
-      if (gen === loadGen.current) setMoreError("Couldn't load more — check connection");
-    } finally { setLoadingMore(false); }
+      if (gen === loadGen.current) {
+        setMoreError(prev => ({ ...prev, [t]: "Couldn't load more — check connection" }));
+      }
+    } finally { setLoadingMore(prev => ({ ...prev, [t]: false })); }
   };
 
-  useEffect(() => { load(); }, []);
+  // Typing settles before it costs a request. Search is a SERVER filter, so
+  // every keystroke that lands re-asks the whole table, not the page.
+  useEffect(() => {
+    const term = search.trim();
+    if (term === appliedSearch) return;
+    const id = setTimeout(() => setAppliedSearch(term), 400);
+    return () => clearTimeout(id);
+  }, [search, appliedSearch]);
+
+  // Mount, and every time the question itself changes.
+  useEffect(() => { load(); }, [appliedSearch, showDecided]);
 
   // ── C·02 evidence meta — batch-loaded AFTER the lists render.
   // Meta is supplementary: a failure only omits the evidence line,
@@ -546,14 +726,9 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   };
 
   // ── Filtered lists ────────────────────────────────────────────────────────
-  const q = search.toLowerCase();
-  const fDisease   = diseaseReports.filter(r => !q || r.disease_name?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
-  const fWater     = waterReports.filter(r => !q || r.source_name?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
-  const fCampaigns = campaigns.filter(r => {
-    const campaignTitle = r.campaign_name || r.title || r.name || '';
-    return !q || campaignTitle.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q);
-  });
-  const fAlerts    = alerts.filter(r => !q || r.title?.toLowerCase().includes(q) || r.district?.toLowerCase().includes(q));
+  // There is no client-side filter here on purpose. The search term is part of
+  // the QUERY (see queueQuery), so these arrays already hold only what matched
+  // — across the whole table, not across the page that happened to be down.
 
   // ── Flat row renderer — surface bg, hairline divider ─────────────────────
   // Pending rows carry the C·02 evidence a 30-second decision needs:
@@ -703,11 +878,17 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     const bT = new Date(b.created_at).getTime();
     return aPending ? aT - bT : bT - aT;
   };
-  const currentData: QueueItem[] =
-    [...(tab === 'disease' ? fDisease : tab === 'water' ? fWater : tab === 'campaigns' ? fCampaigns : fAlerts)]
-      .sort(byQueueOrder);
-  const pendingOfTab  = tab === 'disease' ? pendingCounts.disease : tab === 'water' ? pendingCounts.water : tab === 'campaigns' ? pendingCounts.campaigns : pendingCounts.alerts;
-  const totalPending  = pendingCounts.disease + pendingCounts.water + pendingCounts.campaigns + pendingCounts.alerts;
+  const currentData: QueueItem[] = [...rowsOf(tab)].sort(byQueueOrder);
+  const pendingOfTab = pendingOf(tab);
+  // Only the tabs this role actually loads. Summing a tab that was never
+  // fetched would drag the whole header into "unknown".
+  const totalPending = visibleTabs.reduce(
+    (acc, t) => {
+      const c = pendingOf(t.id);
+      return { n: acc.n + c.n, exact: acc.exact && c.exact };
+    },
+    { n: 0, exact: true },
+  );
 
   const isDiseaseItem = (item: QueueItem): item is DiseaseReport =>
     selectedType === 'disease' && 'disease_name' in item;
@@ -796,7 +977,12 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         <View style={{ flex: 1, marginLeft: spacing.md }}>
           <Text style={[qst.headerTitle, { color: headerText }]}>Approval Queue</Text>
           <Text style={[qst.headerSub, { color: headerSub }]} maxFontSizeMultiplier={1.3}>
-            {totalPending} pending review{totalPending !== 1 ? 's' : ''}
+            {/* Under a search the counts are search-scoped, and the sentence
+                says so. A bare "0 pending review" while a filter is on would
+                read as an empty queue. */}
+            {searchActive
+              ? `${countText(totalPending)} pending matching this search`
+              : `${countText(totalPending)} pending review${totalPending.n !== 1 ? 's' : ''}`}
           </Text>
         </View>
       </View>
@@ -807,16 +993,22 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
       <View style={[qst.tabBar, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         {visibleTabs.map(t => {
           const active = tab === t.id;
-          const count  = { disease: pendingCounts.disease, water: pendingCounts.water, campaigns: pendingCounts.campaigns, alerts: pendingCounts.alerts }[t.id];
+          const count  = pendingOf(t.id);
           return (
             <TouchableOpacity
               key={t.id}
               style={qst.tabItem}
-              // A failed "Load more" belongs to the tab it happened on.
-              onPress={() => { setTab(t.id); setMoreError(null); }}
+              // A failed "Load more" belongs to the tab it happened on and
+              // stays there — moreError is keyed by tab, so switching away
+              // neither clears it nor shows it over somebody else's list.
+              onPress={() => setTab(t.id)}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
-              accessibilityLabel={count > 0 ? `${t.label}, ${count} pending` : t.label}
+              accessibilityLabel={
+                count.n > 0
+                  ? `${t.label}, ${countText(count)} pending${searchActive ? ' matching this search' : ''}`
+                  : t.label
+              }
             >
               <Ionicons name={t.icon} size={18} color={active ? colors.primary : colors.textSecondary} />
               <Text
@@ -828,9 +1020,11 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
               >
                 {t.label}
               </Text>
-              {count > 0 && (
+              {count.n > 0 && (
                 <View style={[qst.tabBadge, { backgroundColor: colors.danger }]}>
-                  <Text style={[qst.tabBadgeText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>{count}</Text>
+                  <Text style={[qst.tabBadgeText, { color: colors.textInverse }]} maxFontSizeMultiplier={1.3}>
+                    {countText(count)}
+                  </Text>
                 </View>
               )}
               {active && <View style={[qst.tabUnderline, { backgroundColor: colors.primary }]} />}
@@ -839,15 +1033,17 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         })}
       </View>
 
-      {/* Search */}
+      {/* Search — a SERVER filter over the whole table, not over the page */}
       <View style={[qst.searchRow, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
         <Ionicons name="search-outline" size={16} color={colors.textSecondary} />
         <TextInput
           style={[qst.searchInput, { color: colors.text }]}
-          placeholder="Search..."
+          placeholder="Search name or district"
           placeholderTextColor={colors.placeholder}
           value={search}
           onChangeText={setSearch}
+          autoCorrect={false}
+          accessibilityLabel="Search this queue by name or district"
         />
         {search.length > 0 && (
           <TouchableOpacity
@@ -861,24 +1057,56 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
         )}
       </View>
 
+      {/* Decided history is opt-in. Off, every row on the page is a row still
+          waiting on a human — and a tab costs one request, not four. */}
+      <View style={qst.filterRow}>
+        <Pressable
+          onPress={() => setShowDecided(v => !v)}
+          style={({ pressed }) => [
+            qst.toggleChip,
+            showDecided
+              ? { backgroundColor: pressed ? colors.primaryDark : colors.primary, borderColor: colors.primary }
+              : { backgroundColor: pressed ? colors.cardHover : colors.card, borderColor: colors.border },
+          ]}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: showDecided }}
+          accessibilityLabel="Show decided history"
+          accessibilityHint="Loads approved and rejected records after the pending block"
+        >
+          <Ionicons
+            name={showDecided ? 'checkbox-outline' : 'square-outline'}
+            size={18}
+            color={showDecided ? colors.onPrimary : colors.text}
+          />
+          <Text
+            style={[qst.toggleChipText, { color: showDecided ? colors.onPrimary : colors.text }]}
+            maxFontSizeMultiplier={1.3}
+          >
+            Show decided history
+          </Text>
+        </Pressable>
+      </View>
+
       {/* Column-header eyebrow row */}
       <View style={[qst.tableHead, { backgroundColor: colors.surfaceVariant, borderBottomColor: colors.border }]}>
-        {/* The count says which number it is. Search filters only what has
-            been paged in, so while more rows exist it must not read as a
-            count of the whole tab. */}
+        {/* One source for "how many are on screen": the array itself. The
+            number never switches sources mid-flight, and it never claims a
+            total the server has not actually told us. */}
         <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
           OLDEST FIRST ↓
           <Text style={{ fontVariant: ['tabular-nums'] }}>
-            {search
-              ? ` · ${currentData.length} of ${loadedOfTab} loaded`
-              : hasMore
+            {searchSettling
+              ? ' · SEARCHING…'
+              : !hasMore
+              ? ` · ${loadedOfTab}`
+              : totalOfTab != null
               ? ` · ${loadedOfTab} of ${totalOfTab}`
-              : ` · ${currentData.length}`}
+              : ` · ${loadedOfTab} loaded`}
           </Text>
         </Text>
         <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
           PENDING
-          <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${pendingOfTab}`}</Text>
+          <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${countText(pendingOfTab)}`}</Text>
         </Text>
       </View>
 
@@ -905,17 +1133,19 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
           ListEmptyComponent={
             fetchError ? null : (
               <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
-                {/* Search runs over the pages already on the phone. Saying
-                    "no items match" while unread pages exist would be a lie. */}
+                {/* The search ran on the server, so "no items match" is a
+                    statement about the whole table — but only about the part
+                    of it this screen asked for, which is why a hidden history
+                    says so out loud. */}
                 <EmptyState
-                  icon={search ? 'search-outline' : 'checkmark-circle-outline'}
-                  color={search ? colors.textSecondary : colors.success}
-                  title={search
-                    ? (hasMore
-                        ? `No match in the ${loadedOfTab} loaded so far.`
-                        : 'No items match — try a different search.')
+                  icon={searchActive ? 'search-outline' : 'checkmark-circle-outline'}
+                  color={searchActive ? colors.textSecondary : colors.success}
+                  title={searchActive
+                    ? 'No items match — try a different search.'
+                    : showDecided
+                    ? 'Nothing here yet — no records to review.'
                     : 'Queue clear — nothing waiting for review.'}
-                  subtitle={search && hasMore ? 'Load more below to keep looking.' : undefined}
+                  subtitle={showDecided ? undefined : 'Decided history is hidden — turn it on above to include past decisions.'}
                 />
               </View>
             )
@@ -923,11 +1153,13 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
           /* Four states for the next page: error-with-retry, skeleton,
              the affordance itself, then a quiet close. */
           ListFooterComponent={
-            moreError ? (
+            // A first load that failed already owns the screen; the next-page
+            // affordance has no business appearing under it.
+            fetchError ? null : moreError[tab] ? (
               <View style={qst.footerWrap}>
-                <ErrorCard message={moreError} onRetry={loadMore} />
+                <ErrorCard message={moreError[tab] as string} onRetry={loadMore} />
               </View>
-            ) : loadingMore ? (
+            ) : loadingMore[tab] ? (
               <View style={qst.footerWrap} accessibilityElementsHidden>
                 <SkeletonBlock height={64} radius={radii.sm} />
                 <SkeletonBlock height={64} radius={radii.sm} />
@@ -941,11 +1173,12 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
                     { backgroundColor: pressed ? colors.cardHover : colors.card, borderColor: colors.border },
                   ]}
                   accessibilityRole="button"
-                  accessibilityLabel={`Load more, ${totalOfTab - loadedOfTab} still to load`}
+                  // The "n left" only appears when the server actually said n.
+                  accessibilityLabel={remaining != null ? `Load more, ${remaining} still to load` : 'Load more'}
                 >
                   <Ionicons name="arrow-down-circle-outline" size={18} color={colors.primary} />
                   <Text style={[qst.loadMoreText, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>
-                    {`Load more · ${totalOfTab - loadedOfTab} left`}
+                    {remaining != null ? `Load more · ${remaining} left` : 'Load more'}
                   </Text>
                 </Pressable>
               </View>
@@ -1344,6 +1577,16 @@ const qst = StyleSheet.create({
     borderRadius: radii.md, borderWidth: 1.5, gap: spacing.sm,
   },
   searchInput: { flex: 1, fontSize: 15, paddingVertical: spacing.sm },
+  /* Decided-history toggle */
+  filterRow: { flexDirection: 'row', paddingHorizontal: spacing.lg, marginBottom: spacing.md },
+  toggleChip: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    minHeight: 48, paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill, borderWidth: 1.5,
+    // Shrinks rather than pushing the page sideways at 1.3x text scale.
+    flexShrink: 1,
+  },
+  toggleChipText: { fontSize: 13, lineHeight: 18, fontWeight: '700', flexShrink: 1 },
   /* Table head */
   tableHead: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

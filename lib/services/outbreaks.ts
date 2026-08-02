@@ -28,7 +28,8 @@ export interface Outbreak {
   triggered_by_report_id?: string | null;
   detected_by_trigger?: boolean | null;
   /**
-   * "A public alert exists for this outbreak" — and NOTHING ELSE may set it.
+   * "An approved public alert is linked to this outbreak" — and NOTHING
+   * ELSE may set it.
    *
    * The raw DB column does not mean that. `detect_outbreak_after_report()`
    * runs `UPDATE outbreaks SET alert_sent = TRUE` immediately after inserting
@@ -43,8 +44,6 @@ export interface Outbreak {
   officials_notified?: boolean | null;
   /** Result of this service's linked-alert check. Never guessed. */
   alert_link?: AlertLink;
-  /** Set by the BRK-10 migration; absent on the live schema today. */
-  linked_alert_id?: string | null;
   response_notes?: string | null;
   resolved_by?: string | null;
   resolved_at?: string | null;
@@ -101,87 +100,111 @@ export const isOutbreakConfirmed = (outbreak: Pick<Outbreak, 'response_notes'>):
 // ─────────────────────────────────────────────────────
 //  Alert linkage — what "alert_sent" is allowed to mean
 //
-//  Only two things count as a link between an outbreak and
-//  a public alert:
-//    1. outbreaks.linked_alert_id                (once the column exists)
-//    2. health_alerts.metadata->>'outbreak_id'   (works on today's schema)
-//  Nothing else. Matching on disease name or district is a
-//  guess, and the response console used to guess: with no
-//  alert naming the disease it fell back to the newest alert
-//  in the district and reported THAT alert's acknowledgement
-//  rate as this outbreak's reach. An officer read a five-month
-//  old typhoid notice's numbers as today's cholera response.
+//  EXACTLY ONE thing counts as a link between an outbreak and
+//  a public alert: `health_alerts.metadata->>'outbreak_id'`.
+//  It is a real, queryable contract on today's schema and
+//  needs no migration — the alert form writes
+//  `metadata: { outbreak_id }` when an officer raises an alert
+//  against a signal, and this reads it back.
+//
+//  An earlier draft of this file also honoured a second path,
+//  `outbreaks.linked_alert_id`. That column does not exist on
+//  the live schema (verified: `outbreaks` has 20 columns and
+//  none is named linked_alert_id), so `select('*')` can never
+//  return it, the branch could never run, and its "link points
+//  at a row I cannot see → unknown" case turned an RLS refusal
+//  into a "check your connection" retry that could never
+//  succeed. It is gone. Do not reintroduce a link source that
+//  the schema cannot produce.
+//
+//  Matching on disease name or district is NOT a link, it is a
+//  guess, and the response console used to guess: with no alert
+//  naming the disease it fell back to the newest alert in the
+//  district and reported THAT alert's acknowledgement rate as
+//  this outbreak's reach. An officer read a five-month old
+//  typhoid notice's numbers as today's cholera response.
 // ─────────────────────────────────────────────────────
 
 const LINKED_ALERT_COLUMNS = 'id, title, district, status, approval_status, approved_at, created_at';
 
-/** An alert only warned the public once a human approved it. */
+/**
+ * An alert only warned the public once a human approved it.
+ *
+ * NOTE the scope of the negative: because `alerts_select` grants every
+ * caller `approval_status = 'approved'`, a *false* here means "no approved
+ * alert is linked" for EVERY role — it is not an artefact of what this
+ * user may see. Unapproved drafts are role-restricted, so their absence
+ * proves nothing and the UI must never say "nothing was drafted".
+ */
 export const isAlertPubliclyIssued = (link?: AlertLink | null): boolean =>
   link?.kind === 'linked' && link.alert.approval_status === 'approved';
 
+/** The linked alert row, or null — saves callers a kind check. */
+export const linkedAlertOf = (link?: AlertLink | null): LinkedAlert | null =>
+  link && link.kind === 'linked' ? link.alert : null;
+
 /**
- * Resolve the alert link for a batch of outbreaks in at most two queries.
+ * An issued alert whose row has since left 'active' (resolved, expired,
+ * cancelled…) still warned the public once, but it is not standing today.
+ * Returns the raw status when it is no longer live, else null.
+ */
+export const staleAlertStatus = (link?: AlertLink | null): string | null => {
+  const alert = linkedAlertOf(link);
+  const status = (alert?.status ?? '').trim().toLowerCase();
+  return status && status !== 'active' ? status : null;
+};
+
+/** A usable outbreak id, or null. Rows selected without `id` return null. */
+const outbreakIdOf = (row?: Pick<Outbreak, 'id'> | null): string | null => {
+  const id = typeof row?.id === 'string' ? row.id.trim() : '';
+  return id.length > 0 ? id : null;
+};
+
+/** Prefer an approved alert over a draft; break ties on the newer row. */
+const preferAlert = (a: LinkedAlert, b: LinkedAlert): LinkedAlert => {
+  const rank = (x: LinkedAlert) => (x.approval_status === 'approved' ? 1 : 0);
+  if (rank(a) !== rank(b)) return rank(a) > rank(b) ? a : b;
+  return (a.created_at ?? '') >= (b.created_at ?? '') ? a : b;
+};
+
+/**
+ * Resolve the alert link for a batch of outbreaks in one query.
  * Any failure marks EVERY row 'unknown' — an unreachable alerts table must
  * not be reported as "no alert was issued".
  */
 async function fetchAlertLinks(rows: Outbreak[]): Promise<Map<string, AlertLink>> {
   const links = new Map<string, AlertLink>();
-  if (rows.length === 0) return links;
+  const ids = Array.from(
+    new Set(rows.map((r) => outbreakIdOf(r)).filter((id): id is string => !!id)),
+  );
+  if (ids.length === 0) return links;
   try {
-    const alertsById = new Map<string, LinkedAlert>();
-    const outbreakIdByAlertId = new Map<string, string>();
-
-    // (2) Alerts that name the outbreak in their metadata. Verified against
-    // the live project: `metadata->>outbreak_id=in.(…)` is a valid filter.
-    const { data: tagged, error: taggedError } = await supabase
+    // Alerts that name the outbreak in their metadata. Verified against the
+    // live project: `metadata->>outbreak_id=in.(…)` is a valid filter.
+    const { data, error } = await supabase
       .from('health_alerts')
       .select(`${LINKED_ALERT_COLUMNS}, metadata`)
-      .in('metadata->>outbreak_id', rows.map((r) => r.id));
-    if (taggedError) throw taggedError;
-    (tagged ?? []).forEach((row: any) => {
-      const outbreakId = String(row?.metadata?.outbreak_id ?? '');
-      if (!outbreakId) return;
-      alertsById.set(row.id, row as LinkedAlert);
-      outbreakIdByAlertId.set(row.id, outbreakId);
+      .in('metadata->>outbreak_id', ids);
+    if (error) throw error;
+
+    const best = new Map<string, LinkedAlert>();
+    (data ?? []).forEach((row: any) => {
+      const tag = row?.metadata?.outbreak_id;
+      const outbreakId = typeof tag === 'string' ? tag.trim() : '';
+      if (!outbreakId || !row?.id) return;
+      const alert = row as LinkedAlert;
+      const current = best.get(outbreakId);
+      best.set(outbreakId, current ? preferAlert(alert, current) : alert);
     });
 
-    // (1) The explicit column wins where it exists.
-    const explicitIds = Array.from(
-      new Set(rows.map((r) => r.linked_alert_id).filter((id): id is string => !!id)),
-    );
-    if (explicitIds.length > 0) {
-      const { data: explicit, error: explicitError } = await supabase
-        .from('health_alerts')
-        .select(LINKED_ALERT_COLUMNS)
-        .in('id', explicitIds);
-      if (explicitError) throw explicitError;
-      (explicit ?? []).forEach((row: any) => alertsById.set(row.id, row as LinkedAlert));
-    }
-
-    const taggedByOutbreak = new Map<string, LinkedAlert>();
-    outbreakIdByAlertId.forEach((outbreakId, alertId) => {
-      const alert = alertsById.get(alertId);
-      // Newest link wins if an outbreak somehow carries two.
-      const current = taggedByOutbreak.get(outbreakId);
-      if (alert && (!current || alert.created_at > current.created_at)) {
-        taggedByOutbreak.set(outbreakId, alert);
-      }
-    });
-
-    rows.forEach((row) => {
-      if (row.linked_alert_id) {
-        const alert = alertsById.get(row.linked_alert_id);
-        // A link pointing at a row we cannot see is a question, not a "no".
-        links.set(row.id, alert ? { kind: 'linked', alert } : { kind: 'unknown' });
-        return;
-      }
-      const tagged = taggedByOutbreak.get(row.id);
-      links.set(row.id, tagged ? { kind: 'linked', alert: tagged } : { kind: 'none' });
+    ids.forEach((id) => {
+      const alert = best.get(id);
+      links.set(id, alert ? { kind: 'linked', alert } : { kind: 'none' });
     });
     return links;
   } catch (error: any) {
     console.error('Error resolving outbreak alert links:', error);
-    rows.forEach((row) => links.set(row.id, { kind: 'unknown' }));
+    ids.forEach((id) => links.set(id, { kind: 'unknown' }));
     return links;
   }
 }
@@ -196,10 +219,23 @@ async function fetchAlertLinks(rows: Outbreak[]): Promise<Map<string, AlertLink>
 export async function withHonestAlertState(rows: Outbreak[]): Promise<Outbreak[]> {
   const links = await fetchAlertLinks(rows);
   return rows.map((row) => {
-    const link = links.get(row.id) ?? { kind: 'unknown' as const };
+    const id = outbreakIdOf(row);
+    if (!id) {
+      // A row selected without `id` was never asked about. That is
+      // "we could not check", never "there is no alert" — a silent
+      // 'none' here would print a confident negative from a query
+      // that never ran.
+      console.error(
+        'withHonestAlertState: outbreak row has no id — alert state is unknown. ' +
+          'Select `id` alongside the columns you need.',
+      );
+    }
+    const link: AlertLink = id ? links.get(id) ?? { kind: 'unknown' } : { kind: 'unknown' };
     return {
       ...row,
-      officials_notified: row.alert_sent === true,
+      // Idempotent: re-running on an already-honest row must not lose the
+      // raw trigger fact by reading the rewritten alert_sent back.
+      officials_notified: row.officials_notified ?? row.alert_sent === true,
       alert_link: link,
       // 'unknown' resolves to false: under-claiming sends the officer to
       // check the alert; over-claiming makes them stop chasing it.
@@ -281,14 +317,19 @@ async function appendedNotes(outbreakId: string, text: string): Promise<string> 
 //  Service
 // ─────────────────────────────────────────────────────
 export const outbreaksService = {
-  /** Open signals: active + monitoring outbreaks, newest first. */
-  async getActive(district?: string): Promise<ApiResponse<Outbreak[]>> {
+  /**
+   * Open signals: active + monitoring outbreaks, newest first.
+   * Bounded — the resolved ids become an `in.(…)` list in the alert-link
+   * query's URL, and an unbounded list would eventually exceed it.
+   */
+  async getActive(district?: string, limit = 50): Promise<ApiResponse<Outbreak[]>> {
     try {
       let query = supabase
         .from('outbreaks')
         .select('*')
         .in('status', ['active', 'monitoring'])
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (district) query = query.eq('district', district);
       const { data, error } = await query;
       if (error) throw error;

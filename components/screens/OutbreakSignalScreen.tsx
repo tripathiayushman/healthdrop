@@ -30,12 +30,13 @@ import {
   OUTBREAK_CONFIRM_MARKER,
   isAlertPubliclyIssued,
   outbreaksService,
+  staleAlertStatus,
 } from '../../lib/services/outbreaks';
 
 const OUTBREAK_ERROR = "Couldn't load this signal — check connection.";
 const REPORTS_ERROR = "Couldn't load the contributing reports — check connection.";
 const ALERT_LINK_ERROR =
-  "Couldn't check whether an alert was issued for this signal — check connection.";
+  "Couldn't check whether an alert is linked to this signal — check connection.";
 
 const shortDate = (iso?: string | null): string => {
   if (!iso) return '';
@@ -632,17 +633,32 @@ export default function OutbreakSignalScreen({
 }
 
 // ─────────────────────────────────────────────────────
-//  AlertStatusCard — the one claim this screen may not
-//  overstate. It reads the alert link the service resolved
-//  (outbreaks.linked_alert_id, or health_alerts.metadata
-//  ->>'outbreak_id'), never the raw alert_sent column: the
-//  detection trigger sets that flag TRUE the moment it fires,
-//  so a plain read of it tells an officer the public was
-//  warned when no alert row exists at all. When the check
-//  itself failed we say so and offer a retry — "no alert"
-//  and "couldn't ask" are different facts.
+//  AlertStatusCard — the one claim these screens may not
+//  overstate. Shared with the response console so both say
+//  the same words about the same fact.
+//
+//  It reads the alert link the service resolved
+//  (health_alerts.metadata->>'outbreak_id'), never the raw
+//  alert_sent column: the detection trigger sets that flag TRUE
+//  the moment it fires, so a plain read of it tells an officer
+//  the public was warned when no alert row exists at all. When
+//  the check itself failed we say so and offer a retry — "no
+//  alert" and "couldn't ask" are different facts.
+//
+//  The negative is deliberately scoped to APPROVED alerts.
+//  `alerts_select` on the live project is
+//    approval_status = 'approved'
+//    OR role IN (super_admin, health_admin, clinic)
+//    OR created_by = auth.uid()
+//  — so approved rows are visible to every caller and "no
+//  approved alert is linked" is a fact for all roles, while an
+//  unapproved draft can be hidden from a district officer. We
+//  therefore never claim "nothing has been drafted", only that
+//  nothing approved is linked; and we say plainly that an alert
+//  raised without naming this signal will not appear here, so
+//  absence in this card is never read as absence in the world.
 // ─────────────────────────────────────────────────────
-const AlertStatusCard: React.FC<{ outbreak: Outbreak; onRetry: () => void }> = ({
+export const AlertStatusCard: React.FC<{ outbreak: Outbreak; onRetry: () => void }> = ({
   outbreak,
   onRetry,
 }) => {
@@ -660,22 +676,31 @@ const AlertStatusCard: React.FC<{ outbreak: Outbreak; onRetry: () => void }> = (
   const issued = isAlertPubliclyIssued(link);
   const drafted = link.kind === 'linked' && !issued;
   const accent = issued ? colors.info : drafted ? colors.warning : colors.textTertiary;
+  const stale = staleAlertStatus(link);
 
   let title: string;
   let detail: string;
   if (link.kind === 'linked' && issued) {
-    title = `Public alert issued — “${link.alert.title}”`;
-    detail = link.alert.approved_at
-      ? `Approved ${shortDateTime(link.alert.approved_at)} · ${link.alert.district || outbreak.district}`
-      : `Approval time not recorded · ${link.alert.district || outbreak.district}`;
+    const where = link.alert.district || outbreak.district;
+    title = stale
+      ? `Public alert issued, now ${stale} — “${link.alert.title}”`
+      : `Public alert issued — “${link.alert.title}”`;
+    const when = link.alert.approved_at
+      ? `Approved ${shortDateTime(link.alert.approved_at)} · ${where}`
+      : `Approval time not recorded · ${where}`;
+    detail = stale
+      ? `${when}. The alert is no longer standing — it is marked ${stale}.`
+      : when;
   } else if (link.kind === 'linked') {
     title = `Alert drafted, awaiting approval — “${link.alert.title}”`;
     detail = 'Nothing has reached the public yet. An alert goes out only after a person approves it.';
   } else {
-    title = 'Not yet alerted — no public alert has been issued for this signal';
+    const caveat =
+      ' An alert appears here only if it was raised against this signal, so check the alerts list before assuming there is none.';
+    title = 'Not yet alerted — no approved public alert is linked to this signal';
     detail = outbreak.officials_notified
-      ? 'When the rule fired it filed an in-app notice to district officials. That is not a public alert — villagers have not been warned.'
-      : 'Alerts are written and approved by a person. A detection rule never sends one.';
+      ? `When the rule fired it filed an in-app notice to district officials — not a public alert. Villagers have not been warned.${caveat}`
+      : `Alerts are written and approved by a person; a detection rule never sends one.${caveat}`;
   }
 
   return (

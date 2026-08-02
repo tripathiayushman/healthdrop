@@ -7,18 +7,22 @@
 // name; acknowledging is a promise ("I'll inform my
 // area") — that count is what the officer watches.
 // =====================================================
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, ScrollView, TextInput, RefreshControl, Pressable,
   Linking, useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
-import { filterAlertsForProfile, isRadiusScopedRole } from '../../lib/services/alertRadius';
+import {
+  ALERT_RADIUS_KM, filterAlertsForProfile, isRadiusScopedRole, isWithinAlertRadius,
+} from '../../lib/services/alertRadius';
+import { computeCompleteness } from '../../lib/services/profileCompleteness';
 import { sanitizeSearchTerm } from '../../lib/services/searchSanitize';
 import { alertAcks } from '../../lib/services/alertAcks';
 import {
@@ -104,13 +108,21 @@ const directiveHindiOf = (alert: Alert): string | null => {
 
 const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   const { width } = useWindowDimensions();
   // title-1 poster scale — 24/700, up to 28 on wide screens.
   // Devanagari gets ~1.3× line-height headroom.
   const wide = width >= 480;
   const directiveSize = wide ? 28 : 24;
 
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  // Everything the server returned for the current search/urgency query, BEFORE
+  // the client-side radius filter. Keeping it is what lets this screen say how
+  // many alerts it is hiding instead of rendering a green all-clear over them.
+  const [rawAlerts, setRawAlerts] = useState<Alert[]>([]);
+  // Opt-in reveal: the radius filter is a relevance filter, not a permission
+  // boundary (RLS already allows any approved alert to be read), so the user
+  // may always ask to see what was scoped away.
+  const [showOutsideArea, setShowOutsideArea] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
@@ -146,13 +158,12 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
         console.error('Failed to load alerts:', error);
         setFetchError("Couldn't load alerts — check connection");
       } else if (data) {
-        const list = isRadiusScopedRole(profile.role)
-          ? filterAlertsForProfile(data, profile)
-          : data;
-        setAlerts(list);
+        // Scoping happens at render time, not here: the raw result is the only
+        // evidence we have for "the server does have alerts, we hid them".
+        setRawAlerts(data as Alert[]);
         // Batch: which of these has this user already acknowledged?
         // Failure degrades quietly — captions simply don't render.
-        const ackRes = await alertAcks.myAckFor(list.map((a: Alert) => a.id));
+        const ackRes = await alertAcks.myAckFor((data as Alert[]).map((a) => a.id));
         if (ackRes.data) setAckedIds(ackRes.data);
       }
     } catch (err: any) {
@@ -160,7 +171,77 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
       setFetchError("Couldn't load alerts — check connection");
     }
     finally { setLoading(false); }
-  }, [urgencyFilter, search, profile]);
+  }, [urgencyFilter, search]);
+
+  // ── Scope bookkeeping ──────────────────────────────────────────────
+  // filterAlertsForProfile is an exact district match widened to
+  // ALERT_RADIUS_KM only for districts that appear in a hardcoded gazetteer, so
+  // it silently drops real, live, approved alerts (Kovilancheri and Moolacheri
+  // are not in that table at all). Every number below is derived from the same
+  // rows, so the copy can never quote a count it did not verify.
+  const scopedRole = isRadiusScopedRole(profile.role);
+  const districtNotSet =
+    scopedRole && computeCompleteness(profile).missing.includes('district');
+  const inScopeAlerts = useMemo(
+    () => filterAlertsForProfile(rawAlerts, profile),
+    [rawAlerts, profile.role, profile.district, profile.state],
+  );
+  const hiddenByScope = rawAlerts.length - inScopeAlerts.length;
+  const alerts = showOutsideArea ? rawAlerts : inScopeAlerts;
+  const isFiltered = !!search || !!urgencyFilter;
+  const scopeArea = t('alertScope.whereDistrict', {
+    defaultValue: '{{district}} and {{km}} km around it',
+    district: profile.district,
+    km: ALERT_RADIUS_KM,
+  });
+
+  // The subtitle is a claim about how many alerts exist, so it may never read
+  // "0 alerts found" while a fetch is in flight, while a fetch has failed, or
+  // while rows are sitting behind the radius filter.
+  const headerSubText = loading
+    ? t('alertScope.listLoading', { defaultValue: 'Checking for active alerts…' })
+    : fetchError
+      ? (rawAlerts.length > 0
+          ? t('alertScope.listCountStale', { defaultValue: 'Showing the last list that loaded — the refresh failed' })
+          : t('alertScope.listCountUnavailable', { defaultValue: 'Count unavailable — the list did not load' }))
+      : hiddenByScope > 0
+        ? districtNotSet
+          ? (showOutsideArea
+              ? t('alertScope.listCountNoDistrictShown', {
+                  defaultValue: '{{n}} active — none matched to you until your district is set',
+                  n: alerts.length,
+                })
+              : t('alertScope.listCountNoDistrictHidden', {
+                  defaultValue: "0 shown — your district isn't set · {{hidden}} active",
+                  hidden: hiddenByScope,
+                }))
+          : (showOutsideArea
+              ? t('alertScope.listCountRevealed', {
+                  defaultValue: '{{n}} shown · {{hidden}} outside your area',
+                  n: alerts.length, hidden: hiddenByScope,
+                })
+              : t('alertScope.listCountScoped', {
+                  defaultValue: '{{n}} in your area · {{hidden}} more outside',
+                  n: alerts.length, hidden: hiddenByScope,
+                }))
+        : alerts.length === 1
+          ? t('alertScope.listCountOne', { defaultValue: '1 alert found' })
+          : t('alertScope.listCountMany', { defaultValue: '{{n}} alerts found', n: alerts.length });
+
+  const linkColor = isDark ? colors.primary : colors.primaryDark;
+
+  /** The way back to the alerts the radius filter removed. */
+  const revealButton = (label: string, a11y: string) => (
+    <TouchableOpacity
+      style={[as.revealBtn, { borderColor: colors.warning, backgroundColor: colors.surface }]}
+      onPress={() => setShowOutsideArea(true)}
+      accessibilityRole="button"
+      accessibilityLabel={a11y}
+    >
+      <Ionicons name="eye-outline" size={16} color={linkColor} />
+      <Text style={[as.revealBtnText, { color: linkColor }]} maxFontSizeMultiplier={1.3}>{label}</Text>
+    </TouchableOpacity>
+  );
 
   useEffect(() => { load(); }, [load]);
 
@@ -286,7 +367,7 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
         <View style={{ flex: 1, marginLeft: spacing.md }}>
           <Text style={[as.headerTitle, { color: headerText }]}>Active Alerts</Text>
           <Text style={[as.headerSub, { color: headerSub }]} maxFontSizeMultiplier={1.3}>
-            {alerts.length} alert{alerts.length !== 1 ? 's' : ''} found
+            {headerSubText}
           </Text>
         </View>
       </View>
@@ -342,6 +423,61 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
         })}
       </View>
 
+      {/* Scope confession — when rows ARE listed but the radius filter is also
+          holding some back, the list must admit it; a count that silently omits
+          live alerts is the same lie as a green all-clear over them. */}
+      {!loading && !fetchError && hiddenByScope > 0 && alerts.length > 0 && (
+        <View
+          style={[as.scopeStrip, { backgroundColor: colors.warningBg, borderColor: colors.warning }]}
+          accessibilityLiveRegion="polite"
+        >
+          <View style={as.scopeStripRow}>
+            <Ionicons name="alert-circle-outline" size={16} color={colors.warning} />
+            <Text style={[as.scopeStripText, { color: colors.text }]}>
+              {showOutsideArea
+                ? (districtNotSet
+                    ? t('alertScope.stripRevealedNoDistrict', {
+                        defaultValue: "Showing every active alert. Your district isn't set, so none of them are matched to you.",
+                      })
+                    : hiddenByScope === 1
+                      ? t('alertScope.stripRevealedOne', {
+                          defaultValue: 'Showing 1 alert from outside {{area}}.', area: scopeArea,
+                        })
+                      : t('alertScope.stripRevealedMany', {
+                          defaultValue: 'Showing {{hidden}} alerts from outside {{area}}.',
+                          hidden: hiddenByScope, area: scopeArea,
+                        }))
+                : hiddenByScope === 1
+                  ? t('alertScope.stripHiddenOne', {
+                      defaultValue: '1 more active alert is outside {{area}} and is not listed here.', area: scopeArea,
+                    })
+                  : t('alertScope.stripHiddenMany', {
+                      defaultValue: '{{hidden}} more active alerts are outside {{area}} and are not listed here.',
+                      hidden: hiddenByScope, area: scopeArea,
+                    })}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[as.revealBtn, { borderColor: colors.warning, backgroundColor: colors.surface }]}
+            onPress={() => setShowOutsideArea(v => !v)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showOutsideArea }}
+            accessibilityLabel={showOutsideArea
+              ? t('alertScope.hideOutsideA11y', { defaultValue: 'Hide alerts from outside my area' })
+              : hiddenByScope === 1
+                ? t('alertScope.showOutsideA11yOne', { defaultValue: 'Show the 1 alert outside my area' })
+                : t('alertScope.showOutsideA11yMany', { defaultValue: 'Show the {{hidden}} alerts outside my area', hidden: hiddenByScope })}
+          >
+            <Ionicons name={showOutsideArea ? 'eye-off-outline' : 'eye-outline'} size={16} color={linkColor} />
+            <Text style={[as.revealBtnText, { color: linkColor }]} maxFontSizeMultiplier={1.3}>
+              {showOutsideArea
+                ? t('alertScope.hideOutside', { defaultValue: 'Hide them' })
+                : t('alertScope.showOutside', { defaultValue: 'Show them' })}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* List — skeleton / error / quiet-zero / content */}
       {fetchError && !loading && (
         <View style={{ paddingHorizontal: spacing.lg }}>
@@ -361,17 +497,74 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
           contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           ListEmptyComponent={
-            fetchError ? null : (
+            /* Four distinct empty meanings, and only the last is calm:
+               the fetch failed (ErrorCard above owns it) / the server really
+               returned nothing / no district to match against / the radius
+               filter ate a non-empty result. */
+            fetchError ? null : rawAlerts.length > 0 ? (
+              districtNotSet ? (
+                <View accessibilityLiveRegion="polite">
+                  <EmptyState
+                    icon="location-outline"
+                    color={colors.warning}
+                    title={t('alertScope.listNoDistrictTitle', { defaultValue: "Your district isn't set" })}
+                    subtitle={rawAlerts.length === 1
+                      ? t('alertScope.listNoDistrictBodyOne', {
+                          defaultValue: '1 active alert is live, but alerts are matched to your district and yours is not set. This is not an all-clear — open Profile and set your district.',
+                        })
+                      : t('alertScope.listNoDistrictBodyMany', {
+                          defaultValue: '{{n}} active alerts are live, but alerts are matched to your district and yours is not set. This is not an all-clear — open Profile and set your district.',
+                          n: rawAlerts.length,
+                        })}
+                  />
+                  {revealButton(
+                    t('alertScope.showAllAction', { defaultValue: 'Show all active alerts' }),
+                    t('alertScope.showAllA11y', { defaultValue: 'Show all active alerts, including ones not matched to a district' }),
+                  )}
+                </View>
+              ) : (
+                <View accessibilityLiveRegion="polite">
+                  <EmptyState
+                    icon="alert-circle-outline"
+                    color={colors.warning}
+                    title={hiddenByScope === 1
+                      ? t('alertScope.listScopedTitleOne', { defaultValue: '1 active alert — not in your area' })
+                      : t('alertScope.listScopedTitleMany', { defaultValue: '{{n}} active alerts — none in your area', n: hiddenByScope })}
+                    subtitle={isFiltered
+                      ? t('alertScope.listScopedBodyFiltered', {
+                          defaultValue: 'Of the alerts matching your search, none are inside {{area}}. This is not an all-clear.',
+                          area: scopeArea,
+                        })
+                      : t('alertScope.listScopedBody', {
+                          defaultValue: 'This list only covers {{area}}, so this is not an all-clear.',
+                          area: scopeArea,
+                        })}
+                  />
+                  {revealButton(
+                    t('alertScope.showOutsideAnyway', { defaultValue: 'Show them anyway' }),
+                    hiddenByScope === 1
+                      ? t('alertScope.showOutsideA11yOne', { defaultValue: 'Show the 1 alert outside my area' })
+                      : t('alertScope.showOutsideA11yMany', { defaultValue: 'Show the {{hidden}} alerts outside my area', hidden: hiddenByScope }),
+                  )}
+                </View>
+              )
+            ) : (
+              /* The query itself came back with nothing — a verified zero. */
               <EmptyState
-                icon={search || urgencyFilter ? 'search-outline' : 'checkmark-circle-outline'}
-                color={search || urgencyFilter ? colors.textSecondary : colors.success}
-                title={search || urgencyFilter
-                  ? 'No alerts match — try a different search or filter.'
-                  : 'All clear — no active health alerts right now.'}
+                icon={isFiltered ? 'search-outline' : 'checkmark-circle-outline'}
+                color={isFiltered ? colors.textSecondary : colors.success}
+                title={isFiltered
+                  ? t('alertScope.listNoMatch', { defaultValue: 'No alerts match — try a different search or filter.' })
+                  : t('alertScope.listAllClear', { defaultValue: 'All clear — no active health alerts right now.' })}
               />
             )
           }
-          renderItem={({ item: a }) => (
+          renderItem={({ item: a }) => {
+            // Only meaningful once the user has asked to see beyond the radius:
+            // an unlabelled far-away alert would read as local news.
+            const outsideArea =
+              showOutsideArea && scopedRole && !districtNotSet && !isWithinAlertRadius(a, profile);
+            return (
             <Pressable
               style={({ pressed }) => [
                 as.card,
@@ -386,6 +579,7 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
               accessibilityRole="button"
               accessibilityLabel={
                 `Alert, urgency ${a.urgency_level}: ${a.title}` +
+                (outsideArea ? '. Outside your area.' : '') +
                 (ackedIds.has(a.id) ? '. Acknowledged.' : '')
               }
             >
@@ -395,6 +589,14 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                   {formatSafeDate(a.created_at, 'dd MMM yyyy', '—')}
                 </Text>
               </View>
+              {outsideArea && (
+                <View style={as.outsideTagRow}>
+                  <Ionicons name="navigate-outline" size={14} color={colors.textSecondary} />
+                  <Text style={[as.outsideTagText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                    {t('alertScope.outsideAreaTag', { defaultValue: 'outside your area' })}
+                  </Text>
+                </View>
+              )}
               <Text style={[as.cardTitle, { color: colors.text }]} numberOfLines={2}>{a.title}</Text>
               <Text style={[as.cardDesc, { color: colors.textSecondary }]} numberOfLines={2}>{a.description}</Text>
               {ackedIds.has(a.id) && (
@@ -413,7 +615,8 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                 <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
               </View>
             </Pressable>
-          )}
+            );
+          }}
         />
       )}
 
@@ -636,6 +839,26 @@ const as = StyleSheet.create({
   },
   chipText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
   skeletonWrap: { paddingHorizontal: spacing.lg, gap: spacing.md, paddingTop: spacing.xs },
+  /* Scope confession strip — the sentence is the whole point of it, so it
+     wraps onto as many lines as it needs and the control sits below it
+     rather than competing for width at 360dp. */
+  scopeStrip: {
+    marginHorizontal: spacing.lg, marginBottom: spacing.md,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+    borderWidth: 1, borderRadius: radii.md, gap: spacing.sm,
+  },
+  scopeStripRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xs },
+  scopeStripText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  revealBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.xs, minHeight: 48, paddingHorizontal: spacing.lg,
+    borderWidth: 1.5, borderRadius: radii.md, marginTop: spacing.sm,
+  },
+  revealBtnText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  /* "outside your area" card caption — shown only on revealed alerts */
+  outsideTagRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: spacing.xs },
+  outsideTagText: { fontSize: 12, lineHeight: 16, fontWeight: '600' },
   card: {
     borderRadius: radii.md, borderWidth: 1, borderLeftWidth: 3,
     padding: spacing.lg, marginBottom: spacing.md, minHeight: 64,
