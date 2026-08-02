@@ -85,7 +85,18 @@ initI18n();
  * Switch the app language and persist it. Contract used by the
  * ProfileScreen language picker — do not rename.
  */
-export const setAppLanguage = async (lang: AppLanguage): Promise<void> => {
+/**
+ * Switch the app language and remember it.
+ *
+ * Returns `{ persisted }` because the two halves fail independently and mean
+ * different things to the user. If `changeLanguage` fails, nothing happened
+ * and this throws. If only the WRITE fails, the screen is in the new language
+ * right now but the phone will forget by the next cold start — a field worker
+ * who switches to Hindi, closes the app and finds English again has been told
+ * nothing about why. That used to be swallowed entirely, with the log deleted
+ * too, so it was invisible to the user AND to diagnostics.
+ */
+export const setAppLanguage = async (lang: AppLanguage): Promise<{ persisted: boolean }> => {
   // Synchronous, before the first await — the deferred restore in initI18n
   // may resolve at any point from here on.
   const wasPicked = userPickedLanguage;
@@ -101,8 +112,14 @@ export const setAppLanguage = async (lang: AppLanguage): Promise<void> => {
   }
   try {
     await AsyncStorage.setItem(STORAGE_KEY, lang);
-  } catch {
-    // Best-effort persistence — the in-session switch already happened.
+    return { persisted: true };
+  } catch (error) {
+    // The switch itself already happened, so this is NOT a failed switch —
+    // but it is not a complete success either, and the caller decides what to
+    // say. Logged as well as returned: a silent catch here is how "my phone
+    // keeps going back to English" becomes unreproducible.
+    console.warn('[i18n] language changed but could not be persisted:', error);
+    return { persisted: false };
   }
 };
 

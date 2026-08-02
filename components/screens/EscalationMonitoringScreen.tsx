@@ -8,10 +8,15 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { EscalationRecord, Profile } from '../../types';
+import { Profile } from '../../types';
 import { useTheme, Theme } from '../../lib/ThemeContext';
 import { EmptyState, ErrorCard, SkeletonBlock } from '../dashboards/DashboardShared';
-import { getEscalationMonitoring } from '../../lib/services/advancedAnalytics';
+import {
+  EscalationRecordWithSla,
+  EscalationSlaPolicy,
+  getEscalationMonitoring,
+  getEscalationSlaPolicy,
+} from '../../lib/services/advancedAnalytics';
 
 interface EscalationMonitoringScreenProps {
   profile: Profile;
@@ -43,6 +48,31 @@ const queueTabForRecord = (reportType: string): 'disease' | 'water' | 'campaigns
   return 'disease';
 };
 
+// A pending item can be four days old. "96h" is a number you have to decode;
+// "4.0d" is one you can read at a glance.
+const formatHours = (hours: number): string => {
+  const value = Math.max(0, hours);
+  if (value < 1) return '<1h';
+  if (value < 48) return `${Math.round(value)}h`;
+  const days = value / 24;
+  return `${days < 10 ? days.toFixed(1) : Math.round(days)}d`;
+};
+
+const typeLabel = (reportType: string): string => {
+  switch (reportType) {
+    case 'disease':
+      return 'Disease report';
+    case 'water':
+      return 'Water report';
+    case 'campaign':
+      return 'Campaign';
+    case 'alert':
+      return 'Alert';
+    default:
+      return 'Report';
+  }
+};
+
 const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
   profile,
   onBack,
@@ -51,7 +81,9 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
   const { colors, isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [records, setRecords] = useState<EscalationRecord[]>([]);
+  const [records, setRecords] = useState<EscalationRecordWithSla[]>([]);
+  const [policy, setPolicy] = useState<EscalationSlaPolicy | null>(null);
+  const [slaOpen, setSlaOpen] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');
   const [error, setError] = useState<string | null>(null);
 
@@ -60,10 +92,18 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
     setError(null);
 
     try {
-      const data = await getEscalationMonitoring(profile);
+      const [data, slaPolicy] = await Promise.all([
+        getEscalationMonitoring(profile),
+        getEscalationSlaPolicy(profile),
+      ]);
       setRecords(data);
+      setPolicy(slaPolicy);
     } catch {
+      // Deliberately NOT `setRecords([])` and carry on: an empty queue and a
+      // failed query must never look the same on the screen that decides who
+      // is overdue. The error state below owns this branch.
       setRecords([]);
+      setPolicy(null);
       setError("Couldn't load escalation monitoring — check connection.");
     } finally {
       setLoading(false);
@@ -96,16 +136,27 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
     };
   }, [records]);
 
+  // The SLA range actually in force, read off the policy rather than restated
+  // by hand — a summary line that can drift from the rule is worse than none.
+  const slaRange = useMemo(() => {
+    if (!policy || policy.tiers.length === 0) return null;
+    const hours = policy.tiers.map((tier) => tier.hours);
+    return { min: Math.min(...hours), max: Math.max(...hours) };
+  }, [policy]);
+
   // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
   // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
   // would render white-on-paper.
   const headerText = colors.text;
   const headerSub = colors.textSecondary;
 
+  // Labels state the arithmetic. "High Escalation" meant "18 hours old" under
+  // one constant while "Overdue" meant "24 hours old" under another; the two
+  // counts could disagree and nothing on screen said why.
   const summaryCards: { label: string; value: number; rule: string }[] = [
-    { label: 'Pending Items', value: summary.total, rule: colors.primary },
-    { label: 'Overdue', value: summary.overdue, rule: colors.danger },
-    { label: 'High Escalation', value: summary.highEscalation, rule: colors.severityHigh },
+    { label: 'Awaiting approval', value: summary.total, rule: colors.primary },
+    { label: 'Past its SLA', value: summary.overdue, rule: colors.danger },
+    { label: 'Twice past its SLA', value: summary.highEscalation, rule: colors.severityHigh },
   ];
 
   return (
@@ -170,6 +221,75 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
             ))}
           </View>
         )}
+
+        {/* The rule itself, on the screen that applies it. Until an official
+            can edit these hours in the app, the least this owes them is the
+            number being used — and where it comes from. */}
+        {loading ? (
+          <View style={{ marginTop: 12 }}>
+            <SkeletonBlock height={64} radius={12} />
+          </View>
+        ) : policy && slaRange ? (
+          <View
+            style={[
+              styles.slaCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+              !isDark && styles.cardShadow,
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.slaToggle}
+              onPress={() => setSlaOpen((open) => !open)}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: slaOpen }}
+              accessibilityLabel={`Overdue rule: an item is overdue after ${formatHours(
+                slaRange.min
+              )} to ${formatHours(slaRange.max)} depending on type and severity. ${
+                slaOpen ? 'Hide' : 'Show'
+              } every threshold.`}
+            >
+              <Ionicons name="time-outline" size={18} color={colors.textSecondary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.slaTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                  Overdue after {formatHours(slaRange.min)}–{formatHours(slaRange.max)}
+                </Text>
+                <Text style={[styles.slaSub, { color: colors.textSecondary }]}>
+                  {policy.editable
+                    ? 'Set for this district — tap to see every threshold'
+                    : 'Fixed in this app version · not yet editable in the field'}
+                </Text>
+              </View>
+              <Ionicons
+                name={slaOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={colors.textSecondary}
+              />
+            </TouchableOpacity>
+
+            {slaOpen && (
+              <View style={[styles.slaTable, { borderTopColor: colors.border }]}>
+                {policy.tiers.map((tier) => (
+                  <View
+                    key={`${tier.report_type}-${tier.severity ?? 'any'}-${tier.district ?? 'all'}`}
+                    style={styles.slaRow}
+                    accessible
+                    accessibilityLabel={`${tier.label}: overdue after ${formatHours(tier.hours)}`}
+                  >
+                    <Text style={[styles.slaRowLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                      {tier.label}
+                    </Text>
+                    <Text style={[styles.slaRowValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                      {formatHours(tier.hours)}
+                    </Text>
+                  </View>
+                ))}
+                <Text style={[styles.slaFootnote, { color: colors.textSecondary }]}>
+                  Level rises with the item&apos;s own threshold: L1 past it, L2 at twice it, L3 at three times.
+                </Text>
+              </View>
+            )}
+          </View>
+        ) : null}
 
         {/* Filter chips — selection is never conveyed by tint alone */}
         <View style={styles.filterRow}>
@@ -242,19 +362,33 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
                 const levelColor = escalationColor(level, colors);
                 const levelBg = escalationBg(level, colors);
                 const isCriticalLevel = level >= 3;
+                const pending = record.pending_hours || 0;
+                const remaining = Math.max(0, record.sla_hours - pending);
+                const waitLine = record.is_overdue
+                  ? `Waiting ${formatHours(pending)} · ${formatHours(record.overdue_by_hours)} past its ${formatHours(record.sla_hours)} SLA`
+                  : `Waiting ${formatHours(pending)} · ${formatHours(remaining)} left of its ${formatHours(record.sla_hours)} SLA`;
 
                 return (
                   <View
                     key={`${record.report_type}-${record.report_id}`}
                     style={[styles.recordCard, { borderColor: colors.border, backgroundColor: colors.surface }]}
                   >
+                    {/* Grouped so a screen reader reads one sentence, not six
+                        fragments — and so "Open Queue" stays its own stop. */}
+                    <View
+                      accessible
+                      accessibilityLabel={`${typeLabel(record.report_type)}${
+                        record.headline ? `, ${record.headline}` : ''
+                      }${record.severity_label ? `, ${record.severity_label}` : ''}, ${
+                        record.district || 'unknown district'
+                      }. ${waitLine}. Escalation level ${level} of 3.`}
+                    >
                     <View style={styles.recordHeader}>
-                      <Text style={[styles.recordTitle, { color: colors.text }]}>
-                        {record.report_type.replace(/_/g, ' ').toUpperCase()} · {record.report_id.slice(0, 8)}
+                      <Text style={[styles.recordTitle, { color: colors.text }]} numberOfLines={2}>
+                        {record.headline || typeLabel(record.report_type)}
                       </Text>
                       <View
                         style={[styles.levelPill, { backgroundColor: isCriticalLevel ? colors.danger : levelBg }]}
-                        accessibilityLabel={`Escalation level ${level}`}
                       >
                         {!isCriticalLevel && <View style={[styles.levelDot, { backgroundColor: levelColor }]} />}
                         <Text
@@ -267,14 +401,26 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
                     </View>
 
                     <Text style={[styles.recordMeta, { color: colors.textSecondary }]}>
+                      {typeLabel(record.report_type).toUpperCase()}
+                      {record.severity_label ? ` · ${record.severity_label.toUpperCase()}` : ''}
+                      {` · ${record.report_id.slice(0, 8)}`}
+                    </Text>
+                    <Text style={[styles.recordMeta, { color: colors.textSecondary }]}>
                       {record.district || 'Unknown district'}
                       {record.location_name ? ` · ${record.location_name}` : ''}
                     </Text>
-                    <Text style={[styles.recordMeta, { color: colors.textSecondary }]}>
-                      Pending {Math.round(record.pending_hours || 0)}h
-                      {record.is_overdue ? ' · Overdue' : ' · Within SLA'}
-                      {record.approval_status ? ` · ${record.approval_status}` : ''}
-                    </Text>
+                    <Text style={[styles.recordMeta, { color: colors.textSecondary }]}>{waitLine}</Text>
+                    {record.is_overdue && (
+                      // danger-on-dangerBg is the pairing the contrast gate
+                      // guards; danger on the card surface is not.
+                      <View style={[styles.overduePill, { backgroundColor: colors.dangerBg }]}>
+                        <Ionicons name="alert-circle" size={13} color={colors.danger} />
+                        <Text style={[styles.overdueText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+                          OVERDUE
+                        </Text>
+                      </View>
+                    )}
+                    </View>
 
                     {onOpenQueue && (
                       <TouchableOpacity
@@ -372,6 +518,61 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
   },
+  slaCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+  },
+  slaToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 64,
+    paddingVertical: 12,
+  },
+  slaTitle: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  slaSub: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  slaTable: {
+    borderTopWidth: 1,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  slaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 6,
+  },
+  slaRowLabel: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  slaRowValue: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  slaFootnote: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
+  },
   filterRow: {
     marginTop: 12,
     flexDirection: 'row',
@@ -385,7 +586,7 @@ const styles = StyleSheet.create({
     gap: 5,
     borderWidth: 1.5,
     borderRadius: 999,
-    minHeight: 44,
+    minHeight: 48,
     paddingHorizontal: 16,
   },
   filterChipText: {
@@ -453,12 +654,28 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     fontVariant: ['tabular-nums'],
   },
+  overduePill: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  overdueText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
   queueBtn: {
     marginTop: 8,
     alignSelf: 'flex-start',
     borderWidth: 1.5,
     borderRadius: 12,
-    minHeight: 44,
+    minHeight: 48,
     paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',

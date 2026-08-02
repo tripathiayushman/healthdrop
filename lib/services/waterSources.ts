@@ -11,8 +11,19 @@
 // to super_admin / health_admin / district_officer /
 // clinic — the UI role-gates to match.
 // =====================================================
-import { supabase } from '../supabase';
+import { supabase, readPersistedUserId } from '../supabase';
 import { ApiResponse, WaterQualityReport } from '../../types';
+import { offlineCache, CachedApiResponse, ReadThroughOptions } from '../offlineCache';
+
+/**
+ * Cache namespace for this service (INC-05b). A flagged well is the single
+ * most useful thing to be able to read with no signal — she is standing next
+ * to it. Reads are always written to the per-user offline cache; they are
+ * only ANSWERED from it when the caller passes `{ offlineFallback: true }`,
+ * which is its promise to render the returned `asOf` stamp. Anything that
+ * changes a source invalidates the namespace.
+ */
+const CACHE_NS = 'wsrc:';
 
 export type WaterSourceStatus = 'safe' | 'moderate' | 'unsafe' | 'critical';
 
@@ -61,19 +72,21 @@ const SOURCE_SELECT = `
 `;
 
 /**
- * Resolve the signed-in user from the locally cached session first —
- * getSession() reads local storage (no network); fall back to the
- * network getUser() only when no cached session exists.
+ * Resolve the signed-in user from the persisted session blob first. NOT
+ * getSession(): near token expiry getSession() makes a network refresh call
+ * and returns null when it fails (GoTrueClient.js:1019-1051), so on bad signal
+ * this used to fall through to a SECOND network call, getUser(), to learn
+ * something already written on the disk. Reopening a source is an online-only
+ * action either way — the write needs a live token — but the identity lookup
+ * has no business costing two round-trips before the write is even attempted.
+ * getUser() stays as the fallback for a device with no blob at all.
  */
 async function currentUserId(): Promise<string> {
-  const { data: { session } } = await supabase.auth.getSession();
-  let user = session?.user ?? null;
-  if (!user) {
-    const { data } = await supabase.auth.getUser();
-    user = data.user;
-  }
-  if (!user) throw new Error('User not authenticated');
-  return user.id;
+  const persisted = await readPersistedUserId();
+  if (persisted) return persisted;
+  const { data } = await supabase.auth.getUser();
+  if (!data.user) throw new Error('User not authenticated');
+  return data.user.id;
 }
 
 export const waterSourcesService = {
@@ -81,8 +94,9 @@ export const waterSourcesService = {
   async list(options?: {
     district?: string;
     status?: WaterSourceStatus;
-  }): Promise<ApiResponse<WaterSourceRecord[]>> {
-    try {
+  }, cache?: ReadThroughOptions): Promise<CachedApiResponse<WaterSourceRecord[]>> {
+    const name = `${CACHE_NS}list:${options?.district ?? 'all'}:${options?.status ?? 'all'}`;
+    return offlineCache.readThrough<WaterSourceRecord[]>(name, async () => {
       let query = supabase
         .from('water_sources')
         .select(SOURCE_SELECT)
@@ -91,44 +105,42 @@ export const waterSourcesService = {
       if (options?.status) query = query.eq('current_status', options.status);
       const { data, error } = await query;
       if (error) throw error;
-      return { data: (data ?? []) as unknown as WaterSourceRecord[], error: null };
-    } catch (error: any) {
-      console.error('Error listing water sources:', error);
-      return { data: null, error: error.message };
-    }
+      return { data: (data ?? []) as unknown as WaterSourceRecord[] };
+    }, { fallbackMessage: 'Could not load water sources.', ...cache });
   },
 
-  async getById(id: string): Promise<ApiResponse<WaterSourceRecord>> {
-    try {
+  async getById(id: string, cache?: ReadThroughOptions): Promise<CachedApiResponse<WaterSourceRecord>> {
+    return offlineCache.readThrough<WaterSourceRecord>(`${CACHE_NS}one:${id}`, async () => {
       const { data, error } = await supabase
         .from('water_sources')
         .select(SOURCE_SELECT)
         .eq('id', id)
         .single();
       if (error) throw error;
-      return { data: data as unknown as WaterSourceRecord, error: null };
-    } catch (error: any) {
-      console.error('Error fetching water source:', error);
-      return { data: null, error: error.message };
-    }
+      return { data: data as unknown as WaterSourceRecord };
+    }, { fallbackMessage: 'Could not load this water source.', ...cache });
   },
 
   /** Flagged sources (unsafe + critical), longest-waiting first. */
-  async flagged(district?: string): Promise<ApiResponse<WaterSourceRecord[]>> {
-    try {
-      let query = supabase
-        .from('water_sources')
-        .select(SOURCE_SELECT)
-        .in('current_status', ['unsafe', 'critical'])
-        .order('flagged_at', { ascending: true, nullsFirst: false });
-      if (district) query = query.eq('district', district);
-      const { data, error } = await query;
-      if (error) throw error;
-      return { data: (data ?? []) as unknown as WaterSourceRecord[], error: null };
-    } catch (error: any) {
-      console.error('Error fetching flagged water sources:', error);
-      return { data: null, error: error.message };
-    }
+  async flagged(
+    district?: string,
+    cache?: ReadThroughOptions,
+  ): Promise<CachedApiResponse<WaterSourceRecord[]>> {
+    return offlineCache.readThrough<WaterSourceRecord[]>(
+      `${CACHE_NS}flagged:${district ?? 'all'}`,
+      async () => {
+        let query = supabase
+          .from('water_sources')
+          .select(SOURCE_SELECT)
+          .in('current_status', ['unsafe', 'critical'])
+          .order('flagged_at', { ascending: true, nullsFirst: false });
+        if (district) query = query.eq('district', district);
+        const { data, error } = await query;
+        if (error) throw error;
+        return { data: (data ?? []) as unknown as WaterSourceRecord[] };
+      },
+      { fallbackMessage: 'Could not load flagged water sources.', ...cache },
+    );
   },
 
   /** The retest is an assignment with an owner and a date, not a hope. */
@@ -149,6 +161,7 @@ export const waterSourcesService = {
         .select(SOURCE_SELECT)
         .single();
       if (error) throw error;
+      await offlineCache.invalidate(CACHE_NS);
       return { data: data as unknown as WaterSourceRecord, error: null };
     } catch (error: any) {
       console.error('Error assigning water source retest:', error);
@@ -168,6 +181,7 @@ export const waterSourcesService = {
         .select(SOURCE_SELECT)
         .single();
       if (error) throw error;
+      await offlineCache.invalidate(CACHE_NS);
       return { data: data as unknown as WaterSourceRecord, error: null };
     } catch (error: any) {
       console.error('Error logging water source treatment:', error);
@@ -197,6 +211,7 @@ export const waterSourcesService = {
         .select(SOURCE_SELECT)
         .single();
       if (error) throw error;
+      await offlineCache.invalidate(CACHE_NS);
       return { data: data as unknown as WaterSourceRecord, error: null };
     } catch (error: any) {
       console.error('Error reopening water source:', error);
@@ -207,24 +222,26 @@ export const waterSourcesService = {
   /** Every reading ever filed for this source, newest first. */
   async reportsForSource(
     source: Pick<WaterSourceRecord, 'district' | 'source_name'>,
-  ): Promise<ApiResponse<WaterSourceReport[]>> {
-    try {
-      const { data, error } = await supabase
-        .from('water_quality_reports')
-        .select(`
+    cache?: ReadThroughOptions,
+  ): Promise<CachedApiResponse<WaterSourceReport[]>> {
+    return offlineCache.readThrough<WaterSourceReport[]>(
+      `${CACHE_NS}history:${source.district}|${source.source_name}`,
+      async () => {
+        const { data, error } = await supabase
+          .from('water_quality_reports')
+          .select(`
           *,
           reporter:profiles!reporter_id(id, full_name, role)
         `)
-        .eq('district', source.district)
-        .eq('source_name', source.source_name)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return { data: (data ?? []) as unknown as WaterSourceReport[], error: null };
-    } catch (error: any) {
-      console.error('Error fetching reports for water source:', error);
-      return { data: null, error: error.message };
-    }
+          .eq('district', source.district)
+          .eq('source_name', source.source_name)
+          .order('created_at', { ascending: false })
+          .limit(50);
+        if (error) throw error;
+        return { data: (data ?? []) as unknown as WaterSourceReport[] };
+      },
+      { fallbackMessage: 'Could not load this source’s readings.', ...cache },
+    );
   },
 };
 

@@ -27,6 +27,7 @@ import { Profile } from './types';
 import { offlineSyncService } from './src/services/offlineSync/OfflineSyncService';
 import { setupPushChannelsAndHandler } from './src/services/pushSetup';
 import { usersService } from './lib/services';
+import { purgeAllFormDrafts } from './lib/useFormDraft';
 
 // Import Main Dashboard with Navigation
 import MainApp from './components/MainApp';
@@ -399,6 +400,13 @@ function AppContent() {
       // clears the cache, but do it here too in case signOut() threw before
       // the event fired (e.g. offline sign-out).
       clearCachedProfile(lastUserIdRef.current);
+      // Saved form drafts go too. They hold case counts, death counts, GPS
+      // coordinates, a village name and free-text notes about named people;
+      // leaving them on a shared field handset after their author signs out
+      // would offer a stranger's half-written health report back to whoever
+      // signs in next. Awaited, not fired-and-forgotten, so the wipe cannot
+      // race the next sign-in — but never allowed to block the sign-out.
+      await purgeAllFormDrafts();
       lastUserIdRef.current = null;
       setSession(null);
       setProfile(null);

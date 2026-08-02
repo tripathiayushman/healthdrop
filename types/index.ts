@@ -248,6 +248,14 @@ export interface DiseaseReportInput {
   gender?: string;
   treatment_status?: TreatmentStatus;
   notes?: string;
+  /**
+   * Caller-supplied idempotency key, stable across retries AND across a draft
+   * save/restore. The service upserts on this column, so a resend after a lost
+   * response collides with the row that already committed instead of filing
+   * the report twice. Omit it and the service mints a per-call key, which by
+   * definition can never collide — which is what it used to do unconditionally.
+   */
+  client_idempotency_key?: string;
 }
 
 export interface WaterQualityReportInput {
@@ -274,6 +282,8 @@ export interface WaterQualityReportInput {
   households_affected?: number;
   action_taken?: string;
   notes?: string;
+  /** See DiseaseReportInput.client_idempotency_key — same contract. */
+  client_idempotency_key?: string;
 }
 
 // Alias for forms

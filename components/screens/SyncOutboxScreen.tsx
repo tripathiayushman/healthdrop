@@ -5,6 +5,16 @@
 // retry-all (Sync now) and per-item delete.
 // 4-state data region; offline is a reassuring
 // first-class mode, never an error.
+//
+// BRK-15: this file is also the single source of truth
+// for reading/retrying the queue in the UI. My
+// Submissions renders the same queued items inline
+// (so "where is my report?" has ONE answer) and imports
+// the exported helpers below rather than re-deriving
+// them — in particular retryQueuedUploads(), which owns
+// the failed-item recovery path (attempts reset to 0).
+// This screen stays the sync-mechanics screen: delete,
+// per-item error detail, and the full ledger.
 // =====================================================
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -16,18 +26,18 @@ import { useNetInfo } from '@react-native-community/netinfo';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
 import { syncQueue, QueueItem, QueueItemType, QueueItemStatus } from '../../src/services/offlineSync/SyncQueue';
-import { offlineSyncService } from '../../src/services/offlineSync/OfflineSyncService';
+import { offlineSyncService, SyncResult } from '../../src/services/offlineSync/OfflineSyncService';
 import { SkeletonBlock, ErrorCard, EmptyState, SyncPebble, ROLE_ACCENT } from '../dashboards/DashboardShared';
 import { Profile } from '../../types';
 
 // Mirrors MAX_ATTEMPTS in OfflineSyncService.ts (not exported there).
-const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = 3;
 // A 'syncing' item whose last attempt is older than this is considered
 // stuck (app killed mid-sync) and is safe to reset to 'pending'.
-const STALE_SYNCING_MS = 2 * 60 * 1000;
+export const STALE_SYNCING_MS = 2 * 60 * 1000;
 
 // Display goes through t() — the queue keeps its English type identifiers.
-const TYPE_LABEL_KEY: Record<QueueItemType, string> = {
+export const QUEUE_TYPE_LABEL_KEY: Record<QueueItemType, string> = {
   disease_report:       'outbox.types.disease_report',
   water_quality_report: 'outbox.types.water_quality_report',
   campaign:             'outbox.types.campaign',
@@ -35,7 +45,7 @@ const TYPE_LABEL_KEY: Record<QueueItemType, string> = {
   feedback:             'outbox.types.feedback',
 };
 
-const TYPE_ICON: Record<QueueItemType, keyof typeof Ionicons.glyphMap> = {
+export const QUEUE_TYPE_ICON: Record<QueueItemType, keyof typeof Ionicons.glyphMap> = {
   disease_report:       'medkit-outline',
   water_quality_report: 'water-outline',
   campaign:             'megaphone-outline',
@@ -53,7 +63,7 @@ const formatShortDateTime = (iso: string | null | undefined): string => {
 };
 
 /** Best-effort human title from the queued payload — read defensively. */
-const payloadTitle = (item: QueueItem): string | null => {
+export const queuePayloadTitle = (item: QueueItem): string | null => {
   const p = item.payload as Record<string, unknown> | null | undefined;
   if (!p || typeof p !== 'object') return null;
   for (const key of ['disease_name', 'source_name', 'title', 'name']) {
@@ -63,11 +73,63 @@ const payloadTitle = (item: QueueItem): string | null => {
   return null;
 };
 
+/** An item that has burned every automatic retry — only a manual sync revives it. */
+export const isPermanentlyFailed = (item: QueueItem): boolean =>
+  item.status === 'failed' && item.attempts >= MAX_ATTEMPTS;
+
+/**
+ * The queue as the signed-in user should see it, newest first.
+ * Hides uploaded rows and deleted-item tombstones (F9), and scopes to the
+ * signed-in user's own items (F13) — legacy items with no owner stamp stay
+ * visible so pre-upgrade drafts remain reachable.
+ * Shared with My Submissions (BRK-15) so both screens show the same set.
+ */
+export const visibleQueueItems = (all: QueueItem[], profileId: string): QueueItem[] =>
+  all
+    .filter((i) =>
+      i.status !== 'synced' &&
+      i.status !== 'cancelled' &&
+      (i.ownerId == null || i.ownerId === profileId)
+    )
+    .sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime() || 0;
+      const tb = new Date(b.createdAt).getTime() || 0;
+      return tb - ta;
+    });
+
+/**
+ * Retry-all — THE failed-item recovery path, shared by the Outbox and My
+ * Submissions (BRK-15). Items that burned all 3 automatic attempts are
+ * stranded forever unless something resets `attempts` to 0; that reset lives
+ * here and nowhere else, so a second caller can never drift from it.
+ *
+ * Sync semantics are unchanged: this only revives the user's OWN out-of-retry
+ * items, un-strands items an app kill left in 'syncing' (F6), and then asks
+ * OfflineSyncService for one ordinary pass. A pass already in flight is left
+ * alone and reported honestly as busy (F12) — no revive happens in that case,
+ * exactly as before.
+ */
+export async function retryQueuedUploads(profileId: string): Promise<SyncResult> {
+  if (offlineSyncService.busy) return { synced: 0, failed: 0, busy: true };
+
+  const all = await syncQueue.getAll();
+  for (const item of all) {
+    // Only revive the signed-in user's own items (F13).
+    if (item.ownerId != null && item.ownerId !== profileId) continue;
+    if (isPermanentlyFailed(item)) {
+      await syncQueue.updateItem(item.localId, { status: 'pending', attempts: 0, error: null });
+    }
+  }
+  // Items stranded in 'syncing' by an app kill go back to 'pending' (F6).
+  await syncQueue.resetStuckSyncing(STALE_SYNCING_MS);
+  return offlineSyncService.triggerSync();
+}
+
 // ─────────────────────────────────────────────────────
 //  Status pill — dot + UPPERCASE label on *Bg token.
 //  (Solid fill stays reserved for CRITICAL severity.)
 // ─────────────────────────────────────────────────────
-const QueueStatusPill: React.FC<{ status: QueueItemStatus; permanentlyFailed: boolean }> = ({
+export const QueueStatusPill: React.FC<{ status: QueueItemStatus; permanentlyFailed: boolean }> = ({
   status, permanentlyFailed,
 }) => {
   const { colors } = useTheme();
@@ -130,21 +192,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
     setLoadError(null);
     try {
       const all = await syncQueue.getAll();
-      const visible = all
-        // Hide uploaded rows and deleted-item tombstones (F9), and scope the
-        // outbox to the signed-in user's own items (F13) — legacy items with
-        // no owner stamp stay visible so pre-upgrade drafts remain reachable.
-        .filter((i) =>
-          i.status !== 'synced' &&
-          i.status !== 'cancelled' &&
-          (i.ownerId == null || i.ownerId === profile.id)
-        )
-        .sort((a, b) => {
-          const ta = new Date(a.createdAt).getTime() || 0;
-          const tb = new Date(b.createdAt).getTime() || 0;
-          return tb - ta;
-        });
-      setItems(visible);
+      setItems(visibleQueueItems(all, profile.id));
     } catch (err) {
       console.error('[SyncOutbox] failed to read queue:', err);
       setLoadError(t('outbox.loadError'));
@@ -170,24 +218,12 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
     setSyncing(true);
     setLastResult(null);
     try {
-      // A pass is already running (e.g. the reconnect-debounced auto-sync) —
-      // say so honestly instead of "Already up to date" (F12). The queue's
-      // onChange subscription reloads this list when that pass finishes.
-      if (offlineSyncService.busy) {
-        setLastResult({ kind: 'warn', text: t('outbox.syncInProgress') });
-        return;
-      }
-      const all = await syncQueue.getAll();
-      for (const item of all) {
-        // Only revive the signed-in user's own items (F13).
-        if (item.ownerId != null && item.ownerId !== profile.id) continue;
-        if (item.status === 'failed' && item.attempts >= MAX_ATTEMPTS) {
-          await syncQueue.updateItem(item.localId, { status: 'pending', attempts: 0, error: null });
-        }
-      }
-      // Items stranded in 'syncing' by an app kill go back to 'pending' (F6).
-      await syncQueue.resetStuckSyncing(STALE_SYNCING_MS);
-      const res = await offlineSyncService.triggerSync();
+      // Shared recovery path (BRK-15): revives out-of-retry + stuck items,
+      // then runs one pass. A pass already running (e.g. the
+      // reconnect-debounced auto-sync) comes back busy and is reported
+      // honestly instead of "Already up to date" (F12). The queue's onChange
+      // subscription reloads this list when that pass finishes.
+      const res = await retryQueuedUploads(profile.id);
       if (res.busy) {
         setLastResult({ kind: 'warn', text: t('outbox.syncInProgress') });
       } else if (res.failed > 0) {
@@ -262,11 +298,11 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
 
   // ── Row ──
   const renderItem = ({ item }: { item: QueueItem }) => {
-    const permanentlyFailed = item.status === 'failed' && item.attempts >= MAX_ATTEMPTS;
-    const typeKey = TYPE_LABEL_KEY[item.type] as string | undefined;
+    const permanentlyFailed = isPermanentlyFailed(item);
+    const typeKey = QUEUE_TYPE_LABEL_KEY[item.type] as string | undefined;
     const savedLine = t('outbox.savedAt', { when: formatShortDateTime(item.createdAt) || '—' });
-    const title = payloadTitle(item) ?? (typeKey ? t(typeKey) : t('outbox.savedReport'));
-    const subtitle = payloadTitle(item)
+    const title = queuePayloadTitle(item) ?? (typeKey ? t(typeKey) : t('outbox.savedReport'));
+    const subtitle = queuePayloadTitle(item)
       ? `${typeKey ? t(typeKey) : t('outbox.reportWord')} · ${savedLine}`
       : savedLine;
 
@@ -275,7 +311,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
         <View style={st.cardRow}>
           <View style={[st.iconWrap, { backgroundColor: colors.surfaceVariant }]}>
             <Ionicons
-              name={TYPE_ICON[item.type] ?? 'document-text-outline'}
+              name={QUEUE_TYPE_ICON[item.type] ?? 'document-text-outline'}
               size={24}
               color={colors.textSecondary}
             />

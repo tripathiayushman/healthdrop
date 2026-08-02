@@ -28,21 +28,27 @@
 import 'react-native-url-polyfill/auto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Mirrors lib/supabase.ts — kept local because the app client
-// module does not export its URL/key, and this client must
-// stay a separate instance with its own (in-memory) session.
-const supabaseUrl =
-  process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://ekfdimdlxifatsaubvbh.supabase.co';
-const supabaseAnonKey =
-  process.env.EXPO_PUBLIC_SUPABASE_KEY ||
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
-  'sb_publishable_pne9mF-cDQ_IPKJKn8a3AQ_Vm4Aa5x0';
+import {
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  timeoutFetch,
+  isOfflineError,
+} from '../supabase';
 
 let recoveryClient: SupabaseClient | null = null;
 
 const getRecoveryClient = (): SupabaseClient => {
   if (!recoveryClient) {
-    recoveryClient = createClient(supabaseUrl, supabaseAnonKey, {
+    // URL and key come from lib/supabase.ts rather than being re-declared.
+    // Two copies of a project URL is one copy too many, and the last time they
+    // drifted the drift was invisible: this client is the ONLY Supabase client
+    // in the app that is not the app client, and it was built with no fetch
+    // wrapper at all. So the request deadline INC-05a describes as covering
+    // "every request" did not cover a single call in the password-reset flow —
+    // and this flow is the one a locked-out worker runs on the worst signal
+    // she has, with nothing on screen but a spinner. Same instance separation
+    // as before, same in-memory session; only the transport is now bounded.
+    recoveryClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: {
         // In-memory only: abandoning the flow leaves nothing behind.
         // Distinct storageKey avoids GoTrue multi-instance clashes
@@ -51,6 +57,13 @@ const getRecoveryClient = (): SupabaseClient => {
         autoRefreshToken: false,
         detectSessionInUrl: false,
         storageKey: 'healthdrop-auth-recovery',
+      },
+      global: {
+        // /auth/v1 traffic → READ_TIMEOUT_MS (15 s). An abort surfaces as
+        // RequestTimeoutError, which isNetworkish() below maps to
+        // 'auth.recovery.offline' — a sentence, in her language, instead of a
+        // spinner that never ends.
+        fetch: timeoutFetch as unknown as typeof fetch,
       },
     });
   }
@@ -95,8 +108,15 @@ const isRateLimited = (error: unknown): boolean =>
   /rate.?limit/i.test(errCode(error)) ||
   /rate limit|too many|security purposes/i.test(errText(error));
 
+// Shared classifier first — it reads name, message AND code, so it catches
+// RequestTimeoutError (code 'ETIMEDOUT') even when GoTrue has rewrapped it and
+// only the message survives. The local regex stays as a wider net over GoTrue's
+// own wording. A deliberate cancellation is excluded by isOfflineError and by
+// the absence of 'cancel' here: this flow never cancels a request, and calling
+// one "you appear to be offline" would be a guess.
 const isNetworkish = (error: unknown): boolean =>
-  /network|failed to fetch|fetch failed|fetcherror|timed out|timeout|abort|socket|econn/i.test(
+  isOfflineError(error) ||
+  /network|failed to fetch|fetch failed|fetcherror|timed out|timeout|socket|econn/i.test(
     errText(error)
   );
 

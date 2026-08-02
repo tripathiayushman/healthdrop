@@ -35,7 +35,13 @@ yarn-error.*
 # local env files
 .env*.local
 .env
-.env.example
+# .env.example is deliberately NOT ignored (BRK-24). It is the only record of
+# which variables the app needs, and hiding it meant a fresh clone had to
+# discover them by reading lib/supabase.ts and waiting for a runtime failure.
+# It contains placeholders only — no real values — and the check that keeps it
+# that way is that every var in it is EXPO_PUBLIC_*, which by definition ends
+# up in the client bundle anyway. Anything genuinely secret belongs in Supabase
+# Edge Function secrets, never in this file.
 
 # Claude Code local skill symlinks (absolute paths, machine-specific)
 .claude/

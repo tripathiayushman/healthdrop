@@ -7,15 +7,18 @@
 // marks: VerifiedStamp and AILabel/AICard. Borders do
 // the work — no elevation shadows, no gradients.
 // =====================================================
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Pressable,
   Animated, ViewStyle, StyleProp, DimensionValue, Modal, ScrollView, Platform,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
+import { useTranslation } from 'react-i18next';
 import { useTheme, Theme, themes, radii, spacing } from '../../lib/ThemeContext';
 import { useSyncCounts } from '../../src/services/offlineSync';
+import { supabase } from '../../lib/supabase';
+import { formatDate } from '../../lib/format';
 import { Profile } from '../../types';
 
 // ─────────────────────────────────────────────────────
@@ -775,6 +778,511 @@ export const ErrorCard: React.FC<ErrorCardProps> = ({ message, onRetry }) => {
 };
 
 // ─────────────────────────────────────────────────────
+//  PaybackCard — NEW-02. "What did my reporting achieve?"
+//
+//  A field worker files into what feels like a void. Every
+//  line below is a fact read back from the live database;
+//  a fact that cannot be derived is not shown at all — an
+//  overstated card is worse than no card, because the
+//  person reading it is deciding whether the work is worth
+//  doing. Four states: skeleton / content / quiet-zero /
+//  error-with-retry. A failed query renders the error, and
+//  NEVER a confident zero — "you achieved nothing" is the
+//  cruellest possible instance of this codebase's
+//  signature catch-and-show-zero defect.
+//
+//  Deliberately NOT claimed here (all re-verified against
+//  the live schema on 3 Aug 2026):
+//   • "your report triggered an outbreak" —
+//     detect_outbreak_after_report() runs only AFTER
+//     INSERT and returns early unless the new row is
+//     already 'approved', while auto_approve_reporter_id_report()
+//     forces every asha_worker / volunteer row to
+//     'pending_approval'. Nothing recomputes totals on
+//     approval (recompute_outbreak_on_rejection only fires
+//     approved → rejected). So a field worker's report can
+//     never be an outbreak's triggered_by_report_id, and
+//     `outbreaks` holds 0 rows. MySubmissionsScreen already
+//     shows the honest per-report window-overlap version.
+//   • "your report became a public alert" — health_alerts
+//     carries no report linkage; `metadata` is {} on every
+//     live row.
+//   • the reviewer's NAME — profiles_select_policy lets a
+//     field worker read exactly one profile row: her own
+//     (confirmed by querying as her JWT: 1 row visible).
+//     A join would render "verified by —".
+// ─────────────────────────────────────────────────────
+
+/** Newest-first page we tally locally; beyond it only the total is claimed. */
+const PAYBACK_ROW_LIMIT = 400;
+/** Cap on the source names we look up in one registry query. */
+const PAYBACK_SOURCE_LIMIT = 60;
+/** The qualities sync_water_source_registry() treats as a flag. */
+const FLAG_QUALITIES = ['unsafe', 'critical', 'poor', 'contaminated'];
+/**
+ * water_sources.current_status can only be ESCALATED by a report
+ * (sync_water_source_registry never lowers it — a safe reading does not clear
+ * a flag). So a source she flagged sitting at safe/moderate means a human
+ * with official write access lowered it. That is the fact we may state.
+ */
+const CLEARED_STATUSES = ['safe', 'moderate'];
+
+interface OwnReportRow {
+  approval_status: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+}
+
+interface OwnWaterRow extends OwnReportRow {
+  source_name: string | null;
+  district: string | null;
+  overall_quality: string | null;
+  created_at: string | null;
+}
+
+interface RegistryRow {
+  source_name: string | null;
+  district: string | null;
+  current_status: string | null;
+  last_reported_at: string | null;
+}
+
+export interface PaybackFacts {
+  /** Reports she filed (disease + water). Server count, not a page length. */
+  filed: number;
+  /** False when she has filed more than one page — then only `filed` is claimed. */
+  breakdownExact: boolean;
+  verified: number;
+  waiting: number;
+  needsFix: number;
+  /** True only when every approved row was decided by somebody other than her. */
+  verifiedByReviewer: boolean;
+  lastVerifiedAt: string | null;
+  /** Distinct sources her own reports flagged unsafe/critical. */
+  flagged: number;
+  /** …that have a newer reading than her flag. */
+  retested: number;
+  /** …that an official has since taken off unsafe/critical. */
+  cleared: number;
+  /** False when she has flagged more sources than one registry query covers. */
+  waterExact: boolean;
+  campaignsJoined: number;
+}
+
+/** Exact when the page we tallied covers the whole server-side count. */
+const pageIsWhole = (count: number | null, rows: unknown[]): boolean =>
+  typeof count === 'number' ? rows.length >= count : rows.length < PAYBACK_ROW_LIMIT;
+
+const totalOf = (count: number | null, rows: unknown[]): number =>
+  typeof count === 'number' ? count : rows.length;
+
+const msOf = (iso: string | null): number => {
+  if (!iso) return NaN;
+  return new Date(iso).getTime();
+};
+
+/**
+ * Reads the facts. Returns null on ANY failure — a partial answer would
+ * under-report her work, which is the same lie in a quieter voice.
+ */
+const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> => {
+  try {
+    const [diseaseRes, waterRes, campaignRes] = await Promise.all([
+      supabase
+        .from('disease_reports')
+        .select('approval_status, approved_by, approved_at', { count: 'exact' })
+        .eq('reporter_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(PAYBACK_ROW_LIMIT),
+      supabase
+        .from('water_quality_reports')
+        .select('approval_status, approved_by, approved_at, source_name, district, overall_quality, created_at', { count: 'exact' })
+        .eq('reporter_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(PAYBACK_ROW_LIMIT),
+      supabase
+        .from('campaign_participants')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .neq('status', 'cancelled'),
+    ]);
+
+    if (diseaseRes.error || waterRes.error || campaignRes.error) {
+      console.error('[PaybackCard] load failed:', diseaseRes.error ?? waterRes.error ?? campaignRes.error);
+      return null;
+    }
+    // head+exact must yield a number; anything else is an unknown, not a zero.
+    const campaignsJoined = campaignRes.count;
+    if (typeof campaignsJoined !== 'number') {
+      console.error('[PaybackCard] campaign count missing from response');
+      return null;
+    }
+
+    const diseaseRows = (diseaseRes.data ?? []) as OwnReportRow[];
+    const waterRows = (waterRes.data ?? []) as OwnWaterRow[];
+    const allRows: OwnReportRow[] = [...diseaseRows, ...waterRows];
+
+    let verified = 0;
+    let waiting = 0;
+    let needsFix = 0;
+    let verifiedByReviewer = true;
+    let lastVerifiedAt: string | null = null;
+
+    for (const row of allRows) {
+      const status = (row.approval_status ?? '').toLowerCase();
+      if (status === 'approved') {
+        verified += 1;
+        // "A reviewer verified it" is only sayable while nobody self-approved.
+        if (!row.approved_by || row.approved_by === userId) verifiedByReviewer = false;
+        if (row.approved_at && (!lastVerifiedAt || msOf(row.approved_at) > msOf(lastVerifiedAt))) {
+          lastVerifiedAt = row.approved_at;
+        }
+      } else if (status === 'rejected') {
+        needsFix += 1;
+      } else {
+        waiting += 1;
+      }
+    }
+
+    const filed = totalOf(diseaseRes.count, diseaseRows) + totalOf(waterRes.count, waterRows);
+    const breakdownExact =
+      pageIsWhole(diseaseRes.count, diseaseRows) && pageIsWhole(waterRes.count, waterRows);
+
+    // ── Water sources she flagged ──
+    // Keyed exactly the way sync_water_source_registry() matches them
+    // (district = district AND source_name = source_name), so the join here
+    // is the same relation the trigger itself used. No fuzzy matching: it
+    // could merge two real sources and invent a retest that never happened.
+    const flags = new Map<string, { name: string; district: string; at: number }>();
+    for (const row of waterRows) {
+      const quality = (row.overall_quality ?? '').toLowerCase();
+      if (!FLAG_QUALITIES.includes(quality)) continue;
+      if (!row.source_name || !row.district) continue;
+      const at = msOf(row.created_at);
+      if (!Number.isFinite(at)) continue;
+      const key = `${row.district} ${row.source_name}`;
+      const seen = flags.get(key);
+      // Her most recent flag is the one a retest has to beat.
+      if (!seen || at > seen.at) flags.set(key, { name: row.source_name, district: row.district, at });
+    }
+
+    let retested = 0;
+    let cleared = 0;
+    const waterExact = flags.size <= PAYBACK_SOURCE_LIMIT;
+
+    if (flags.size > 0 && waterExact) {
+      const entries = Array.from(flags.entries());
+      // The two .in() filters are a cross product, so this can return sources
+      // that share a name across districts; the exact-key match below drops
+      // them. Truncation here can only UNDER-count, never invent a retest.
+      const registryRes = await supabase
+        .from('water_sources')
+        .select('source_name, district, current_status, last_reported_at')
+        .in('source_name', entries.map(([, v]) => v.name))
+        .in('district', entries.map(([, v]) => v.district))
+        .limit(500);
+
+      if (registryRes.error) {
+        console.error('[PaybackCard] water source registry query failed:', registryRes.error);
+        return null;
+      }
+
+      const registry = new Map<string, RegistryRow>();
+      for (const row of (registryRes.data ?? []) as RegistryRow[]) {
+        if (!row.source_name || !row.district) continue;
+        registry.set(`${row.district} ${row.source_name}`, row);
+      }
+
+      for (const [key, flag] of entries) {
+        const source = registry.get(key);
+        if (!source) continue;
+        // "Retested" = a reading was filed on this source after her flag. The
+        // registry is written on INSERT regardless of approval, so this claims
+        // a test happened — never that its result was accepted.
+        const lastAt = msOf(source.last_reported_at);
+        if (!Number.isFinite(lastAt) || lastAt <= flag.at) continue;
+        retested += 1;
+        // `cleared` is kept a strict subset of `retested` so the caption's
+        // "N of them" is literally true.
+        if (CLEARED_STATUSES.includes((source.current_status ?? '').toLowerCase())) cleared += 1;
+      }
+    }
+
+    return {
+      filed,
+      breakdownExact,
+      verified,
+      waiting,
+      needsFix,
+      verifiedByReviewer,
+      lastVerifiedAt,
+      flagged: flags.size,
+      retested,
+      cleared,
+      waterExact,
+      campaignsJoined,
+    };
+  } catch (err) {
+    console.error('[PaybackCard] load threw:', err);
+    return null;
+  }
+};
+
+interface PaybackLine {
+  key: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  text: string;
+  caption?: string;
+  onPress?: () => void;
+}
+
+interface PaybackCardProps {
+  profile: Profile;
+  onNavigate: (screen: string) => void;
+  /** Bump to reload — the dashboards raise it on pull-to-refresh. */
+  refreshKey?: number;
+  /** false for roles that cannot file reports; changes only the quiet-zero words. */
+  canFile?: boolean;
+}
+
+export const PaybackCard: React.FC<PaybackCardProps> = ({
+  profile, onNavigate, refreshKey = 0, canFile = true,
+}) => {
+  const { colors, isDark } = useTheme();
+  const { t } = useTranslation();
+  const [facts, setFacts] = useState<PaybackFacts | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  const [retryTick, setRetryTick] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setFailed(false);
+    loadPaybackFacts(profile.id).then((next) => {
+      if (!active) return;
+      setFacts(next);
+      setFailed(next === null);
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [profile.id, refreshKey, retryTick]);
+
+  const retry = useCallback(() => setRetryTick(n => n + 1), []);
+
+  const title = t('payback.title', { defaultValue: 'What your work did' });
+
+  // ── Skeleton ──
+  if (loading) {
+    return (
+      <Section title={title}>
+        <View style={[styles.paybackCard, styles.paybackSkeleton, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <SkeletonBlock height={20} width="82%" />
+          <SkeletonBlock height={20} width="64%" style={{ marginTop: spacing.md }} />
+          <SkeletonBlock height={20} width="48%" style={{ marginTop: spacing.md }} />
+        </View>
+      </Section>
+    );
+  }
+
+  // ── Error with retry — never a zero ──
+  if (failed || !facts) {
+    return (
+      <Section title={title}>
+        <ErrorCard
+          message={t('payback.error', {
+            defaultValue: "Couldn't load what your work did — check connection",
+          })}
+          onRetry={retry}
+        />
+      </Section>
+    );
+  }
+
+  const lines: PaybackLine[] = [];
+
+  if (!facts.breakdownExact) {
+    // More reports than one page: the total is still exact, the split is not.
+    lines.push({
+      key: 'filed',
+      icon: 'document-text-outline',
+      color: colors.textSecondary,
+      text: facts.filed === 1
+        ? t('payback.filedOne', { defaultValue: '1 report filed' })
+        : t('payback.filedMany', { n: facts.filed, defaultValue: '{{n}} reports filed' }),
+    });
+  } else {
+    if (facts.verified > 0) {
+      const text = facts.verifiedByReviewer
+        ? (facts.verified === 1
+          ? t('payback.verifiedOne', { defaultValue: 'A reviewer verified 1 of your reports' })
+          : t('payback.verifiedMany', { n: facts.verified, defaultValue: 'A reviewer verified {{n}} of your reports' }))
+        : (facts.verified === 1
+          ? t('payback.approvedOne', { defaultValue: '1 of your reports is approved' })
+          : t('payback.approvedMany', { n: facts.verified, defaultValue: '{{n}} of your reports are approved' }));
+      const stamped = facts.lastVerifiedAt ? formatDate(facts.lastVerifiedAt) : '';
+      lines.push({
+        key: 'verified',
+        icon: 'checkmark-circle-outline',
+        color: colors.success,
+        text,
+        caption: stamped
+          ? t('payback.lastVerified', { date: stamped, defaultValue: 'Most recent on {{date}}' })
+          : undefined,
+      });
+    }
+
+    // Pending only speaks when nothing has come back yet — otherwise the
+    // dashboard's own pending banner and stat tiles already say it.
+    if (facts.verified === 0 && facts.waiting > 0) {
+      lines.push({
+        key: 'waiting',
+        icon: 'time-outline',
+        color: colors.warning,
+        text: facts.waiting === 1
+          ? t('payback.waitingOne', { defaultValue: '1 report is waiting for review' })
+          : t('payback.waitingMany', { n: facts.waiting, defaultValue: '{{n}} reports are waiting for review' }),
+      });
+    }
+
+    if (facts.needsFix > 0) {
+      lines.push({
+        key: 'needsFix',
+        icon: 'alert-circle-outline',
+        color: colors.danger,
+        text: facts.needsFix === 1
+          ? t('payback.needsFixOne', { defaultValue: '1 report needs a fix — tap to see why' })
+          : t('payback.needsFixMany', { n: facts.needsFix, defaultValue: '{{n}} reports need a fix — tap to see why' }),
+        onPress: () => onNavigate('my-submissions'),
+      });
+    }
+  }
+
+  if (facts.waterExact && facts.retested > 0) {
+    lines.push({
+      key: 'water',
+      icon: 'water-outline',
+      color: colors.waterSafe,
+      text: facts.retested === 1
+        ? t('payback.waterRetestedOne', { defaultValue: '1 water source you flagged has been retested' })
+        : t('payback.waterRetestedMany', { n: facts.retested, defaultValue: '{{n}} water sources you flagged have been retested' }),
+      caption: facts.cleared > 0
+        ? (facts.cleared === 1
+          ? t('payback.waterClearedOne', { defaultValue: '1 is no longer marked unsafe' })
+          : t('payback.waterClearedMany', { n: facts.cleared, defaultValue: '{{n}} are no longer marked unsafe' }))
+        : undefined,
+      onPress: () => onNavigate('water-sources'),
+    });
+  } else if (facts.flagged > 0) {
+    lines.push({
+      key: 'waterFlagged',
+      icon: 'water-outline',
+      color: colors.info,
+      text: facts.flagged === 1
+        ? t('payback.waterFlaggedOne', { defaultValue: '1 water source you flagged is on the register' })
+        : t('payback.waterFlaggedMany', { n: facts.flagged, defaultValue: '{{n}} water sources you flagged are on the register' }),
+      onPress: () => onNavigate('water-sources'),
+    });
+  }
+
+  if (facts.campaignsJoined > 0) {
+    lines.push({
+      key: 'campaigns',
+      icon: 'megaphone-outline',
+      color: colors.textSecondary,
+      text: facts.campaignsJoined === 1
+        ? t('payback.campaignsOne', { defaultValue: '1 campaign joined' })
+        : t('payback.campaignsMany', { n: facts.campaignsJoined, defaultValue: '{{n}} campaigns joined' }),
+    });
+  }
+
+  // ── Quiet zero — honest, and not a scolding ──
+  if (lines.length === 0) {
+    return (
+      <Section title={title}>
+        <EmptyState
+          icon={canFile ? 'document-text-outline' : 'megaphone-outline'}
+          color={colors.primary}
+          title={canFile
+            ? t('payback.emptyTitle', { defaultValue: 'Your first report will show its journey here' })
+            : t('payback.emptyTitleHelper', { defaultValue: 'Nothing to show here yet' })}
+          subtitle={canFile
+            ? t('payback.emptyBody', { defaultValue: 'File a report and this card will show what happened to it.' })
+            : t('payback.emptyBodyHelper', { defaultValue: 'Join a campaign and it will appear here.' })}
+        />
+      </Section>
+    );
+  }
+
+  // ── Content ──
+  return (
+    <Section title={title}>
+      <View style={[styles.paybackCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        {lines.map((line, i) => {
+          const body = (
+            <>
+              <Ionicons name={line.icon} size={22} color={line.color} />
+              <View style={styles.paybackTextWrap}>
+                <Text style={[styles.paybackText, { color: colors.text }]}>{line.text}</Text>
+                {!!line.caption && (
+                  <Text style={[styles.paybackCaption, { color: colors.textSecondary }]}>{line.caption}</Text>
+                )}
+              </View>
+              {!!line.onPress && <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />}
+            </>
+          );
+          const divider = i < lines.length - 1
+            ? { borderBottomWidth: 1, borderBottomColor: colors.borderLight }
+            : null;
+
+          return line.onPress ? (
+            <Pressable
+              key={line.key}
+              onPress={line.onPress}
+              accessibilityRole="button"
+              accessibilityLabel={line.caption ? `${line.text}. ${line.caption}` : line.text}
+              style={({ pressed }) => [
+                styles.paybackRow,
+                divider,
+                pressed && { backgroundColor: colors.cardHover },
+              ]}
+            >
+              {body}
+            </Pressable>
+          ) : (
+            <View
+              key={line.key}
+              style={[styles.paybackRow, divider]}
+              accessible
+              accessibilityLabel={line.caption ? `${line.text}. ${line.caption}` : line.text}
+            >
+              {body}
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Only offered when there is something to open. */}
+      {facts.filed > 0 && (
+        <Pressable
+          onPress={() => onNavigate('my-submissions')}
+          accessibilityRole="button"
+          accessibilityLabel={t('payback.seeSubmissions', { defaultValue: 'See your submissions' })}
+          style={({ pressed }) => [styles.paybackLink, pressed && { backgroundColor: colors.cardHover }]}
+        >
+          <Text style={[styles.paybackLinkText, { color: isDark ? colors.primary : colors.primaryDark }]}>
+            {t('payback.seeSubmissions', { defaultValue: 'See your submissions' })}
+          </Text>
+          <Ionicons name="chevron-forward" size={20} color={isDark ? colors.primary : colors.primaryDark} />
+        </Pressable>
+      )}
+    </Section>
+  );
+};
+
+// ─────────────────────────────────────────────────────
 //  SyncPebble — the §9.4 sync ledger: one component,
 //  four truths, always rendered (quiet when good):
 //    All synced · last HH:MM      (sync-synced green)
@@ -1128,6 +1636,29 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg,
   },
   errorRetryText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+
+  /* ── Payback card — NEW-02. Flat card, hairline-separated 48dp fact
+        rows. No accent edge: the colour lives on the row icon, where it
+        encodes a ladder position, and nowhere else. ── */
+  paybackCard: {
+    borderRadius: radii.md, borderWidth: 1,
+    overflow: 'hidden',
+  },
+  paybackSkeleton: { padding: spacing.lg },
+  paybackRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+  },
+  paybackTextWrap: { flex: 1 },
+  paybackText: { fontSize: 15, lineHeight: 22, fontWeight: '600' },
+  paybackCaption: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2 },
+  paybackLink: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,
+    minHeight: 48, borderRadius: radii.md,
+    paddingHorizontal: spacing.lg, marginTop: spacing.sm,
+  },
+  paybackLinkText: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
 
   /* ── Sync Pebble — §9.4 ledger chip: tint + 1px truth-colored hairline ── */
   pebble: {

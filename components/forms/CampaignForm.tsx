@@ -4,7 +4,7 @@
 // chips, inline errors + scroll-to-first-error,
 // One-Hand Action Bar. Zero hex literals.
 // =====================================================
-import React, { useRef, useState } from 'react';
+import React, { useImperativeHandle, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,13 +18,25 @@ import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 import { useTheme, Theme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
+import { useFormDraft, FormExitHandle } from '../../lib/useFormDraft';
+import {
+  DiscardChangesSheet,
+  RestoreDraftSheet,
+  DraftStorageNotice,
+  StaleDraftDatesNotice,
+} from '../../lib/FormGuardSheets';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
+import { Profile } from '../../types';
 
 interface CampaignFormProps {
   onSuccess: () => void;
   onCancel: () => void;
+  /** Scopes the autosaved draft to this user — a shared handset must not leak drafts. */
+  profile?: Profile;
+  /** BRK-14 — MainApp routes the Android hardware back press through here. */
+  exitRef?: React.Ref<FormExitHandle>;
 }
 
 // ── Local building blocks ────────────────────────────────────────────────────
@@ -69,6 +81,8 @@ const FIELD_ORDER = ['campaign_name', 'location', 'end_date'];
 export const CampaignForm: React.FC<CampaignFormProps> = ({
   onSuccess,
   onCancel,
+  profile,
+  exitRef,
 }) => {
   const { colors, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
@@ -83,10 +97,13 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
   const fieldYRef = useRef<Record<string, number>>({});
   const fieldSectionRef = useRef<Record<string, string>>({});
 
-  const today = new Date();
-  const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  /** Same convention as the seeded defaults below, so the two are comparable. */
+  const todayIso = () => new Date().toISOString().split('T')[0];
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState(() => {
+    const today = new Date();
+    const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return {
     campaign_name: '',
     campaign_type: 'vaccination',
     custom_campaign_type: '',
@@ -102,7 +119,46 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
     contact_person: '',
     contact_phone: '',
     notes: '',
+    // One idempotency key per filling-in, carried INSIDE the draft snapshot so
+    // it survives the save/restore round trip. health_campaigns already has a
+    // UNIQUE index on client_idempotency_key (verified against the live
+    // project), and the offline queue has always used one — only this online
+    // insert did not, so a request whose row committed while the response was
+    // lost left a draft that could file the SAME campaign twice on restore.
+    // Never regenerated per send: a key minted at send time cannot collide
+    // with the row already inserted, which is the whole point.
+    client_idempotency_key: `cmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+    };
   });
+
+  // ── NEW-01 / BRK-14 — draft autosave + dirty guard ─────────────────────────
+  const draft = useFormDraft({
+    formKey: 'campaign',
+    userId: profile?.id,
+    values: formData,
+  });
+
+  const [confirmExit, setConfirmExit] = useState(false);
+  // A restored draft can carry dates that were "today" and "next week" when it
+  // was written and are simply in the past now. The values are re-applied
+  // wholesale, so without this the form would show a start date days gone by
+  // and say nothing about it.
+  const [staleDates, setStaleDates] = useState(false);
+
+  const applyDraft = () => {
+    const values = draft.restore();
+    if (!values) return;
+    // Merged over the live defaults, so a draft written by an older build can
+    // never blank a field that build did not have.
+    setFormData((prev) => ({ ...prev, ...values }));
+    const now = todayIso();
+    setStaleDates(
+      (typeof values.start_date === 'string' && values.start_date < now) ||
+        (typeof values.end_date === 'string' && values.end_date < now)
+    );
+    setErrors({});
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
 
   const campaignTypeOptions = [
     { label: 'Vaccination', value: 'vaccination' },
@@ -229,19 +285,40 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         contact_phone: formData.contact_phone || null,
         notes: formData.notes || null,
         status: 'planned',
+        // Stable across every attempt at THIS filling-in (it lives in the draft
+        // snapshot), so a resend after a lost response collides with the row
+        // that already committed instead of creating a second campaign.
+        client_idempotency_key: formData.client_idempotency_key,
       };
 
       if (!isOnline) {
         await syncQueue.enqueue('campaign', payload);
+        // Queued to sync — the draft has done its job.
+        draft.clear();
         setModalType('success');
         setModalMessage('Saved on phone — will sync. Your campaign will upload automatically when you are back online.');
         setModalVisible(true);
         return;
       }
 
-      const { error } = await supabase.from('health_campaigns').insert(payload);
+      // ignoreDuplicates turns a resend of an already-committed campaign into a
+      // no-op rather than a unique-violation error she cannot act on.
+      let { error } = await supabase
+        .from('health_campaigns')
+        .upsert(payload, { onConflict: 'client_idempotency_key', ignoreDuplicates: true });
+
+      // Schema-drift armour, mirroring lib/services/diseaseReports.ts: if this
+      // deployment's table lacks the column or the UNIQUE constraint, fall back
+      // to the plain insert this form always did rather than fail the save.
+      if (error && /client_idempotency_key|on conflict|no unique or exclusion constraint/i.test(String(error.message ?? ''))) {
+        const { client_idempotency_key: _dropped, ...legacyPayload } = payload;
+        ({ error } = await supabase.from('health_campaigns').insert(legacyPayload));
+      }
 
       if (error) throw error;
+
+      // Created — the draft has done its job.
+      draft.clear();
 
       setModalType('success');
       setModalMessage('Your health campaign has been created successfully! Volunteers and health workers will be notified.');
@@ -262,6 +339,56 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
       onSuccess();
     }
   };
+
+  /** Cancel means "leave" — so it always faces the dirty guard. */
+  const handleCancelPress = () => {
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  const discardAndLeave = () => {
+    setConfirmExit(false);
+    draft.clear();
+    onCancel();
+  };
+
+  // BRK-14 — "back" in this app's own terms, shared by the header Back button
+  // and MainApp's hardware-back listener.
+  //
+  // The two are the same code path for every NON-modal state. They are not
+  // identical while a Modal is up: on Android a visible Modal's Dialog answers
+  // the back press through its own onRequestClose before any BackHandler
+  // listener runs, and the chevron is behind that Modal. The modalVisible and
+  // confirmExit rungs below are therefore unreachable from the hardware key —
+  // they stay as the correct answer for a non-Modal caller (react-native-web
+  // renders Modal inline), not because a back press reaches them today. The
+  // live rung is draft.offered: the restore sheet routes its onRequestClose
+  // here on purpose.
+  const requestClose = () => {
+    if (modalVisible) {
+      handleModalClose();
+      return;
+    }
+    if (confirmExit) {
+      setConfirmExit(false);
+      return;
+    }
+    if (draft.offered) {
+      // The draft stays on the phone — leaving is not deciding.
+      onCancel();
+      return;
+    }
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  useImperativeHandle(exitRef, () => ({ requestClose }));
 
   const getInputStyle = (fieldName: string) => [
     styles.input,
@@ -299,7 +426,7 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         ]}
       >
         <Pressable
-          onPress={onCancel}
+          onPress={requestClose}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel="Go back"
@@ -437,12 +564,33 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
                 formattedAddress: '',
               }}
               onChange={(loc) => {
+                // A location block that has only ever held machine-written
+                // values is not the user's work: re-arm the pristine mark so
+                // Back still closes silently.
+                //
+                // The extra "was the location EMPTY before?" test meant only
+                // the FIRST fix counted as the machine typing, so tapping
+                // "Re-fetch" on an already-located, otherwise untouched form
+                // raised "Leave without saving?" over a campaign nobody had
+                // written.
+                //
+                // Telling the machine from the user, exactly: LocationField
+                // spreads the current `value` for every hand edit (typing a
+                // place, typing a district, picking a registry suggestion), and
+                // this form passes latitude: null and formattedAddress: '' in
+                // that value — so a non-null latitude or a non-empty
+                // formattedAddress can only have come from LocationField's own
+                // GPS/geocode sync. Nothing typed satisfies either test.
+                const machineFilled = loc.latitude != null || !!loc.formattedAddress;
                 setFormData({
                   ...formData,
                   location_name: loc.locationName,
                   district: loc.district,
                   state: loc.state,
                 });
+                if (machineFilled && !draft.dirty) {
+                  draft.markPristine();
+                }
                 if (loc.locationName && loc.district && loc.state) clearError('location');
               }}
               autoFetch={true}
@@ -455,13 +603,18 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         <View style={styles.section} onLayout={onSectionLayout('schedule')}>
           <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Campaign Duration</Text>
 
+          {/* A draft answered days later re-applies the dates it was written
+              with. The values are right there in the two fields below, but
+              nothing said they were stale — so this does, once, beside them. */}
+          <StaleDraftDatesNotice visible={staleDates} />
+
           <Text style={[styles.label, { color: colors.textSecondary }]}>Start Date</Text>
           <TextInput
             style={getInputStyle('start_date')}
             placeholder="YYYY-MM-DD"
             placeholderTextColor={colors.inputPlaceholderColor}
             value={formData.start_date}
-            onChangeText={(text) => { setFormData({ ...formData, start_date: text }); clearError('end_date'); }}
+            onChangeText={(text) => { setFormData({ ...formData, start_date: text }); clearError('end_date'); setStaleDates(false); }}
             onFocus={() => setFocusedField('start_date')}
             onBlur={() => setFocusedField(null)}
           />
@@ -473,7 +626,7 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
               placeholder="YYYY-MM-DD"
               placeholderTextColor={colors.inputPlaceholderColor}
               value={formData.end_date}
-              onChangeText={(text) => { setFormData({ ...formData, end_date: text }); clearError('end_date'); }}
+              onChangeText={(text) => { setFormData({ ...formData, end_date: text }); clearError('end_date'); setStaleDates(false); }}
               onFocus={() => setFocusedField('end_date')}
               onBlur={() => setFocusedField(null)}
             />
@@ -534,10 +687,14 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         </View>
       </ScrollView>
 
+      {/* NEW-01 — persistence that is NOT working says so. A silent read
+          failure looks exactly like "you have no unfinished campaign". */}
+      <DraftStorageNotice issue={draft.storageIssue} onRetry={draft.retryStorage} />
+
       {/* One-Hand Action Bar */}
       <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
         <Pressable
-          onPress={onCancel}
+          onPress={handleCancelPress}
           accessibilityRole="button"
           style={({ pressed }) => [
             styles.cancelLink,
@@ -572,6 +729,22 @@ export const CampaignForm: React.FC<CampaignFormProps> = ({
         message={modalMessage}
         onClose={handleModalClose}
         onRetry={modalType === 'error' ? handleSubmit : undefined}
+      />
+
+      {/* NEW-01 — an unfinished campaign found on this phone, offered not applied */}
+      <RestoreDraftSheet
+        visible={!!draft.offered}
+        savedAt={draft.offeredAt}
+        onRestore={applyDraft}
+        onStartFresh={draft.dismiss}
+        onRequestClose={requestClose}
+      />
+
+      {/* BRK-14 — the guard between Back and a lost campaign */}
+      <DiscardChangesSheet
+        visible={confirmExit}
+        onKeepEditing={() => setConfirmExit(false)}
+        onDiscard={discardAndLeave}
       />
     </View>
   );

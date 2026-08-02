@@ -1,12 +1,41 @@
 // =====================================================
 // WATER QUALITY REPORTS SERVICE
 // =====================================================
-import { supabase } from '../supabase';
+import { supabase, describeRequestError, describeSubmitError } from '../supabase';
 import { WaterQualityReport, WaterQualityReportInput, WaterReportStatus, ApiResponse } from '../../types';
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
 import { sanitizeSearchTerm } from './searchSanitize';
 import { track, events } from './analytics';
+import { offlineCache, CachedApiResponse, ReadThroughOptions } from '../offlineCache';
+
+/**
+ * Cache namespace for this service (INC-05b). Reads are always written to the
+ * per-user offline cache; they are only ANSWERED from it when the caller
+ * passes `{ offlineFallback: true }` — its promise to render `asOf`.
+ */
+const CACHE_NS = 'water:';
+
+/**
+ * A water reading upserts public.water_sources through a DB trigger, so a
+ * successful write invalidates the water-SOURCE caches too, not just this
+ * service's own.
+ */
+const WATER_SOURCE_NS = 'wsrc:';
+
+/** Stable, compact cache name for a filtered page. */
+const listCacheName = (options?: Record<string, unknown>): string => {
+  const parts = Object.entries(options ?? {})
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([k, v]) => `${k}=${String(v)}`);
+  return `${CACHE_NS}all:${parts.join('&') || 'default'}`;
+};
+
+const invalidateWaterCaches = async (): Promise<void> => {
+  await offlineCache.invalidate(CACHE_NS);
+  await offlineCache.invalidate(WATER_SOURCE_NS);
+};
 
 const LEGACY_SCHEMA_FALLBACK_PATTERNS = [
   'client_idempotency_key',
@@ -20,7 +49,18 @@ const isLegacySchemaConflict = (message: string): boolean => {
   return LEGACY_SCHEMA_FALLBACK_PATTERNS.some((token) => lower.includes(token));
 };
 
-const normalizeSubmitErrorMessage = (error: unknown): string => {
+const normalizeSubmitErrorMessage = (
+  error: unknown,
+  options?: { idempotent?: boolean },
+): string => {
+  // Same defect and same fix as diseaseReports.normalizeSubmitErrorMessage:
+  // the raw '.message' fell through, so a fired deadline reached the submit
+  // modal as 'RequestTimeoutError: Request timed out after 30s'.
+  // describeSubmitError returns null for anything that is not transport-shaped,
+  // so a real server answer keeps its own specific message below.
+  const transport = describeSubmitError(error, options);
+  if (transport) return transport;
+
   const message = String((error as any)?.message ?? error ?? '').trim();
   const lower = message.toLowerCase();
 
@@ -47,8 +87,8 @@ export const waterQualityService = {
     searchQuery?: string;
     dateFrom?: string;
     dateTo?: string;
-  }): Promise<ApiResponse<WaterQualityReport[]>> {
-    try {
+  }, cache?: ReadThroughOptions): Promise<CachedApiResponse<WaterQualityReport[]>> {
+    return offlineCache.readThrough<WaterQualityReport[]>(listCacheName(options), async () => {
       const { page = 1, pageSize = 20, status, district, quality, sourceType, searchQuery, dateFrom, dateTo } = options || {};
       const offset = (page - 1) * pageSize;
 
@@ -78,16 +118,13 @@ export const waterQualityService = {
 
       if (error) throw error;
 
-      return { data: data as WaterQualityReport[], error: null, count: count || 0 };
-    } catch (error: any) {
-      console.error('Error fetching water quality reports:', error);
-      return { data: null, error: error.message };
-    }
+      return { data: data as WaterQualityReport[], count: count || 0 };
+    }, { fallbackMessage: 'Could not load water reports.', ...cache });
   },
 
   // Get single report by ID
-  async getById(id: string): Promise<ApiResponse<WaterQualityReport>> {
-    try {
+  async getById(id: string, cache?: ReadThroughOptions): Promise<CachedApiResponse<WaterQualityReport>> {
+    return offlineCache.readThrough<WaterQualityReport>(`${CACHE_NS}one:${id}`, async () => {
       const { data, error } = await supabase
         .from('water_quality_reports')
         .select(`
@@ -99,15 +136,18 @@ export const waterQualityService = {
 
       if (error) throw error;
 
-      return { data: data as WaterQualityReport, error: null };
-    } catch (error: any) {
-      console.error('Error fetching water quality report:', error);
-      return { data: null, error: error.message };
-    }
+      return { data: data as WaterQualityReport };
+    }, { fallbackMessage: 'Could not load this water report.', ...cache });
   },
 
   // Create new water quality report (offline-first)
   async create(reportData: WaterQualityReportInput): Promise<ApiResponse<WaterQualityReport> & { queued?: boolean; localId?: string }> {
+    // Out here so the catch can tell the worker whether resending is safe.
+    const suppliedKey =
+      typeof (reportData as any)?.client_idempotency_key === 'string' &&
+      (reportData as any).client_idempotency_key.trim()
+        ? String((reportData as any).client_idempotency_key).trim()
+        : null;
     try {
       // Resolve the user from the locally cached session first — getSession()
       // reads local storage (no network), so the offline sync-queue path below
@@ -134,17 +174,30 @@ export const waterQualityService = {
       if (!isOnline) {
         const localId = await syncQueue.enqueue('water_quality_report', payload);
         track(events.REPORT_QUEUED, { kind: 'water' });
+        // The reading exists on this phone and in none of the cached lists —
+        // and once it syncs, the DB trigger will restate the source's status
+        // too. Drop both namespaces so the next successful online read
+        // rebuilds from a server that already holds it.
+        await invalidateWaterCaches();
         return { data: null, error: null, queued: true, localId };
       }
 
-      const idempotencyKey = `wq_${user.id}_${Date.now()}`;
+      // Honour a caller-supplied key; only mint one as a last resort.
+      // Same defect and same reasoning as diseaseReports.create — the minted
+      // key was spread over the payload, so onConflict never matched a prior
+      // attempt and a resend after a lost response filed a duplicate report.
+      const idempotencyKey = suppliedKey ?? `wq_${user.id}_${Date.now()}`;
       const withIdempotency = { ...payload, client_idempotency_key: idempotencyKey };
 
+      // maybeSingle(), not single() — ON CONFLICT DO NOTHING returns zero rows,
+      // and single() turned the now-working safe resend into a PGRST116 error
+      // shown to a worker whose reading had in fact been filed. See the fuller
+      // note in diseaseReports.create.
       let { data, error } = await supabase
         .from('water_quality_reports')
         .upsert(withIdempotency, { onConflict: 'client_idempotency_key', ignoreDuplicates: true })
         .select()
-        .single();
+        .maybeSingle();
 
       if (error && isLegacySchemaConflict(String(error.message ?? ''))) {
         const fallback = await supabase
@@ -159,13 +212,38 @@ export const waterQualityService = {
 
       if (error) throw error;
 
+      if (!data) {
+        // Nothing inserted = already filed under this key. A success, not a
+        // failure — read the row back so the caller gets it.
+        const existing = await supabase
+          .from('water_quality_reports')
+          .select('*')
+          .eq('client_idempotency_key', idempotencyKey)
+          .maybeSingle();
+        if (existing.error) throw existing.error;
+
+        await invalidateWaterCaches();
+        return {
+          data: (existing.data ?? null) as WaterQualityReport | null,
+          error: null,
+          queued: false,
+        };
+      }
+
       // Fire-and-forget analytics — district + kind only, never readings.
       track(events.REPORT_SUBMITTED, { kind: 'water', district: reportData.district });
+
+      // This reading has just changed the source's status through the DB
+      // trigger — every cached water read is now contradicted.
+      await invalidateWaterCaches();
 
       return { data: data as WaterQualityReport, error: null, queued: false };
     } catch (error: any) {
       console.error('Error creating water quality report:', error);
-      return { data: null, error: normalizeSubmitErrorMessage(error) };
+      return {
+        data: null,
+        error: normalizeSubmitErrorMessage(error, { idempotent: suppliedKey !== null }),
+      };
     }
   },
 
@@ -180,6 +258,8 @@ export const waterQualityService = {
         .single();
 
       if (error) throw error;
+
+      await invalidateWaterCaches();
 
       return { data: data as WaterQualityReport, error: null };
     } catch (error: any) {
@@ -207,6 +287,8 @@ export const waterQualityService = {
 
       if (error) throw error;
 
+      await invalidateWaterCaches();
+
       return { data: data as WaterQualityReport, error: null };
     } catch (error: any) {
       console.error('Error verifying water quality report:', error);
@@ -224,6 +306,8 @@ export const waterQualityService = {
 
       if (error) throw error;
 
+      await invalidateWaterCaches();
+
       return { data: null, error: null };
     } catch (error: any) {
       console.error('Error deleting water quality report:', error);
@@ -240,86 +324,104 @@ export const waterQualityService = {
     pendingVerifications: number;
   }>> {
     try {
-      const { count: total } = await supabase
+      // Every count is checked for its own error before it is read. The old
+      // shape read `count || 0` with no error check at all, so a failed query
+      // rendered as a confident "0 unsafe sources" — a query that never ran
+      // and a district with clean water looked identical. With a request
+      // deadline now in force (lib/supabase.ts) that path became reachable in
+      // seconds rather than hanging, so it is closed here.
+      const totalRes = await supabase
         .from('water_quality_reports')
         .select('id', { count: 'exact', head: true });
 
-      const { count: safe } = await supabase
+      const safeRes = await supabase
         .from('water_quality_reports')
         .select('id', { count: 'exact', head: true })
         .eq('overall_quality', 'safe');
 
-      const { count: unsafe } = await supabase
+      const unsafeRes = await supabase
         .from('water_quality_reports')
         .select('id', { count: 'exact', head: true })
         .in('overall_quality', ['unsafe', 'moderate']);
 
-      const { count: critical } = await supabase
+      const criticalRes = await supabase
         .from('water_quality_reports')
         .select('id', { count: 'exact', head: true })
         .eq('overall_quality', 'critical');
 
-      const { count: pending } = await supabase
+      const pendingRes = await supabase
         .from('water_quality_reports')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'reported');
 
+      const failure = [totalRes, safeRes, unsafeRes, criticalRes, pendingRes]
+        .find((res) => res.error);
+      if (failure?.error) throw failure.error;
+
       return {
         data: {
-          totalSources: total || 0,
-          safeSources: safe || 0,
-          unsafeSources: unsafe || 0,
-          criticalSources: critical || 0,
-          pendingVerifications: pending || 0,
+          totalSources: totalRes.count ?? 0,
+          safeSources: safeRes.count ?? 0,
+          unsafeSources: unsafeRes.count ?? 0,
+          criticalSources: criticalRes.count ?? 0,
+          pendingVerifications: pendingRes.count ?? 0,
         },
         error: null,
       };
     } catch (error: any) {
       console.error('Error fetching water statistics:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not load water statistics.') };
     }
   },
 
   // Get recent reports
-  async getRecent(limit: number = 5): Promise<ApiResponse<WaterQualityReport[]>> {
-    try {
-      const { data, error } = await supabase
-        .from('water_quality_reports')
-        .select(`
+  async getRecent(
+    limit: number = 5,
+    cache?: ReadThroughOptions,
+  ): Promise<CachedApiResponse<WaterQualityReport[]>> {
+    return offlineCache.readThrough<WaterQualityReport[]>(
+      `${CACHE_NS}recent:${limit}`,
+      async () => {
+        const { data, error } = await supabase
+          .from('water_quality_reports')
+          .select(`
           *,
           reporter:profiles!reporter_id(id, full_name)
         `)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+          .order('created_at', { ascending: false })
+          .limit(limit);
 
-      if (error) throw error;
+        if (error) throw error;
 
-      return { data: data as WaterQualityReport[], error: null };
-    } catch (error: any) {
-      console.error('Error fetching recent water reports:', error);
-      return { data: null, error: error.message };
-    }
+        return { data: data as WaterQualityReport[] };
+      },
+      { fallbackMessage: 'Could not load recent water reports.', ...cache },
+    );
   },
 
   // Get reports by quality level
-  async getByQuality(quality: string): Promise<ApiResponse<WaterQualityReport[]>> {
-    try {
-      const { data, error } = await supabase
-        .from('water_quality_reports')
-        .select(`
+  async getByQuality(
+    quality: string,
+    cache?: ReadThroughOptions,
+  ): Promise<CachedApiResponse<WaterQualityReport[]>> {
+    return offlineCache.readThrough<WaterQualityReport[]>(
+      `${CACHE_NS}quality:${quality}`,
+      async () => {
+        const { data, error } = await supabase
+          .from('water_quality_reports')
+          .select(`
           *,
           reporter:profiles!reporter_id(id, full_name)
         `)
-        .eq('overall_quality', quality)
-        .order('created_at', { ascending: false });
+          .eq('overall_quality', quality)
+          .order('created_at', { ascending: false });
 
-      if (error) throw error;
+        if (error) throw error;
 
-      return { data: data as WaterQualityReport[], error: null };
-    } catch (error: any) {
-      console.error('Error fetching water reports by quality:', error);
-      return { data: null, error: error.message };
-    }
+        return { data: data as WaterQualityReport[] };
+      },
+      { fallbackMessage: 'Could not load water reports.', ...cache },
+    );
   },
 };
 

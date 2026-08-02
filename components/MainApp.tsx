@@ -16,11 +16,13 @@ import {
   Platform,
   PanResponder,
   StatusBar,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../lib/ThemeContext';
+import { FormExitHandle } from '../lib/useFormDraft';
 import { Profile } from '../types';
 
 // Screens
@@ -239,6 +241,32 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       : { panHandlers: {} }
   ).current;
 
+  // ── BRK-14 — a real one-level-up path ────────────────────────────────────
+  // This app has a two-level stack and the back mapping modelled a one-level
+  // one: every sub-screen collapsed straight to the tabs. So My Submissions →
+  // "Fix & refile" → Back landed on the home tab instead of the queue of
+  // rejected reports she was working through, and she had to re-navigate for
+  // every single one. Same level-loss for Water Sources → retest, Outbreak
+  // Signal → Console, and Escalation Monitoring → Approval Queue.
+  //
+  // A ref, not state: nothing renders from it (currentScreen already drives
+  // the render), and the hardware-back listener below is registered once with
+  // `[]` deps — a state value would be captured stale on the first render,
+  // which is the classic bug in this pattern.
+  const navStackRef = useRef<ScreenType[]>([]);
+
+  /** Navigate deeper, remembering where we came from (unless that is the tabs). */
+  const pushScreen = (next: ScreenType) => {
+    if (currentScreen !== 'tabs' && currentScreen !== next) {
+      const stack = navStackRef.current;
+      const seen = stack.indexOf(next);
+      // A cycle (A → B → A) unwinds to the earlier visit rather than growing
+      // the stack forever, so Back can never become an endless loop.
+      navStackRef.current = seen === -1 ? [...stack, currentScreen] : stack.slice(0, seen);
+    }
+    setCurrentScreen(next);
+  };
+
   const navigateToForm = (formType: string) => {
     // E·02 — retest flow: open the water report form prefilled from a source.
     if (formType.startsWith('new-water-report:prefill:')) {
@@ -251,7 +279,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       }
       const sourceId = formType.split(':')[2];
       setWaterPrefillSourceId(sourceId || null);
-      setCurrentScreen('new-water-report');
+      pushScreen('new-water-report');
       return;
     }
 
@@ -266,7 +294,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       const id = formType.split(':')[1];
       if (id) {
         setOutbreakFocusId(id);
-        setCurrentScreen('outbreak-signal');
+        pushScreen('outbreak-signal');
       }
       return;
     }
@@ -275,6 +303,9 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       const [, reportType, reportId] = formType.split(':');
       if ((reportType === 'disease' || reportType === 'water') && reportId) {
         setReportFocus({ type: reportType, id: reportId });
+        // An explicit jump to a tab, not a step down — the stack ends here,
+        // otherwise a later Back would pop an ancestor she has already left.
+        navStackRef.current = [];
         setCurrentScreen('tabs');
         setActiveTab('reports');
       }
@@ -300,7 +331,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       } else {
         setApprovalQueueInitialTab(tab);
       }
-      setCurrentScreen('approval-queue');
+      pushScreen('approval-queue');
     } else {
       if (!isScreenType(formType)) {
         console.error('Invalid navigation target received:', formType);
@@ -323,25 +354,99 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         return;
       }
 
-      setCurrentScreen(formType);
+      pushScreen(formType);
     }
   };
 
-  const goBackToTabs = () => {
+  /**
+   * One level up: back to whatever screen opened this one, else the tabs.
+   * Every header chevron, every form's Cancel, and the Android hardware back
+   * all come through here, so the three cannot drift apart.
+   *
+   * Reads the ref rather than a captured value: the hardware-back listener
+   * closes over the first render's copy of this function.
+   */
+  const goBack = () => {
     setShowCreateMenu(false);
     setWaterPrefillSourceId(null);
     setRefileReportId(null);
+    const stack = navStackRef.current;
+    if (stack.length > 0) {
+      navStackRef.current = stack.slice(0, -1);
+      setCurrentScreen(stack[stack.length - 1]);
+      return;
+    }
     setCurrentScreen('tabs');
   };
+
+  // ── BRK-14 — Android hardware back, mapped onto THIS app's navigation ─────
+  // Without this, Back on a half-filled disease report pops the whole activity
+  // and the report is gone. Registered exactly once, at the top: the render
+  // branches below return early for every sub-screen, so a listener placed
+  // among them would be mounted and unmounted as she navigates. The current
+  // state travels in a ref instead.
+  //
+  // A form gets the first say — only it knows what is half-filled — via the
+  // handle it publishes on formExitRef.
+  const formExitRef = useRef<FormExitHandle | null>(null);
+  const backStateRef = useRef({ showCreateMenu, currentScreen, activeTab });
+  backStateRef.current = { showCreateMenu, currentScreen, activeTab };
+
+  useEffect(() => {
+    // Android only. iOS has no hardware back and react-native-web's BackHandler
+    // never fires — the listener must be inert there, not absent-and-crashing.
+    if (Platform.OS !== 'android') return;
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      const { showCreateMenu: menuOpen, currentScreen: screen, activeTab: tab } =
+        backStateRef.current;
+
+      if (menuOpen) {
+        setShowCreateMenu(false);
+        return true;
+      }
+
+      if (isCreateScreen(screen)) {
+        const handle = formExitRef.current;
+        if (handle) {
+          handle.requestClose();
+        } else {
+          // Handle not published yet (first frame) — closing an untouched form.
+          goBack();
+        }
+        return true;
+      }
+
+      if (screen !== 'tabs') {
+        // One level, not all of them — goBack() pops the screen that opened
+        // this one (My Submissions, Water Sources, Outbreak Signal …) and only
+        // falls through to the tab shell at the top of the stack.
+        goBack();
+        return true;
+      }
+
+      if (tab !== 'home') {
+        setActiveTab('home');
+        return true;
+      }
+
+      // Home tab: Android's own behaviour — leave the app.
+      return false;
+    });
+
+    return () => subscription.remove();
+  }, []);
 
   // ── Form / sub-screens ────────────────────────────────────────
   if (currentScreen === 'new-disease-report') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <DiseaseReportForm
-          onSuccess={goBackToTabs}
-          onCancel={goBackToTabs}
+          onSuccess={goBack}
+          onCancel={goBack}
           refillReportId={refileReportId ?? undefined}
+          profile={profile}
+          exitRef={formExitRef}
         />
       </SafeAreaView>
     );
@@ -350,10 +455,12 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <WaterQualityReportForm
-          onSuccess={goBackToTabs}
-          onCancel={goBackToTabs}
+          onSuccess={goBack}
+          onCancel={goBack}
           prefillSourceId={waterPrefillSourceId ?? undefined}
           refillReportId={refileReportId ?? undefined}
+          profile={profile}
+          exitRef={formExitRef}
         />
       </SafeAreaView>
     );
@@ -361,56 +468,66 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   if (currentScreen === 'new-campaign') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <CampaignForm onSuccess={goBackToTabs} onCancel={goBackToTabs} />
+        <CampaignForm
+          onSuccess={goBack}
+          onCancel={goBack}
+          profile={profile}
+          exitRef={formExitRef}
+        />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'new-alert') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <AlertForm onSuccess={goBackToTabs} onCancel={goBackToTabs} profile={profile} />
+        <AlertForm
+          onSuccess={goBack}
+          onCancel={goBack}
+          profile={profile}
+          exitRef={formExitRef}
+        />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'admin-management') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <AdminManagementScreen profile={profile} onBack={goBackToTabs} />
+        <AdminManagementScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'user-management') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <UserManagementScreen profile={profile} onBack={goBackToTabs} />
+        <UserManagementScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'approval-queue') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <ApprovalQueueScreen profile={profile} onBack={goBackToTabs} initialTab={approvalQueueInitialTab} />
+        <ApprovalQueueScreen profile={profile} onBack={goBack} initialTab={approvalQueueInitialTab} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'all-alerts') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <AllAlertsScreen profile={profile} onBack={goBackToTabs} />
+        <AllAlertsScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'campaign-intelligence') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <CampaignIntelligenceScreen profile={profile} onBack={goBackToTabs} />
+        <CampaignIntelligenceScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'health-score') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <HealthScoreScreen profile={profile} onBack={goBackToTabs} />
+        <HealthScoreScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
@@ -419,7 +536,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <EscalationMonitoringScreen
           profile={profile}
-          onBack={goBackToTabs}
+          onBack={goBack}
           onOpenQueue={(tab) => navigateToForm(`approval-queue:${tab}`)}
         />
       </SafeAreaView>
@@ -431,10 +548,10 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
         <OutbreakSignalScreen
           profile={profile}
           outbreakId={outbreakFocusId}
-          onBack={goBackToTabs}
+          onBack={goBack}
           onOpenConsole={(id: string) => {
             setOutbreakFocusId(id);
-            setCurrentScreen('outbreak-console');
+            pushScreen('outbreak-console');
           }}
         />
       </SafeAreaView>
@@ -443,21 +560,21 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   if (currentScreen === 'outbreak-console' && outbreakFocusId) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <OutbreakConsoleScreen profile={profile} outbreakId={outbreakFocusId} onBack={goBackToTabs} />
+        <OutbreakConsoleScreen profile={profile} outbreakId={outbreakFocusId} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'widget-customization') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <WidgetCustomizationScreen profile={profile} onBack={goBackToTabs} />
+        <WidgetCustomizationScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'sync-outbox') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <SyncOutboxScreen profile={profile} onBack={goBackToTabs} />
+        <SyncOutboxScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
@@ -466,7 +583,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <MySubmissionsScreen
           profile={profile}
-          onBack={goBackToTabs}
+          onBack={goBack}
           onRefile={(type, reportId) => {
             // A·06 — Fix & refile: open a fresh form prefilled from the
             // rejected report. Files a NEW report; the old row is untouched.
@@ -476,7 +593,9 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
               return;
             }
             setRefileReportId(reportId);
-            setCurrentScreen(target);
+            // Pushed, not replaced: Back out of the refile form returns to the
+            // queue of rejected reports she is working through.
+            pushScreen(target);
           }}
         />
       </SafeAreaView>
@@ -487,7 +606,7 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <WaterSourcesScreen
           profile={profile}
-          onBack={goBackToTabs}
+          onBack={goBack}
           onNavigateToForm={navigateToForm}
         />
       </SafeAreaView>
@@ -496,21 +615,21 @@ const MainApp: React.FC<MainAppProps> = ({ profile, onSignOut, onProfileUpdate }
   if (currentScreen === 'weekly-summary') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <WeeklySummaryScreen profile={profile} onBack={goBackToTabs} />
+        <WeeklySummaryScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'notifications-inbox') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <NotificationsInboxScreen profile={profile} onBack={goBackToTabs} />
+        <NotificationsInboxScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }
   if (currentScreen === 'advisory-composer') {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <AdvisoryComposerScreen profile={profile} onBack={goBackToTabs} />
+        <AdvisoryComposerScreen profile={profile} onBack={goBack} />
       </SafeAreaView>
     );
   }

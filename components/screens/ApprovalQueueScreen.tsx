@@ -1558,7 +1558,8 @@ const qst = StyleSheet.create({
   /* Header */
   /* No status-bar inset here — MainApp already wraps this route in a SafeAreaView. */
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
+  // 48dp floor: the back control is how you leave a queue you opened by mistake.
+  back: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', marginLeft: -spacing.sm },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSub: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2, fontVariant: ['tabular-nums'] },
   roleRibbon: { height: 4, width: '100%' },
@@ -1639,7 +1640,8 @@ const qst = StyleSheet.create({
   modalHeader: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, borderBottomWidth: 1 },
   modalTitle: { fontSize: 16, lineHeight: 22, fontWeight: '800' },
   modalSub: { fontSize: 13, lineHeight: 18, marginTop: 2 },
-  closeBtn: { width: 44, height: 44, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginLeft: spacing.sm },
+  // 48dp floor: dismissing the reject sheet must not need a precise tap.
+  closeBtn: { width: 48, height: 48, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', marginLeft: spacing.sm },
   statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.lg, marginBottom: spacing.xs },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: spacing.md, borderBottomWidth: 1, gap: spacing.md },
   detailLabel: { fontSize: 13, lineHeight: 18, fontWeight: '700', flex: 1 },
@@ -1651,7 +1653,10 @@ const qst = StyleSheet.create({
   templateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
   templateChip: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    minHeight: 44, paddingHorizontal: spacing.lg,
+    // 48, not 44: the project's floor, and this chip picks the rejection
+    // reason an ASHA worker will read — a mis-tap here sends the wrong
+    // explanation for why their report was turned down.
+    minHeight: 48, paddingHorizontal: spacing.lg,
     borderRadius: radii.pill, borderWidth: 1.5,
   },
   templateChipText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },

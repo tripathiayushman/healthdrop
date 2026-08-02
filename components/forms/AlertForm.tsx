@@ -10,7 +10,7 @@
 // syncQueue, role-honest approval copy, same payload
 // columns (metadata gains directive_hindi).
 // =====================================================
-import React, { useRef, useState } from 'react';
+import React, { useImperativeHandle, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,8 @@ import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 import { useTheme, getSeverityColor, Theme, spacing, radii } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
+import { useFormDraft, FormExitHandle } from '../../lib/useFormDraft';
+import { DiscardChangesSheet, RestoreDraftSheet, DraftStorageNotice } from '../../lib/FormGuardSheets';
 import { SubmissionModal, StatusBadge } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
 import { Profile } from '../../types';
@@ -33,6 +35,8 @@ interface AlertFormProps {
   onSuccess: () => void;
   onCancel: () => void;
   profile?: Profile;
+  /** BRK-14 — MainApp routes the Android hardware back press through here. */
+  exitRef?: React.Ref<FormExitHandle>;
 }
 
 // ── Local building blocks ────────────────────────────────────────────────────
@@ -114,7 +118,7 @@ const DO_STEP_PLACEHOLDERS = [
   'Loose motion + vomiting → clinic same day',
 ];
 
-export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profile }) => {
+export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profile, exitRef }) => {
   const { colors, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
@@ -129,7 +133,9 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
   const fieldYRef = useRef<Record<string, number>>({});
   const fieldSectionRef = useRef<Record<string, string>>({});
 
-  const [formData, setFormData] = useState({
+  // Lazy initialiser: the idempotency key below must be minted once per
+  // filling-in, not re-rolled (and thrown away) on every render.
+  const [formData, setFormData] = useState(() => ({
     // Alert Type
     alert_type: 'disease_outbreak',
     urgency_level: 'high',
@@ -164,7 +170,51 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     contact_person: '',
     contact_phone: '',
     emergency_helpline: '',
+
+    // One idempotency key per filling-in, carried INSIDE the draft snapshot so
+    // it survives the save/restore round trip. health_alerts already has a
+    // UNIQUE index on client_idempotency_key (verified against the live
+    // project) and the offline queue has always used one — only this online
+    // insert did not. On one bar of signal the row can commit while the
+    // response is lost; the draft survives, she restores and sends again, and
+    // a SECOND alert lands. For an alert that is not just a duplicate row:
+    // trg_push_on_alert_created fires per insert, so an author whose role is
+    // auto-approved would push the same warning to the same district twice.
+    // Never regenerated per send — a key minted at send time cannot collide
+    // with the row already inserted.
+    client_idempotency_key: `alr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+  }));
+
+  // ── NEW-01 / BRK-14 — draft autosave + dirty guard ─────────────────────────
+  const draft = useFormDraft({
+    formKey: 'alert',
+    userId: profile?.id,
+    values: formData,
   });
+
+  const [confirmExit, setConfirmExit] = useState(false);
+
+  const applyDraft = () => {
+    const values = draft.restore();
+    if (!values) return;
+    // Merged over the live defaults, so a draft written by an older build can
+    // never blank a field that build did not have.
+    setFormData((prev) => ({ ...prev, ...values }));
+    setErrors({});
+    // Restored taxonomy must not stay hidden behind a collapsed disclosure.
+    const hasDetails = [
+      values.disease_or_issue,
+      values.custom_disease,
+      values.symptoms_to_watch,
+      values.cases_reported,
+      values.deaths_reported,
+      values.affected_population,
+      values.immediate_actions,
+      values.emergency_helpline,
+    ].some((field) => String(field ?? '').trim().length > 0);
+    if (hasDetails) setDetailsOpen(true);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
 
   const alertTypes = [
     { label: 'Disease Outbreak', value: 'disease_outbreak' },
@@ -318,10 +368,14 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
           emergency_helpline: formData.emergency_helpline.trim() || null,
           directive_hindi: formData.directive_hindi.trim() || null,
         },
+        // Stable across every attempt at THIS filling-in — see the snapshot.
+        client_idempotency_key: formData.client_idempotency_key,
       };
 
       if (!isOnline) {
         await syncQueue.enqueue('health_alert', payload);
+        // Queued to sync — the draft has done its job.
+        draft.clear();
         setModalType('success');
         if (isAshaWorker) {
           setModalMessage(
@@ -336,14 +390,34 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         return;
       }
 
-      const { error } = await supabase.from('health_alerts').insert(payload);
+      // ignoreDuplicates turns a resend of an already-committed alert into a
+      // no-op rather than a unique-violation error she cannot act on.
+      let { error } = await supabase
+        .from('health_alerts')
+        .upsert(payload, { onConflict: 'client_idempotency_key', ignoreDuplicates: true });
+
+      // Schema-drift armour, mirroring lib/services/diseaseReports.ts: if this
+      // deployment's table lacks the column or the UNIQUE constraint, fall back
+      // to the plain insert this form always did rather than fail the send.
+      if (error && /client_idempotency_key|on conflict|no unique or exclusion constraint/i.test(String(error.message ?? ''))) {
+        const { client_idempotency_key: _dropped, ...legacyPayload } = payload;
+        ({ error } = await supabase.from('health_alerts').insert(legacyPayload));
+      }
 
       if (error) throw error;
 
-      // Push delivery is handled server-side: the trg_push_on_alert_created
-      // trigger fans out to the push-notifications edge function on insert.
-      // No client-side fan-out — it would double-notify and cannot enumerate
-      // tokens under profiles RLS for most roles.
+      // Sent — the draft has done its job.
+      draft.clear();
+
+      // Push delivery is handled server-side, and only for an alert a HUMAN has
+      // approved. Both triggers on health_alerts gate on approval_status:
+      // trg_push_on_alert_created (AFTER INSERT) returns early unless the row
+      // is already 'approved' — which auto_approve_alert_fn only does for
+      // super_admin / health_admin / clinic / district_officer authors — and
+      // trg_push_on_alert_approved (AFTER UPDATE OF approval_status) covers the
+      // reviewed path, so an ASHA worker's request pushes nothing until someone
+      // approves it. No client-side fan-out: it would double-notify and cannot
+      // enumerate tokens under profiles RLS for most roles.
 
       // Role-aware, honest success message
       setModalType('success');
@@ -377,6 +451,56 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
     }
   };
 
+  /** Cancel means "leave" — so it always faces the dirty guard. */
+  const handleCancelPress = () => {
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  const discardAndLeave = () => {
+    setConfirmExit(false);
+    draft.clear();
+    onCancel();
+  };
+
+  // BRK-14 — "back" in this app's own terms, shared by the header Back button
+  // and MainApp's hardware-back listener.
+  //
+  // The two are the same code path for every NON-modal state. They are not
+  // identical while a Modal is up: on Android a visible Modal's Dialog answers
+  // the back press through its own onRequestClose before any BackHandler
+  // listener runs, and the chevron is behind that Modal. The modalVisible and
+  // confirmExit rungs below are therefore unreachable from the hardware key —
+  // they stay as the correct answer for a non-Modal caller (react-native-web
+  // renders Modal inline), not because a back press reaches them today. The
+  // live rung is draft.offered: the restore sheet routes its onRequestClose
+  // here on purpose.
+  const requestClose = () => {
+    if (modalVisible) {
+      handleModalClose();
+      return;
+    }
+    if (confirmExit) {
+      setConfirmExit(false);
+      return;
+    }
+    if (draft.offered) {
+      // The draft stays on the phone — leaving is not deciding.
+      onCancel();
+      return;
+    }
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  useImperativeHandle(exitRef, () => ({ requestClose }));
+
   const selectedUrgency = urgencyLevels.find(u => u.value === formData.urgency_level);
   const urgencyColorFor = (value: string) => getSeverityColor(value, colors);
   const isAsha = profile?.role === 'asha_worker';
@@ -409,7 +533,7 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         ]}
       >
         <Pressable
-          onPress={onCancel}
+          onPress={requestClose}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel="Go back"
@@ -594,12 +718,33 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
                 formattedAddress: '',
               }}
               onChange={(loc) => {
+                // A location block that has only ever held machine-written
+                // values is not the user's work: re-arm the pristine mark so
+                // Back still closes silently.
+                //
+                // The extra "was the location EMPTY before?" test meant only
+                // the FIRST fix counted as the machine typing, so tapping
+                // "Re-fetch" on an already-located, otherwise untouched form
+                // raised "Leave without saving?" over an alert nobody had
+                // written.
+                //
+                // Telling the machine from the user, exactly: LocationField
+                // spreads the current `value` for every hand edit (typing an
+                // area, typing a district, picking a registry suggestion), and
+                // this form passes latitude: null and formattedAddress: '' in
+                // that value — so a non-null latitude or a non-empty
+                // formattedAddress can only have come from LocationField's own
+                // GPS/geocode sync. Nothing typed satisfies either test.
+                const machineFilled = loc.latitude != null || !!loc.formattedAddress;
                 setFormData({
                   ...formData,
                   location_name: loc.locationName,
                   district: loc.district,
                   state: loc.state,
                 });
+                if (machineFilled && !draft.dirty) {
+                  draft.markPristine();
+                }
                 if (loc.locationName && loc.district && loc.state) clearError('location');
               }}
               autoFetch={true}
@@ -886,10 +1031,14 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         </View>
       </ScrollView>
 
+      {/* NEW-01 — persistence that is NOT working says so. A silent read
+          failure looks exactly like "you have no unfinished alert". */}
+      <DraftStorageNotice issue={draft.storageIssue} onRetry={draft.retryStorage} />
+
       {/* One-Hand Action Bar */}
       <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
         <Pressable
-          onPress={onCancel}
+          onPress={handleCancelPress}
           accessibilityRole="button"
           style={({ pressed }) => [
             styles.cancelLink,
@@ -924,6 +1073,22 @@ export const AlertForm: React.FC<AlertFormProps> = ({ onSuccess, onCancel, profi
         message={modalMessage}
         onClose={handleModalClose}
         onRetry={modalType === 'error' ? handleSubmit : undefined}
+      />
+
+      {/* NEW-01 — an unfinished alert found on this phone, offered not applied */}
+      <RestoreDraftSheet
+        visible={!!draft.offered}
+        savedAt={draft.offeredAt}
+        onRestore={applyDraft}
+        onStartFresh={draft.dismiss}
+        onRequestClose={requestClose}
+      />
+
+      {/* BRK-14 — the guard between Back and a lost alert */}
+      <DiscardChangesSheet
+        visible={confirmExit}
+        onKeepEditing={() => setConfirmExit(false)}
+        onDiscard={discardAndLeave}
       />
     </View>
   );

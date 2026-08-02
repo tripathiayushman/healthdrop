@@ -13,7 +13,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, EmptyState,
-  SectionDivider, InfoBanner, ToolCard, SkeletonBlock, ErrorCard,
+  SectionDivider, InfoBanner, ToolCard, SkeletonBlock, ErrorCard, PaybackCard,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
@@ -63,6 +63,10 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
   const [stats, setStats] = useState({ alerts: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
   const [campaigns, setCampaigns] = useState<any[]>([]);
+  // NEW-02 — the payback card owns its own queries and its own four states,
+  // so a failure there can never be confused with a failure here. Pull-to-
+  // refresh reloads it by bumping this counter.
+  const [paybackTick, setPaybackTick] = useState(0);
   // null = storage not read yet — the card stays hidden until we know.
   const [firstRunDismissed, setFirstRunDismissed] = useState<boolean | null>(null);
 
@@ -116,7 +120,12 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
   };
 
   useEffect(() => { load(); }, []);
-  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setPaybackTick(n => n + 1);
+    await load();
+    setRefreshing(false);
+  };
   const retry = () => { setLoading(true); load(); };
 
   // Shown until dismissed. Volunteers have no own submissions to count
@@ -199,6 +208,24 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
               emptySubtitle="Your community is safe! No health alerts at this time."
             />
           ) : null}
+          <SectionDivider />
+        </>
+      )}
+
+      {/* NEW-02 — the payback card, the same component the ASHA dashboard
+          renders. `canFile={false}`: MainApp's CREATE_PERMISSIONS excludes
+          volunteers from reporting, so the quiet-zero must not tell this
+          person to file a report she is not allowed to file. See the
+          AshaWorkerDashboard comment for why the widget key is
+          `overview_stats`. */}
+      {isWidgetVisible('overview_stats') && (
+        <>
+          <PaybackCard
+            profile={profile}
+            onNavigate={onNavigate}
+            refreshKey={paybackTick}
+            canFile={false}
+          />
           <SectionDivider />
         </>
       )}

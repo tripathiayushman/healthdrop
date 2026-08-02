@@ -34,19 +34,24 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, users: 0, pendingFeedback: 0, pendingApprovals: 0, unverified: 0 });
+  const [stats, setStats] = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0, users: 0, pendingApprovals: 0, unverified: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
 
   const load = async () => {
     setError(null);
     try {
-      const [d, w, c, a, u, f, pendingDisease, pendingWater, pendingCampaigns, pendingAlerts, unverified] = await Promise.allSettled([
+      const [d, w, c, a, u, pendingDisease, pendingWater, pendingCampaigns, pendingAlerts, unverified] = await Promise.allSettled([
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }),
-        supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+        // BRK-23(ii) — "Active Alerts" must mean what it says. `status='active'`
+        // alone also counts alerts NOBODY HAS APPROVED: a rolled-back probe
+        // inserting one pending alert moved this tile 4 → 5 while the list
+        // directly beneath it (and every field consumer) still showed 4.
+        // An unapproved alert is a draft, not an active advisory.
+        supabase.from('health_alerts').select('id', { count: 'exact', head: true })
+          .eq('status', 'active').eq('approval_status', 'approved'),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true),
-        supabase.from('user_feedback').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
@@ -79,7 +84,6 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         campaigns: countOf(c),
         alerts: countOf(a),
         users: countOf(u),
-        pendingFeedback: countOf(f),
         pendingApprovals: pendingApprovalsCount,
         unverified: unverifiedUsers,
       });
@@ -119,9 +123,29 @@ export const SuperAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
             <ToolCard icon="people-outline" iconColor={colors.primary} title="User Management" subtitle={stats.unverified > 0 ? `${stats.unverified} clinic/ASHA account${stats.unverified === 1 ? '' : 's'} awaiting role verification` : 'Create, edit, deactivate users & manage roles'} onPress={() => onNavigate('user-management')} badge={stats.unverified} />
             <ToolCard icon="shield-checkmark-outline" iconColor={colors.accent} title="Approval Queue" subtitle="Review pending reports & campaigns" onPress={() => onNavigate('approval-queue')} badge={stats.pendingApprovals} />
             <ToolCard icon="albums-outline" iconColor={colors.primary} title="Records Console" subtitle="Users, disease, water and campaign records in one place" onPress={() => onNavigate('admin-management')} />
-            {stats.pendingFeedback > 0 && (
-              <ToolCard icon="chatbox-ellipses-outline" iconColor={colors.info} title="User Feedback" subtitle="Pending feedback awaiting review" onPress={() => onNavigate('approval-queue')} badge={stats.pendingFeedback} />
-            )}
+            {/* BRK-22 — the "User Feedback" ToolCard was removed, not re-routed.
+                It promised "pending feedback awaiting review" and navigated to
+                'approval-queue', whose tabs are only disease | water | campaigns
+                | alerts (ApprovalQueueScreen.tsx:30) — there is no feedback tab
+                and no feedback-reading UI anywhere in the shipped app.
+
+                Re-pointing it at 'notifications-inbox' was considered and
+                rejected: the badge counted `user_feedback.status='pending'`
+                while the inbox lists `notifications` rows, and those two
+                numbers are not the same thing. Live proof — `user_feedback`
+                holds 1 row (status 'resolved') and `notifications` holds 0, so
+                a badge sourced from one and a destination sourced from the
+                other would still be a lie, just a quieter one.
+
+                Nothing is lost by removing it. `notify_on_feedback()` (verified
+                in pg_proc) already inserts a notification for super_admin and
+                health_admin carrying the first 180 chars of the feedback text,
+                and the shell's notification bell (MainApp.tsx:705-713) is
+                rendered unconditionally for every role. The bell is the real
+                destination and it shows more than this card ever did.
+
+                Restore a card here only together with a genuine feedback
+                review surface (a Feedback tab in ApprovalQueueScreen). */}
           </Section>
           <SectionDivider />
         </>

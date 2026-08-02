@@ -720,7 +720,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
             //
             // preferred_language records the choice made on THIS screen so the
             // account starts out matching the toggle instead of the 'en'
-            // column default, and so Profile opens already showing हिन्दी.
+            // column default. It does NOT drive what Profile shows: that reads
+            // AsyncStorage (ProfileScreen.tsx:149-157, the same key
+            // setAppLanguage writes), so the toggle already survives to the
+            // next screen and the next cold start without this column.
             // That is the WHOLE of what it does today: verified 2026-08-02 on
             // ekfdimdlxifatsaubvbh, NOTHING server-side reads this column —
             // 0 functions/procedures, 0 views and 0 RLS policies mention it,

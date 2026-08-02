@@ -8,7 +8,7 @@
 // she compares, not recalls — and her senses outrank the
 // strip kit.
 // =====================================================
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -23,9 +23,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme, getWaterQualityColor, Theme } from '../../lib/ThemeContext';
 import { waterQualityService } from '../../lib/services/waterQuality';
 import { WaterSourceRecord, waterSourcesService } from '../../lib/services/waterSources';
+import { useFormDraft, FormExitHandle } from '../../lib/useFormDraft';
+import { DiscardChangesSheet, RestoreDraftSheet, DraftStorageNotice } from '../../lib/FormGuardSheets';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
-import { SourceType, WaterQuality, WaterQualityReport } from '../../types';
+import { Profile, SourceType, WaterQuality, WaterQualityReport } from '../../types';
 
 interface WaterQualityReportFormProps {
   onSuccess: () => void;
@@ -38,6 +40,10 @@ interface WaterQualityReportFormProps {
    * brand-new report; the old row is never mutated.
    */
   refillReportId?: string;
+  /** Scopes the autosaved draft to this worker — a shared handset must not leak drafts. */
+  profile?: Profile;
+  /** BRK-14 — MainApp routes the Android hardware back press through here. */
+  exitRef?: React.Ref<FormExitHandle>;
 }
 
 // ── Local building blocks ────────────────────────────────────────────────────
@@ -142,6 +148,8 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
   onCancel,
   prefillSourceId,
   refillReportId,
+  profile,
+  exitRef,
 }) => {
   const { colors, reduceMotion } = useTheme();
   const [loading, setLoading] = useState(false);
@@ -190,6 +198,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
     if (res.error || !res.data) {
       setPrefillError("Couldn't load this source's history — you can still file the reading.");
       setPrefillLoading(false);
+      draft.markPristine();
       return;
     }
     const src = res.data;
@@ -204,12 +213,59 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
       longitude: src.longitude ?? prev.longitude,
     }));
     setPrefillLoading(false);
+    // Prefilled fields are the machine's work, not hers — they become the
+    // baseline, so leaving an untouched retest closes without a question.
+    draft.markPristine();
   };
 
   // ── A·06 — refile: fetch the rejected report once, prefill everything ──
   const [refillLoading, setRefillLoading] = useState(!!refillReportId);
   const [refillError, setRefillError] = useState<string | null>(null);
   const [refillInfo, setRefillInfo] = useState<{ shortId: string; reason: string | null } | null>(null);
+
+  // ── NEW-01 / BRK-14 — draft autosave + dirty guard ─────────────────────────
+  // Each prefill context gets its own draft key, so a retest reading for source
+  // A is never offered on top of source B's prefill, and a refile draft stays
+  // tied to the report it is refiling.
+  // One idempotency key per filling-in, carried inside the draft snapshot so
+  // it survives save/restore. Without it, a send whose response was lost —
+  // while the row committed server-side — is re-sent after restore and files
+  // the water report twice. See the fuller note in DiseaseReportForm.
+  const [submitKey, setSubmitKey] = useState(
+    () => `wq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+  );
+
+  const draftValues = { formData, labTested, submitKey };
+
+  const draft = useFormDraft({
+    formKey: refillReportId
+      ? `water-report:refile:${refillReportId}`
+      : prefillSourceId
+        ? `water-report:source:${prefillSourceId}`
+        : 'water-report',
+    userId: profile?.id,
+    values: draftValues,
+    // Wait for whichever prefill is in flight before judging what she typed.
+    enabled: !prefillLoading && !refillLoading,
+  });
+
+  const [confirmExit, setConfirmExit] = useState(false);
+
+  const applyDraft = () => {
+    const values = draft.restore();
+    if (!values || !values.formData) return;
+    // Merged over the live defaults, so a draft written by an older build can
+    // never blank a field that build did not have.
+    setFormData((prev) => ({ ...prev, ...values.formData }));
+    setLabTested(!!values.labTested);
+    // Restore the ORIGINAL key so a resend collides with any row that already
+    // committed, rather than filing a second one.
+    if (typeof values.submitKey === 'string' && values.submitKey) {
+      setSubmitKey(values.submitKey);
+    }
+    setErrors({});
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
 
   const loadRefill = async () => {
     if (!refillReportId) return;
@@ -219,6 +275,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
     if (res.error || !res.data) {
       setRefillError("Couldn't load the earlier report — you can still file a fresh one.");
       setRefillLoading(false);
+      draft.markPristine();
       return;
     }
     const r = res.data as WaterQualityReport & { rejection_reason?: string | null };
@@ -280,6 +337,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
           : null,
     });
     setRefillLoading(false);
+    draft.markPristine();
   };
 
   useEffect(() => {
@@ -411,9 +469,14 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
         tds_level: formData.tds_level ? parseInt(formData.tds_level) : undefined,
         contamination_type: contaminationType,
         notes: mergedNotes || undefined,
+        // Stable across retries and across a draft restore — see submitKey.
+        client_idempotency_key: submitKey,
       });
 
       if (error) throw new Error(String(error));
+
+      // Saved (or queued to sync) — the draft has done its job.
+      draft.clear();
 
       if (queued) {
         setModalType('success');
@@ -440,6 +503,56 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
       onSuccess();
     }
   };
+
+  /** Cancel means "leave" — so it always faces the dirty guard. */
+  const handleCancelPress = () => {
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  const discardAndLeave = () => {
+    setConfirmExit(false);
+    draft.clear();
+    onCancel();
+  };
+
+  // BRK-14 — "back" in this app's own terms, shared by the header Back button
+  // and MainApp's hardware-back listener.
+  //
+  // The two are the same code path for every NON-modal state. They are not
+  // identical while a Modal is up: on Android a visible Modal's Dialog answers
+  // the back press through its own onRequestClose before any BackHandler
+  // listener runs, and the chevron is behind that Modal. The modalVisible and
+  // confirmExit rungs below are therefore unreachable from the hardware key —
+  // they stay as the correct answer for a non-Modal caller (react-native-web
+  // renders Modal inline), not because a back press reaches them today. The
+  // live rung is draft.offered: the restore sheet routes its onRequestClose
+  // here on purpose.
+  const requestClose = () => {
+    if (modalVisible) {
+      handleModalClose();
+      return;
+    }
+    if (confirmExit) {
+      setConfirmExit(false);
+      return;
+    }
+    if (draft.offered) {
+      // The draft stays on the phone — leaving is not deciding.
+      onCancel();
+      return;
+    }
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  useImperativeHandle(exitRef, () => ({ requestClose }));
 
   const getInputStyle = (fieldName: string) => [
     styles.input,
@@ -497,7 +610,7 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
         ]}
       >
         <Pressable
-          onPress={onCancel}
+          onPress={requestClose}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel="Go back"
@@ -721,6 +834,28 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
                 formattedAddress: '',
               }}
               onChange={(loc) => {
+                // A location block that has only ever held machine-written
+                // values is not her work: re-arm the pristine mark so Back
+                // still closes silently.
+                //
+                // Testing "was the location EMPTY before?" meant only the very
+                // first fix counted as the machine typing, so tapping
+                // "Re-fetch" on an already-located, otherwise untouched form
+                // raised "Leave without saving?" over a reading she had not
+                // taken yet.
+                //
+                // Telling the machine from her, exactly: LocationField spreads
+                // the current `value` for every hand edit (typing a village,
+                // typing a district, picking a registry suggestion, Skip GPS),
+                // and this form always passes formattedAddress: '' in that
+                // value — so a NON-EMPTY formattedAddress can only have come
+                // from LocationField's own GPS/geocode sync. Changed
+                // coordinates cover the second machine path, a fix whose
+                // reverse-geocode failed. Nothing she types satisfies either.
+                const machineFilled =
+                  !!loc.formattedAddress ||
+                  loc.latitude !== formData.latitude ||
+                  loc.longitude !== formData.longitude;
                 setFormData({
                   ...formData,
                   latitude: loc.latitude,
@@ -729,6 +864,9 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
                   district: loc.district,
                   state: loc.state,
                 });
+                if (machineFilled && !draft.dirty) {
+                  draft.markPristine();
+                }
                 if (loc.locationName && loc.district && loc.state) clearError('location');
               }}
               autoFetch={!prefillSourceId && !refillReportId}
@@ -927,10 +1065,14 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
         </View>
       </ScrollView>
 
+      {/* NEW-01 — persistence that is NOT working says so. A silent read
+          failure looks exactly like "you have no unfinished reading". */}
+      <DraftStorageNotice issue={draft.storageIssue} onRetry={draft.retryStorage} />
+
       {/* One-Hand Action Bar */}
       <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
         <Pressable
-          onPress={onCancel}
+          onPress={handleCancelPress}
           accessibilityRole="button"
           style={({ pressed }) => [
             styles.cancelLink,
@@ -965,6 +1107,22 @@ export const WaterQualityReportForm: React.FC<WaterQualityReportFormProps> = ({
         message={modalMessage}
         onClose={handleModalClose}
         onRetry={modalType === 'error' ? handleSubmit : undefined}
+      />
+
+      {/* NEW-01 — an unfinished reading found on this phone, offered not applied */}
+      <RestoreDraftSheet
+        visible={!!draft.offered}
+        savedAt={draft.offeredAt}
+        onRestore={applyDraft}
+        onStartFresh={draft.dismiss}
+        onRequestClose={requestClose}
+      />
+
+      {/* BRK-14 — the guard between Back and a lost reading */}
+      <DiscardChangesSheet
+        visible={confirmExit}
+        onKeepEditing={() => setConfirmExit(false)}
+        onDiscard={discardAndLeave}
       />
     </View>
   );

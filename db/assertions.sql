@@ -137,6 +137,21 @@ BEGIN
   --      risky. Before this exclusion the invariant reported 21 violations of
   --      which 19 were trigger functions — noise that buries the two real
   --      hits and trains everyone to ignore a red gate.
+  --
+  --      DO NOT "FIX" THIS BASED ON THE SUPABASE ADVISOR. Its
+  --      `anon_security_definer_function_executable` lint reports 21 of these
+  --      and says each "can be executed by the anon role ... via
+  --      /rest/v1/rpc/<name>". That is wrong: the lint reads the GRANT, not
+  --      reachability. Tested live on 2026-08-02 with the publishable key —
+  --        POST /rest/v1/rpc/audit_log_changes    -> HTTP 404 PGRST202
+  --        POST /rest/v1/rpc/auto_approve_alert_fn -> HTTP 404 PGRST202
+  --        POST /rest/v1/rpc/notify_on_unsafe_water-> HTTP 404 PGRST202
+  --      "no matches were found in the schema cache" — PostgREST never
+  --      exposes a function returning `trigger`, so there is no call path to
+  --      revoke. Chasing that lint to zero would mean revoking EXECUTE from
+  --      trigger functions, which buys nothing and risks the CREATE TRIGGER
+  --      path. The two lints worth acting on were claim_push_token and the
+  --      two RLS helpers, and both were closed on the same day.
   -- ═══════════════════════════════════════════════════════════════════
   v_checked := v_checked + 1;
   v_n := 0;

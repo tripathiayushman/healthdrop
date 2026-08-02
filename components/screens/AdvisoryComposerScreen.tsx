@@ -269,7 +269,16 @@ export default function AdvisoryComposerScreen({
     const scoped = aud === 'all' ? base : base.eq('role', aud);
     const { count, error } = await (dist ? scoped.eq('district', dist) : scoped);
     if (error) throw error;
-    return count ?? 0;
+    // NOT `count ?? 0`. With head:true the number arrives in the content-range
+    // header, and supabase-js yields null whenever it cannot parse it — a proxy
+    // that strips the header, or any 200 without it. Zero is not a safe default
+    // here: it feeds refuse-at-zero below, so a header problem would tell an
+    // officer "there is nobody to send this to" and block a broadcast that
+    // actually had recipients. An unknown count is an error, and says so.
+    if (typeof count !== 'number') {
+      throw new Error('recipient count unavailable');
+    }
+    return count;
   }, [profile.id]);
 
   const refreshReach = useCallback(() => {

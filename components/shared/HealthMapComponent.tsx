@@ -1661,28 +1661,54 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       case 'missing': {
         // The server has alerts that DO match this profile's scope — so the
         // empty list in front of the user is a load failure, not a quiet world.
+        //
+        // "your area" is only true for a radius-scoped role. For super_admin
+        // and health_admin, filterAlertsForProfile returns EVERY row
+        // unconditionally (alertRadius.ts:231), so `inScope` is the national
+        // total — and telling a health_admin in Chennai that a Himachal
+        // Pradesh alert 2,400 km away is "in your area" is exactly the kind of
+        // confident wrong sentence this item exists to remove. Same count,
+        // same severity, honest noun.
         const n = emptyReason.inScope;
+        const scoped = isRadiusScopedRole(profile.role);
         return (
           <View accessibilityLiveRegion="polite">
             <EmptyState
               icon="alert-circle-outline"
               color={colors.danger}
               title={n === 1
-                ? t('alertScope.missingTitleOne', { defaultValue: '1 alert in your area is not shown here' })
-                : t('alertScope.missingTitleMany', { defaultValue: '{{n}} alerts in your area are not shown here', n })}
+                ? (scoped
+                    ? t('alertScope.missingTitleOne', { defaultValue: '1 alert in your area is not shown here' })
+                    : t('alertScope.missingTitleOneAll', { defaultValue: '1 active alert is not shown here' }))
+                : (scoped
+                    ? t('alertScope.missingTitleMany', { defaultValue: '{{n}} alerts in your area are not shown here', n })
+                    : t('alertScope.missingTitleManyAll', { defaultValue: '{{n}} active alerts are not shown here', n }))}
               subtitle={n === 1
-                ? t('alertScope.missingBodyOne', {
-                    defaultValue: 'The server has 1 active alert that matches your area, but this list did not load it. This is not an all-clear.',
-                  })
-                : t('alertScope.missingBodyMany', {
-                    defaultValue: 'The server has {{n}} active alerts that match your area, but this list did not load them. This is not an all-clear.',
-                    n,
-                  })}
+                ? (scoped
+                    ? t('alertScope.missingBodyOne', {
+                        defaultValue: 'The server has 1 active alert that matches your area, but this list did not load it. This is not an all-clear.',
+                      })
+                    : t('alertScope.missingBodyOneAll', {
+                        defaultValue: 'The server has 1 active alert, but this list did not load it. This is not an all-clear.',
+                      }))
+                : (scoped
+                    ? t('alertScope.missingBodyMany', {
+                        defaultValue: 'The server has {{n}} active alerts that match your area, but this list did not load them. This is not an all-clear.',
+                        n,
+                      })
+                    : t('alertScope.missingBodyManyAll', {
+                        defaultValue: 'The server has {{n}} active alerts, but this list did not load them. This is not an all-clear.',
+                        n,
+                      }))}
             />
             {openListAction(
               n === 1
-                ? t('alertScope.openListA11yMissingOne', { defaultValue: 'Open the alert list to see the 1 alert in your area that is missing here' })
-                : t('alertScope.openListA11yMissingMany', { defaultValue: 'Open the alert list to see the {{n}} alerts in your area that are missing here', n }),
+                ? (scoped
+                    ? t('alertScope.openListA11yMissingOne', { defaultValue: 'Open the alert list to see the 1 alert in your area that is missing here' })
+                    : t('alertScope.openListA11yMissingOneAll', { defaultValue: 'Open the alert list to see the 1 active alert that is missing here' }))
+                : (scoped
+                    ? t('alertScope.openListA11yMissingMany', { defaultValue: 'Open the alert list to see the {{n}} alerts in your area that are missing here', n })
+                    : t('alertScope.openListA11yMissingManyAll', { defaultValue: 'Open the alert list to see the {{n}} active alerts that are missing here', n })),
               colors.danger,
             )}
             <TouchableOpacity

@@ -7,7 +7,7 @@
 // Preserves the exact existing submission payload +
 // offline queue via diseaseReportsService.create().
 // =====================================================
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -22,9 +22,11 @@ import { useNetInfo } from '@react-native-community/netinfo';
 import { useTranslation } from 'react-i18next';
 import { useTheme, getSeverityColor, spacing, radii, Theme } from '../../lib/ThemeContext';
 import { diseaseReportsService } from '../../lib/services/diseaseReports';
+import { useFormDraft, FormExitHandle } from '../../lib/useFormDraft';
+import { DiscardChangesSheet, RestoreDraftSheet, DraftStorageNotice } from '../../lib/FormGuardSheets';
 import { SubmissionModal } from '../shared';
 import { LocationField } from '../../src/components/LocationField';
-import { DiseaseReport, DiseaseType, Severity, TreatmentStatus } from '../../types';
+import { DiseaseReport, DiseaseType, Profile, Severity, TreatmentStatus } from '../../types';
 
 interface DiseaseReportFormProps {
   onSuccess: () => void;
@@ -35,6 +37,10 @@ interface DiseaseReportFormProps {
    * mutated.
    */
   refillReportId?: string;
+  /** Scopes the autosaved draft to this worker — a shared handset must not leak drafts. */
+  profile?: Profile;
+  /** BRK-14 — MainApp routes the Android hardware back press through here. */
+  exitRef?: React.Ref<FormExitHandle>;
 }
 
 // ── Vocabulary ───────────────────────────────────────────────────────────────
@@ -221,6 +227,8 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   onSuccess,
   onCancel,
   refillReportId,
+  profile,
+  exitRef,
 }) => {
   const { colors, reduceMotion } = useTheme();
   const { t } = useTranslation();
@@ -274,6 +282,102 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
   const [refillError, setRefillError] = useState<string | null>(null);
   const [refillInfo, setRefillInfo] = useState<{ shortId: string; reason: string | null } | null>(null);
 
+  // ── NEW-01 / BRK-14 — draft autosave + dirty guard ─────────────────────────
+  // The wizard holds its state as a dozen useState hooks; the hook wants one
+  // plain snapshot, so it gets one. The refile context carries its OWN draft
+  // key: a draft saved while refiling report X belongs to report X and can
+  // never be offered on top of a different refile prefill, or on a fresh form.
+  // One idempotency key per filling-in, carried INSIDE the draft snapshot.
+  //
+  // This is what stops a restored draft filing the report twice. On one bar of
+  // signal the insert can commit server-side while the response is lost: the
+  // form sees a failure and keeps the draft, she restores it and sends again.
+  // With a key that is stable across that whole sequence, the second send
+  // collides with the row already inserted and ignoreDuplicates makes it a
+  // no-op. A key minted at send time — which is what the service used to do
+  // unconditionally — can never collide, so the upsert deduplicated nothing.
+  //
+  // It lives in draftValues rather than a ref precisely so it survives the
+  // save/restore round trip; a ref would be regenerated on remount, which is
+  // exactly when the duplicate happens. A new blank form gets a new key, so
+  // two genuinely different reports never collide with each other.
+  const [submitKey, setSubmitKey] = useState(
+    () => `dr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+  );
+
+  const draftValues = {
+    step,
+    disease,
+    customDisease,
+    casesCount,
+    deathsCount,
+    severity,
+    selectedSymptoms,
+    otherSymptoms,
+    notes,
+    location,
+    submitKey,
+  };
+
+  const draft = useFormDraft({
+    formKey: refillReportId ? `disease-report:refile:${refillReportId}` : 'disease-report',
+    userId: profile?.id,
+    values: draftValues,
+    // Nothing to autosave once it is saved, and nothing worth comparing while
+    // the refile prefill is still landing.
+    enabled: !savedResult && !refillLoading,
+  });
+
+  const [confirmExit, setConfirmExit] = useState(false);
+
+  const applyDraft = () => {
+    const values = draft.restore();
+    if (!values) return;
+    // Restore field by field, and NEVER trust a field to be present.
+    //
+    // A draft is written by whichever build was installed at the time. If a
+    // later build adds a field to draftValues above, every draft already on
+    // the phone lacks it — and DRAFT_VERSION is a hand-maintained constant
+    // that nobody remembers to bump. Assigning straight from the draft turned
+    // a missing number into NaN (Math.max(1, undefined)), which reached the
+    // submit payload as cases_count and serialised to null, and turned a
+    // missing string into undefined, which flips a controlled TextInput to
+    // uncontrolled mid-session.
+    //
+    // The other three forms merge over live state ({...prev, ...values}); this
+    // one is a wizard with a dozen separate hooks, so each is guarded here
+    // instead. Falling back to what is already on screen means a draft from an
+    // older build restores what it knows and leaves the rest alone.
+    const str = (v: unknown, fallback: string): string =>
+      typeof v === 'string' ? v : fallback;
+    const num = (v: unknown, fallback: number, min: number): number =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.max(min, v) : fallback;
+
+    // Restoring the ORIGINAL key is the whole point: a resend after a lost
+    // response must collide with the row that may already have committed.
+    if (typeof values.submitKey === 'string' && values.submitKey) {
+      setSubmitKey(values.submitKey);
+    }
+    setStep(values.step === 2 ? 2 : 1);
+    setDisease((prev) => str(values.disease, prev));
+    setCustomDisease((prev) => str(values.customDisease, prev));
+    setCasesCount((prev) => num(values.casesCount, prev, 1));
+    setDeathsCount((prev) => num(values.deathsCount, prev, 0));
+    if (SEVERITY_LEVELS.some((level) => level.value === values.severity)) {
+      setSeverity(values.severity);
+    }
+    if (Array.isArray(values.selectedSymptoms)) {
+      setSelectedSymptoms(values.selectedSymptoms.filter((s: unknown) => typeof s === 'string'));
+    }
+    setOtherSymptoms((prev) => str(values.otherSymptoms, prev));
+    setNotes((prev) => str(values.notes, prev));
+    if (values.location && typeof values.location === 'object') {
+      setLocation((prev) => ({ ...prev, ...values.location }));
+    }
+    setErrors({});
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
+
   const loadRefill = async () => {
     if (!refillReportId) return;
     setRefillLoading(true);
@@ -282,6 +386,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     if (res.error || !res.data) {
       setRefillError("Couldn't load the earlier report — you can still file a fresh one.");
       setRefillLoading(false);
+      // Nothing was prefilled, but the guard must arm against the form as it
+      // now stands rather than against a stale first-render snapshot.
+      draft.markPristine();
       return;
     }
     const r = res.data as DiseaseReport & { rejection_reason?: string | null };
@@ -334,6 +441,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
           : null,
     });
     setRefillLoading(false);
+    // The prefill is the machine typing, not her — it must not read as unsaved
+    // work, and it becomes the baseline any real edit is measured against.
+    draft.markPristine();
   };
 
   useEffect(() => {
@@ -471,15 +581,74 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
 
-  const handleBack = () => {
-    if (step === 2) {
-      setStep(1);
-      setErrors({});
-      scrollRef.current?.scrollTo({ y: 0, animated: false });
-    } else {
-      onCancel();
-    }
+  const stepBackToOne = () => {
+    setStep(1);
+    setErrors({});
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
+
+  /** Cancel means "leave", from any step — so it always faces the dirty guard. */
+  const handleCancelPress = () => {
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  const discardAndLeave = () => {
+    setConfirmExit(false);
+    draft.clear();
+    onCancel();
+  };
+
+  // BRK-14 — "back" in this app's own terms, used by the header Back button
+  // AND by MainApp's hardware-back listener.
+  //
+  // The two are the same code path for every NON-modal state, which is the
+  // claim that matters. They are not identical while a Modal is up, and the
+  // review was right to narrow it: on Android a visible Modal's Dialog answers
+  // the back press through its own onRequestClose before any BackHandler
+  // listener runs, and the header chevron is behind that Modal. So the
+  // errorModalVisible and confirmExit rungs below are unreachable from the
+  // hardware key — the discard sheet answers back itself (onRequestClose ->
+  // onKeepEditing) and the error modal answers its own. They stay as the
+  // correct answer for any caller that is NOT a Modal (react-native-web
+  // renders Modal inline), not because a back press reaches them today.
+  //
+  // The rungs that ARE live: the saved-confirmation state and the restore
+  // sheet, which routes its onRequestClose here on purpose.
+  const requestClose = () => {
+    if (savedResult) {
+      // Already saved; back from the confirmation is simply "done".
+      onSuccess();
+      return;
+    }
+    if (errorModalVisible) {
+      setErrorModalVisible(false);
+      return;
+    }
+    if (confirmExit) {
+      setConfirmExit(false);
+      return;
+    }
+    if (draft.offered) {
+      // The draft stays on the phone — leaving is not deciding.
+      onCancel();
+      return;
+    }
+    if (step === 2) {
+      stepBackToOne();
+      return;
+    }
+    if (draft.dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    onCancel();
+  };
+
+  useImperativeHandle(exitRef, () => ({ requestClose }));
 
   // ── Submit — exact existing payload + offline queue path ───────────────────
 
@@ -520,9 +689,14 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         state: location.state,
         treatment_status: 'pending' as TreatmentStatus,
         notes: notes.trim() || undefined,
+        // Stable across retries and across a draft restore — see submitKey.
+        client_idempotency_key: submitKey,
       });
 
       if (error) throw new Error(String(error));
+
+      // Saved (or queued to sync) — the draft has done its job.
+      draft.clear();
 
       setSavedResult({
         queued: !!queued,
@@ -562,6 +736,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     setSelectedSymptoms([]);
     setOtherSymptoms('');
     setNotes('');
+    // A blank second report is not unsaved work — re-arm so leaving it
+    // untouched stays silent and nothing empty gets autosaved as a draft.
+    draft.markPristine();
   };
 
   const getInputStyle = (fieldName: string) => [
@@ -739,7 +916,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         ]}
       >
         <Pressable
-          onPress={handleBack}
+          onPress={requestClose}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel={step === 2 ? 'Back to step 1' : 'Go back'}
@@ -965,6 +1142,31 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                   formattedAddress: '',
                 }}
                 onChange={(loc) => {
+                  // A location block that has only ever held machine-written
+                  // values is not her work: re-arm the pristine mark so Back
+                  // still closes silently.
+                  //
+                  // This used to test "was the location EMPTY before?", so only
+                  // the very first fix counted as the machine typing. Tapping
+                  // LocationField's "Re-fetch" on an already-located, otherwise
+                  // untouched form flipped `dirty` on a coordinate that moved
+                  // three metres, and Back then raised "Leave without saving?"
+                  // over a report she had not written a word of — the
+                  // tap-through-the-dialog training the guard exists to avoid.
+                  //
+                  // Telling the machine from her, exactly rather than by
+                  // guesswork: LocationField spreads the current `value` for
+                  // every hand edit (typing a village, typing a district,
+                  // picking a registry suggestion, Skip GPS), and this form
+                  // always passes formattedAddress: '' in that value — so a
+                  // NON-EMPTY formattedAddress can only have come from
+                  // LocationField's own GPS/geocode sync. Changed coordinates
+                  // cover the second machine path, a fix whose reverse-geocode
+                  // failed. Nothing she types satisfies either test.
+                  const machineFilled =
+                    !!loc.formattedAddress ||
+                    loc.latitude !== location.latitude ||
+                    loc.longitude !== location.longitude;
                   setLocation({
                     latitude: loc.latitude,
                     longitude: loc.longitude,
@@ -972,6 +1174,9 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
                     district: loc.district,
                     state: loc.state,
                   });
+                  if (machineFilled && !draft.dirty) {
+                    draft.markPristine();
+                  }
                   if (loc.locationName && loc.district && loc.state) clearError('location');
                 }}
                 autoFetch={!refillReportId}
@@ -1031,6 +1236,10 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         </View>
       )}
 
+      {/* NEW-01 — persistence that is NOT working says so. A silent read
+          failure looks exactly like "you have no unfinished report". */}
+      <DraftStorageNotice issue={draft.storageIssue} onRetry={draft.retryStorage} />
+
       {/* One-Hand Action Bar */}
       <View style={[styles.actionZone, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
         {step === 2 && (
@@ -1040,7 +1249,7 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         )}
         <View style={styles.actionRow}>
           <Pressable
-            onPress={onCancel}
+            onPress={handleCancelPress}
             accessibilityRole="button"
             style={({ pressed }) => [
               styles.cancelLink,
@@ -1076,6 +1285,22 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
         message={errorMessage}
         onClose={() => setErrorModalVisible(false)}
         onRetry={handleSubmit}
+      />
+
+      {/* NEW-01 — an unfinished report found on this phone, offered not applied */}
+      <RestoreDraftSheet
+        visible={!!draft.offered}
+        savedAt={draft.offeredAt}
+        onRestore={applyDraft}
+        onStartFresh={draft.dismiss}
+        onRequestClose={requestClose}
+      />
+
+      {/* BRK-14 — the guard between Back and a lost report */}
+      <DiscardChangesSheet
+        visible={confirmExit}
+        onKeepEditing={() => setConfirmExit(false)}
+        onDiscard={discardAndLeave}
       />
     </View>
   );

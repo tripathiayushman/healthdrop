@@ -32,6 +32,7 @@ import { ROLE_ACCENT } from '../dashboards/DashboardShared';
 import { clearExpoPushToken } from '../../lib/services/users';
 import { computeCompleteness } from '../../lib/services/profileCompleteness';
 import { setAppLanguage } from '../../lib/i18n';
+import { purgeAllFormDrafts } from '../../lib/useFormDraft';
 
 interface ProfileScreenProps {
   profile: Profile;
@@ -173,6 +174,15 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const canOpenOsSettings =
     Platform.OS !== 'web' && typeof Linking.openSettings === 'function';
 
+  // Whether this build can receive a push AT ALL on this platform — a different
+  // question from whether we can open the OS settings screen, and the one the
+  // copy below depends on. App.tsx's registerPushToken returns immediately when
+  // Platform.OS === 'web', so a browser session never registers a token and no
+  // push can ever be delivered to it. (Expo Go is also excluded there, but it
+  // is a development shell rather than something a field worker runs, so it is
+  // not worth a third branch of user-facing copy.)
+  const canReceivePush = Platform.OS !== 'web';
+
   // A real failure to open the OS screen. Announced as well as drawn: on the
   // failing path the inline text is the only outcome of the press, so a screen
   // reader must hear it without hunting for newly inserted text.
@@ -251,8 +261,22 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   //   • push_on_report_approved → p_target_user_id := NEW.reporter_id — any role
   //     can get this one, for a report they filed themselves.
   // If the fan-out changes, this caption changes with it or it starts lying.
+  // ...but ALL of that describes a device that has a push token, and this build
+  // never gets one in a browser. App.tsx:350 returns from registerPushToken
+  // before doing anything when Platform.OS === 'web'; there is no service
+  // worker, no VAPID key (app.json has no expo.notification block at all), and
+  // expo-notifications' own web path throws ERR_NOTIFICATIONS_PUSH_WEB_MISSING_
+  // CONFIG without both. So on web the honest sentence is not "your browser
+  // decides whether these arrive" — the browser is never asked, and nothing
+  // will ever arrive. Saying otherwise on the notifications row is precisely
+  // the class of lie this item exists to remove.
   const districtKnown = !completeness.missing.includes('district');
-  const notificationReach = NATIONAL_PUSH_ROLES.has(profile.role)
+  const notificationReach = !canReceivePush
+    ? t('notifications.reachNoChannel', {
+        defaultValue:
+          'Health Drop does not send notifications to this browser. Open the app on your phone to get alerts.',
+      })
+    : NATIONAL_PUSH_ROLES.has(profile.role)
     ? t('notifications.reachNational', {
         defaultValue:
           'You get a push for every health alert, in every district, and when a report you filed is approved.',
@@ -378,6 +402,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       } catch (cacheError) {
         console.warn('Failed to clear cached profile after account deletion:', cacheError);
       }
+      // Deleting the account must not leave the account's half-written reports
+      // on the phone. A saved draft holds case counts, GPS coordinates, a
+      // village name and free-text notes about named people — exactly the
+      // content someone is asking us to erase when they delete their account.
+      await purgeAllFormDrafts();
       try {
         await supabase.auth.signOut();
       } catch (signOutError) {
@@ -628,6 +657,13 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     switchValue?: boolean;
     /** Small honest-state line under the label */
     caption?: string;
+    /**
+     * Set when the caption is the row's CONTENT rather than a hint, which
+     * steps it up from the meta colour tier to the secondary one. A 12px
+     * line at the meta tier reads fine as a nudge and too weakly as the
+     * only answer the row gives.
+     */
+    captionCarriesMeaning?: boolean;
     /** Current value shown before the chevron (e.g. selected language) */
     valueLabel?: string;
     /** Overrides the spoken label — used where the caption IS the content */
@@ -693,13 +729,14 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
           })
         : t('notifications.browserControls', {
             defaultValue:
-              "On the web your browser decides whether these arrive. Change it in the browser's own site settings for this page — Health Drop cannot open that for you.",
+              'This is the browser version. Notifications are a phone feature — no browser setting will turn them on here.',
           }),
       items: [
         {
           iconName: 'notifications-outline',
           label: notificationLabel,
           caption: notificationReach,
+          captionCarriesMeaning: true,
           // The caption IS the content of this row, so it must be spoken.
           a11yLabel: `${notificationLabel}. ${notificationReach}`,
           action: canOpenOsSettings ? handleOpenNotificationSettings : undefined,
@@ -891,7 +928,19 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     <View style={styles.menuTextWrap}>
                       <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
                       {item.caption ? (
-                        <Text style={[styles.menuCaption, { color: colors.textTertiary }]}>
+                        // captionCarriesMeaning: for most rows the caption is a
+                        // hint and the tertiary/meta tier is right. On the
+                        // notifications row it IS the content — it is the only
+                        // place that says what you will and will not receive,
+                        // and it is what the row's accessibilityLabel reads out.
+                        // A 12px sentence at 5.61:1 is fine as a hint and too
+                        // weak as the answer, so that row steps up a tier.
+                        <Text
+                          style={[
+                            styles.menuCaption,
+                            { color: item.captionCarriesMeaning ? colors.textSecondary : colors.textTertiary },
+                          ]}
+                        >
                           {item.caption}
                         </Text>
                       ) : null}

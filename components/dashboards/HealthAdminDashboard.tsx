@@ -44,7 +44,13 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }),
         supabase.from('health_campaigns').select('id', { count: 'exact', head: true }),
-        supabase.from('health_alerts').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+        // BRK-23(ii) — "Active Alerts" must mean what it says. `status='active'`
+        // alone also counts alerts NOBODY HAS APPROVED: a rolled-back probe
+        // inserting one pending alert moved this tile 4 → 5 while the list
+        // directly beneath it (and every field consumer) still showed 4.
+        // An unapproved alert is a draft, not an active advisory.
+        supabase.from('health_alerts').select('id', { count: 'exact', head: true })
+          .eq('status', 'active').eq('approval_status', 'approved'),
         supabase.from('disease_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         supabase.from('water_quality_reports').select('id', { count: 'exact', head: true }).eq('approval_status', 'pending_approval'),
         unverifiedCount(),

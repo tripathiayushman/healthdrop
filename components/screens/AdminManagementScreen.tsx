@@ -7,7 +7,7 @@
 // Delete semantics for users: soft-delete only
 // (is_active=false), surfaced as "Deactivate".
 // =====================================================
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -26,7 +26,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { format } from 'date-fns';
 import {
-  ROLE_ACCENT, SkeletonBlock, ErrorCard, EmptyState,
+  ROLE_ACCENT, SkeletonBlock, ErrorCard, EmptyState, InfoBanner,
   getSeverityColor, getWaterQualityColor,
 } from '../dashboards/DashboardShared';
 
@@ -105,12 +105,136 @@ interface Campaign {
   organizer_id?: string;
 }
 
+// ── Audit trail (INC-12) ──────────────────────────────
+// Shapes mirror the RETURNS TABLE of the three reader RPCs verbatim.
+// We call the RPCs, never audit_logs directly: the permission checks
+// (is_admin() / self-only) live inside the functions.
+interface ApprovalAuditRow {
+  id: string;
+  user_id: string | null;
+  user_email: string | null;
+  record_id: string | null;
+  old_approval_status: string | null;
+  new_approval_status: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+  /** added client-side — the RPC is called once per table */
+  source_table: string;
+}
+
+interface DeletedAuditRow {
+  id: string;
+  user_id: string | null;
+  user_email: string | null;
+  table_name: string;
+  record_id: string | null;
+  deleted_record: Record<string, any> | null;
+  created_at: string;
+}
+
+/** get_audit_trail(p_table_name, p_record_id) — one record's whole life */
+interface RecordAuditRow {
+  id: string;
+  user_id: string | null;
+  user_email: string | null;
+  action_type: string;
+  changed_fields: string[] | null;
+  old_value: Record<string, any> | null;
+  new_value: Record<string, any> | null;
+  created_at: string;
+}
+
+/** get_user_audit_log(p_user_id, p_days_back) — one person's actions */
+interface UserAuditRow {
+  id: string;
+  action_type: string;
+  table_name: string;
+  record_id: string | null;
+  changed_fields: string[] | null;
+  created_at: string;
+}
+
 interface AdminManagementScreenProps {
   profile: Profile;
   onBack: () => void;
 }
 
-type TabType = 'users' | 'disease' | 'water' | 'campaigns' | 'analytics';
+type TabType = 'users' | 'disease' | 'water' | 'campaigns' | 'analytics' | 'audit';
+
+type AuditView = 'approvals' | 'deletions';
+
+/**
+ * The approval-bearing tables the approvals view fans out over.
+ *
+ * Audit coverage as verified against pg_trigger on 3 Aug 2026
+ *   select c.relname, pg_get_triggerdef(t.oid) from pg_trigger t
+ *   join pg_class c on c.oid = t.tgrelid join pg_proc p on p.oid = t.tgfoid
+ *   where not t.tgisinternal and p.proname = 'audit_log_changes';
+ * audit_log_changes() is attached to:
+ *   disease_reports, water_quality_reports, health_campaigns, health_alerts
+ *     — AFTER INSERT OR UPDATE OR DELETE, every column;
+ *   profiles — AFTER INSERT, and AFTER UPDATE OF role, role_verified,
+ *     is_active only. No DELETE trigger.
+ * health_alerts gained its trigger after this screen was first written, so it
+ * is IN the fan-out now: an alert reaching the public is the one approval this
+ * project most needs a record of. profiles stays out of the approvals view —
+ * it has no approval_status — and the banner names its partial coverage rather
+ * than letting a short list read as an unblemished record.
+ * COVERAGE CHANGES: re-run the query above and update the banner copy with it.
+ */
+const AUDITED_TABLES: string[] = [
+  'disease_reports',
+  'water_quality_reports',
+  'health_campaigns',
+  'health_alerts',
+];
+
+const AUDIT_WINDOWS: { days: number; label: string }[] = [
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 365, label: '1 year' },
+];
+
+const TABLE_LABEL: Record<string, string> = {
+  disease_reports: 'Disease report',
+  water_quality_reports: 'Water report',
+  health_campaigns: 'Campaign',
+  health_alerts: 'Health alert',
+  profiles: 'User profile',
+};
+
+/** audit_logs.user_id is NULL when the write came from a trigger, the cron
+ *  or the service role. Say that, never render a blank name. */
+const ACTOR_UNKNOWN = 'Unattributed — system or service role';
+const actorOf = (email: string | null | undefined) => email || ACTOR_UNKNOWN;
+
+const shortId = (id: string | null | undefined) => (id ? `#${id.slice(0, 8)}` : 'unknown record');
+
+const auditWhen = (iso: string) => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? 'Unknown time' : format(d, 'd MMM yyyy HH:mm');
+};
+
+/** Best-effort human name for a deleted row, without inventing one. */
+const deletedRecordLabel = (row: DeletedAuditRow): string => {
+  const r = row.deleted_record;
+  const name =
+    r?.disease_name || r?.source_name || r?.campaign_name || r?.title || r?.name || r?.full_name;
+  return typeof name === 'string' && name.trim().length > 0
+    ? name
+    : `${TABLE_LABEL[row.table_name] ?? row.table_name} ${shortId(row.record_id)}`;
+};
+
+const approvalStatusLabel = (s: string | null | undefined) => {
+  switch (s) {
+    case 'approved': return 'Approved';
+    case 'rejected': return 'Rejected';
+    case 'pending_approval': return 'Pending approval';
+    case null:
+    case undefined: return 'Not set';
+    default: return s;
+  }
+};
 
 interface ConfirmAction {
   title: string;
@@ -144,10 +268,100 @@ const severityKey = (s: string): string => {
   }
 };
 
+const ACTION_LABEL: Record<string, string> = {
+  INSERT: 'Created',
+  UPDATE: 'Updated',
+  DELETE: 'Deleted',
+};
+
+/**
+ * One line of an audit list: what happened, who did it, an optional detail,
+ * and when. Declared at module scope on purpose — as a nested component it
+ * was a NEW component type on every parent render, so React unmounted and
+ * remounted the whole trail (and its skeleton animations) each time.
+ */
+const AuditEntry: React.FC<{
+  icon: keyof typeof Ionicons.glyphMap;
+  fg: string;
+  bg: string;
+  title: string;
+  who: string;
+  detail?: string | null;
+  when: string;
+}> = ({ icon, fg, bg, title, who, detail, when }) => {
+  const { colors } = useTheme();
+  return (
+    <View
+      style={[styles.auditRow, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }]}
+      accessible
+      accessibilityLabel={`${title}. ${who}.${detail ? ` ${detail}.` : ''} ${when}`}
+    >
+      <View style={[styles.auditIcon, { backgroundColor: bg }]}>
+        <Ionicons name={icon} size={18} color={fg} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.rowTitle, { color: colors.text }]} numberOfLines={2}>{title}</Text>
+        <Text style={[styles.rowSub, { color: colors.textSecondary }]} numberOfLines={2}>{who}</Text>
+        {detail ? (
+          <Text style={[styles.rowSub, { color: colors.textSecondary }]} numberOfLines={3}>{detail}</Text>
+        ) : null}
+        <Text style={[styles.rowMeta, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>{when}</Text>
+      </View>
+    </View>
+  );
+};
+
+/** Small segmented control — selected = primaryContainer + teal ring.
+ *  Ink on primaryContainer measures 16.61:1 light / 11.83:1 dark. */
+const AuditSegment: React.FC<{
+  options: { key: string; label: string }[];
+  value: string;
+  onChange: (key: string) => void;
+  label: string;
+}> = ({ options, value, onChange, label }) => {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.auditSegRow} accessibilityLabel={label}>
+      {options.map((opt) => {
+        const active = opt.key === value;
+        return (
+          <TouchableOpacity
+            key={opt.key}
+            style={[
+              styles.auditSegBtn,
+              active
+                ? { backgroundColor: colors.primaryContainer, borderColor: colors.primary }
+                : { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+            onPress={() => onChange(opt.key)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={`${label}: ${opt.label}`}
+          >
+            {active && <Ionicons name="checkmark" size={14} color={colors.primary} />}
+            <Text
+              style={[styles.auditSegText, { color: colors.text }]}
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.3}
+            >
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+};
+
 const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, onBack }) => {
   const { colors, isDark, reduceMotion } = useTheme();
   const accent = ROLE_ACCENT[profile.role] ?? colors.primary;
   const isClinic = profile.role === 'clinic';
+  // Mirrors the DB's is_admin(): super_admin | health_admin AND is_active.
+  // get_audit_trail / get_user_audit_log / get_deleted_records RAISE for
+  // anyone else, so the surface is hidden rather than shown-then-failing.
+  const canAudit =
+    (profile.role === 'super_admin' || profile.role === 'health_admin') && profile.is_active !== false;
   const [activeTab, setActiveTab] = useState<TabType>(isClinic ? 'disease' : 'users');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -189,7 +403,45 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     pendingApprovals: 0,
   });
 
+  // ── Audit trail state (INC-12) ──────────────────────
+  // Three independent data regions, each with its own four states, because
+  // each is a separate RPC that can fail on its own. `null` rows means
+  // "not loaded / cleared after a failure" — it is never rendered as zero.
+  const [auditView, setAuditView] = useState<AuditView>('approvals');
+  const [auditDays, setAuditDays] = useState<number>(365);
+  const [approvalRows, setApprovalRows] = useState<ApprovalAuditRow[] | null>(null);
+  const [deletedRows, setDeletedRows] = useState<DeletedAuditRow[] | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  /**
+   * Which (view, window) the rows — or the error — currently on screen were
+   * actually fetched for. In an audit surface the window IS the claim, so no
+   * copy is ever labelled from the segmented control: only from what came
+   * back. If this does not match the current selection, the answer on screen
+   * belongs to a different question and the skeleton is shown instead.
+   */
+  const [auditMeta, setAuditMeta] = useState<{ view: AuditView; days: number } | null>(null);
+  /** Monotonic request token: on a flaky link the LAST response must not win,
+   *  the LATEST REQUEST must. Anything older is dropped, not rendered. */
+  const auditReqRef = useRef(0);
+
+  const [trailRows, setTrailRows] = useState<RecordAuditRow[] | null>(null);
+  const [trailLoading, setTrailLoading] = useState(false);
+  const [trailError, setTrailError] = useState<string | null>(null);
+  /** table:record_id the in-flight trail request belongs to. */
+  const trailKeyRef = useRef('');
+
+  const [userActivity, setUserActivity] = useState<UserAuditRow[] | null>(null);
+  const [userActivityLoading, setUserActivityLoading] = useState(false);
+  const [userActivityError, setUserActivityError] = useState<string | null>(null);
+  /** user id the in-flight activity request belongs to. */
+  const userActivityKeyRef = useRef('');
+
   useEffect(() => {
+    // The audit tab reads only through the RPCs below. loadData() would fetch
+    // four whole tables it never renders, on the low-bandwidth link this
+    // project is built for.
+    if (activeTab === 'audit') return;
     loadData();
   }, [activeTab]);
 
@@ -283,9 +535,167 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     setCampaigns(data || []);
   };
 
+  // ==================== AUDIT TRAIL LOADERS (INC-12) ====================
+  // Every one of these goes through an RPC, never `from('audit_logs')`:
+  // the RPCs carry the permission checks and audit_logs itself is not a
+  // surface we want the client picking columns from.
+  //
+  // The rule these obey, and the reason they are written this way: a call
+  // that FAILED and a trail that is genuinely EMPTY must not produce the
+  // same screen. So there is no `?? []` standing in for an error, no
+  // `catch { return [] }`, and a partial failure of the fan-out below is
+  // treated as a failure of the whole region — a short list presented as
+  // complete would be worse than an error card.
+
+  const asRows = <T,>(data: unknown, what: string): T[] => {
+    if (!Array.isArray(data)) throw new Error(`${what} returned an unexpected shape.`);
+    return data as T[];
+  };
+
+  const loadAudit = async () => {
+    // Pin the question this request is asking. Everything below answers THIS
+    // view and THIS window — never whatever the control happens to read when
+    // the response lands.
+    const token = ++auditReqRef.current;
+    const view = auditView;
+    const days = auditDays;
+    const isCurrent = () => token === auditReqRef.current;
+
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      if (view === 'approvals') {
+        const results = await Promise.all(
+          AUDITED_TABLES.map((table) =>
+            supabase.rpc('get_approval_audit_log', { p_table_name: table, p_days_back: days })
+          )
+        );
+        const failed = results.find((r) => r.error);
+        if (failed?.error) throw failed.error;
+
+        const merged = results.flatMap((r, i) =>
+          asRows<Omit<ApprovalAuditRow, 'source_table'>>(r.data, 'get_approval_audit_log').map(
+            (row) => ({ ...row, source_table: AUDITED_TABLES[i] })
+          )
+        );
+        merged.sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        if (!isCurrent()) return;
+        setApprovalRows(merged);
+      } else {
+        const { data, error } = await supabase.rpc('get_deleted_records', {
+          p_table_name: null,
+          p_days_back: days,
+        });
+        if (error) throw error;
+        const rows = asRows<DeletedAuditRow>(data, 'get_deleted_records');
+        if (!isCurrent()) return;
+        setDeletedRows(rows);
+      }
+      if (isCurrent()) setAuditMeta({ view, days });
+    } catch (error: any) {
+      // A superseded request must not paint an error over a newer answer.
+      if (!isCurrent()) return;
+      // Drop whatever was on screen — stale rows under an error card read as
+      // "this is the trail", and half a trail is a lie in an audit context.
+      setApprovalRows(null);
+      setDeletedRows(null);
+      setAuditError(error?.message || "Couldn't load the audit trail — check connection.");
+      setAuditMeta({ view, days });
+    } finally {
+      if (isCurrent()) setAuditLoading(false);
+    }
+  };
+
+  const loadRecordTrail = async (table: string, recordId: string) => {
+    // A slow answer for the record you just closed must never land under the
+    // record you just opened.
+    const key = `${table}:${recordId}`;
+    trailKeyRef.current = key;
+    setTrailLoading(true);
+    setTrailError(null);
+    try {
+      const { data, error } = await supabase.rpc('get_audit_trail', {
+        p_table_name: table,
+        p_record_id: recordId,
+      });
+      if (error) throw error;
+      const rows = asRows<RecordAuditRow>(data, 'get_audit_trail');
+      if (trailKeyRef.current !== key) return;
+      setTrailRows(rows);
+    } catch (error: any) {
+      if (trailKeyRef.current !== key) return;
+      setTrailRows(null);
+      setTrailError(error?.message || "Couldn't load this record's history.");
+    } finally {
+      if (trailKeyRef.current === key) setTrailLoading(false);
+    }
+  };
+
+  const loadUserActivity = async (userId: string) => {
+    userActivityKeyRef.current = userId;
+    setUserActivityLoading(true);
+    setUserActivityError(null);
+    try {
+      const { data, error } = await supabase.rpc('get_user_audit_log', {
+        p_user_id: userId,
+        p_days_back: 365,
+      });
+      if (error) throw error;
+      const rows = asRows<UserAuditRow>(data, 'get_user_audit_log');
+      if (userActivityKeyRef.current !== userId) return;
+      setUserActivity(rows);
+    } catch (error: any) {
+      if (userActivityKeyRef.current !== userId) return;
+      setUserActivity(null);
+      setUserActivityError(error?.message || "Couldn't load this user's activity.");
+    } finally {
+      if (userActivityKeyRef.current === userId) setUserActivityLoading(false);
+    }
+  };
+
+  /**
+   * Open handlers, not bare setState: the previous record's history has to be
+   * cleared in the SAME event that selects the new one. The effects below run
+   * after the commit that mounts the sheet, so without this one frame of
+   * report A's RECORD HISTORY paints under report B's header.
+   */
+  const openReport = (item: DiseaseReport | WaterReport, type: 'disease' | 'water') => {
+    setTrailRows(null);
+    setTrailError(null);
+    setSelectedReport(item);
+    setReportType(type);
+    setShowReportModal(true);
+  };
+
+  const openUser = (item: User) => {
+    setUserActivity(null);
+    setUserActivityError(null);
+    setSelectedUser(item);
+    setShowUserModal(true);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'audit' && canAudit) loadAudit();
+  }, [activeTab, auditView, auditDays]);
+
+  useEffect(() => {
+    if (!showReportModal || !selectedReport || !canAudit) return;
+    loadRecordTrail(
+      reportType === 'disease' ? 'disease_reports' : 'water_quality_reports',
+      selectedReport.id
+    );
+  }, [showReportModal, selectedReport?.id, reportType]);
+
+  useEffect(() => {
+    if (!showUserModal || !selectedUser || !canAudit) return;
+    loadUserActivity(selectedUser.id);
+  }, [showUserModal, selectedUser?.id]);
+
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadData();
+    await (activeTab === 'audit' && canAudit ? loadAudit() : loadData());
     setRefreshing(false);
   };
 
@@ -608,11 +1018,13 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     { id: 'water', label: 'Water', icon: 'water-outline' },
     { id: 'campaigns', label: 'Campaigns', icon: 'megaphone-outline' },
     { id: 'analytics', label: 'Analytics', icon: 'stats-chart-outline' },
+    { id: 'audit', label: 'Audit', icon: 'receipt-outline' },
   ];
 
-  const tabs = isClinic
+  const tabs = (isClinic
     ? allTabs.filter(tab => ['disease', 'water'].includes(tab.id))
-    : allTabs;
+    : allTabs
+  ).filter(tab => tab.id !== 'audit' || canAudit);
 
   // ── Shared pill — dot + UPPERCASE label on *Bg token ──
   const Pill: React.FC<{ label: string; fg: string; bg: string }> = ({ label, fg, bg }) => (
@@ -629,10 +1041,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         styles.row,
         { backgroundColor: pressed ? colors.cardHover : colors.surface, borderBottomColor: colors.borderLight },
       ]}
-      onPress={() => {
-        setSelectedUser(item);
-        setShowUserModal(true);
-      }}
+      onPress={() => openUser(item)}
       accessibilityRole="button"
       accessibilityLabel={`${item.full_name || 'Unnamed user'}, role ${item.role}${item.is_active === false ? ', inactive' : ''}`}
     >
@@ -672,11 +1081,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         styles.row,
         { backgroundColor: pressed ? colors.cardHover : colors.surface, borderBottomColor: colors.borderLight },
       ]}
-      onPress={() => {
-        setSelectedReport(item);
-        setReportType('disease');
-        setShowReportModal(true);
-      }}
+      onPress={() => openReport(item, 'disease')}
       accessibilityRole="button"
       accessibilityLabel={`Disease report ${item.disease_name || 'unknown'}, severity ${item.severity || 'unknown'}, ${isVerified(item) ? 'verified' : 'pending verification'}`}
     >
@@ -712,11 +1117,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         styles.row,
         { backgroundColor: pressed ? colors.cardHover : colors.surface, borderBottomColor: colors.borderLight },
       ]}
-      onPress={() => {
-        setSelectedReport(item);
-        setReportType('water');
-        setShowReportModal(true);
-      }}
+      onPress={() => openReport(item, 'water')}
       accessibilityRole="button"
       accessibilityLabel={`Water report ${item.source_name || 'unknown source'}, quality ${item.overall_quality || 'unknown'}, ${isVerified(item) ? 'verified' : 'pending verification'}`}
     >
@@ -885,8 +1286,208 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     </ScrollView>
   );
 
+  // ==================== RENDER AUDIT TRAIL (INC-12) ====================
+  const actionVisual = (action: string): { icon: keyof typeof Ionicons.glyphMap; fg: string; bg: string } => {
+    switch (action) {
+      case 'INSERT': return { icon: 'add-circle-outline', fg: colors.info, bg: colors.infoBg };
+      case 'DELETE': return { icon: 'trash-outline', fg: colors.danger, bg: colors.dangerBg };
+      case 'UPDATE': return { icon: 'create-outline', fg: colors.primary, bg: colors.primaryLight };
+      default:       return { icon: 'ellipse-outline', fg: colors.textSecondary, bg: colors.surfaceVariant };
+    }
+  };
+
+  const approvalVisual = (status: string | null): { icon: keyof typeof Ionicons.glyphMap; fg: string; bg: string } => {
+    switch (status) {
+      case 'approved': return { icon: 'checkmark-circle-outline', fg: colors.success, bg: colors.successBg };
+      case 'rejected': return { icon: 'close-circle-outline', fg: colors.danger, bg: colors.dangerBg };
+      default:         return { icon: 'time-outline', fg: colors.warning, bg: colors.warningBg };
+    }
+  };
+
+  const auditSkeleton = (n: number) => (
+    <View style={styles.skeletonWrap} accessibilityElementsHidden>
+      {Array.from({ length: n }).map((_, i) => (
+        <SkeletonBlock key={i} height={76} radius={radii.sm} />
+      ))}
+    </View>
+  );
+
+  const renderAuditBody = () => {
+    // Nothing on screen may outlive the question it answered. If the rows (or
+    // the error) were fetched for another view or another window, they are not
+    // an answer to what is being asked now.
+    if (
+      auditLoading ||
+      auditMeta === null ||
+      auditMeta.view !== auditView ||
+      auditMeta.days !== auditDays
+    ) {
+      return auditSkeleton(4);
+    }
+
+    if (auditError) {
+      return (
+        <View style={styles.auditPad}>
+          <ErrorCard message={auditError} onRetry={loadAudit} />
+        </View>
+      );
+    }
+
+    // Labelled from what came back, never from the control.
+    const windowLabel =
+      AUDIT_WINDOWS.find((w) => w.days === auditMeta.days)?.label ?? `${auditMeta.days} days`;
+
+    if (auditView === 'approvals') {
+      // null = not loaded yet. It is NOT an empty trail and must not read as one.
+      if (approvalRows === null) return auditSkeleton(4);
+      if (approvalRows.length === 0) {
+        // Deliberately NOT a green tick. An empty approvals list is not good
+        // news and it is not proof of a quiet month. Two ordinary causes leave
+        // it empty while decisions were in fact made: an approval discarded by
+        // resolve_conflict writes no audit row at all, and a record approved at
+        // creation is never an approval TRANSITION (16 of the 28 approvals in
+        // the live year are of that second kind). This screen exists to stop
+        // silence reading as innocence, so the zero wears neutral ink and the
+        // copy declines to claim what it cannot know.
+        return (
+          <View style={styles.auditPad}>
+            <EmptyState
+              icon="document-outline"
+              color={colors.textSecondary}
+              title={`No approval or rejection recorded in the last ${windowLabel}.`}
+              subtitle="The trail loaded and returned nothing for this window. An empty list is not proof that nothing was decided — read it against what this trail does and does not record, above."
+            />
+          </View>
+        );
+      }
+      return (
+        <View>
+          {approvalRows.map((row) => {
+            const v = approvalVisual(row.new_approval_status);
+            // rejection_reason is new_value->>'rejection_reason' — the state of
+            // the COLUMN after this write, not the reason for THIS transition.
+            // Approving never clears that column, so an approve-after-reject
+            // still carries the old text and this line used to print
+            // "Reason: …" underneath an Approved entry (2 of the 12 rows in
+            // the live 1-year window do exactly that). A reason only ever
+            // explains a rejection, so it is only ever shown on one.
+            const reason =
+              row.new_approval_status === 'rejected' && row.rejection_reason
+                ? `Reason: ${row.rejection_reason}`
+                : null;
+            return (
+              <AuditEntry
+                key={row.id}
+                icon={v.icon}
+                fg={v.fg}
+                bg={v.bg}
+                title={`${TABLE_LABEL[row.source_table] ?? row.source_table} ${shortId(row.record_id)} — ${approvalStatusLabel(row.new_approval_status)}`}
+                who={`${approvalStatusLabel(row.old_approval_status)} → ${approvalStatusLabel(row.new_approval_status)} · by ${actorOf(row.user_email)}`}
+                detail={reason}
+                when={auditWhen(row.created_at)}
+              />
+            );
+          })}
+        </View>
+      );
+    }
+
+    if (deletedRows === null) return auditSkeleton(4);
+    if (deletedRows.length === 0) {
+      return (
+        <View style={styles.auditPad}>
+          {/* A deletion is the event; its absence is genuinely good news, so
+              this zero keeps the success tick the approvals zero cannot. */}
+          <EmptyState
+            icon="checkmark-circle-outline"
+            color={colors.success}
+            title={`Nothing was deleted in the last ${windowLabel}.`}
+            subtitle="The trail loaded and returned nothing for this window."
+          />
+        </View>
+      );
+    }
+    return (
+      <View>
+        {deletedRows.map((row) => (
+          <AuditEntry
+            key={row.id}
+            icon="trash-outline"
+            fg={colors.danger}
+            bg={colors.dangerBg}
+            title={deletedRecordLabel(row)}
+            who={`${TABLE_LABEL[row.table_name] ?? row.table_name} deleted by ${actorOf(row.user_email)}`}
+            detail={shortId(row.record_id)}
+            when={auditWhen(row.created_at)}
+          />
+        ))}
+      </View>
+    );
+  };
+
+  const renderAudit = () => (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.listContainer}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />
+      }
+    >
+      <View style={styles.auditControls}>
+        <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>SHOW</Text>
+        <AuditSegment
+          label="Audit view"
+          value={auditView}
+          onChange={(k) => setAuditView(k as AuditView)}
+          options={[
+            { key: 'approvals', label: 'Approvals' },
+            { key: 'deletions', label: 'Deletions' },
+          ]}
+        />
+        <Text style={[styles.sectionLabel, { color: colors.textSecondary, marginTop: spacing.md }]}>PERIOD</Text>
+        <AuditSegment
+          label="Time window"
+          value={String(auditDays)}
+          onChange={(k) => setAuditDays(Number(k))}
+          options={AUDIT_WINDOWS.map((w) => ({ key: String(w.days), label: w.label }))}
+        />
+      </View>
+
+      {/* Coverage is stated, not implied. An audit screen that quietly omits a
+          table teaches the reader that silence means innocence. Copy verified
+          against pg_trigger on 3 Aug 2026 — see AUDITED_TABLES above for the
+          query to re-run when coverage changes. */}
+      <View style={styles.auditPad}>
+        <InfoBanner
+          icon="information-circle-outline"
+          color={colors.warning}
+          text="Covered: disease reports, water reports, campaigns and health alerts — every insert, update and delete. Profiles are recorded only for role, verification and active-status changes; no other profile edit and no deleted profile is recorded. The approvals list holds changes to an approval, so a record approved the moment it was created never appears in it."
+        />
+      </View>
+
+      {renderAuditBody()}
+    </ScrollView>
+  );
+
   // ==================== RENDER TAB CONTENT ====================
   const renderTabContent = () => {
+    // Audit owns its own four states — it must not share the screen-wide
+    // `loading` / `loadError` that belong to the table tabs.
+    if (activeTab === 'audit') {
+      return canAudit ? (
+        renderAudit()
+      ) : (
+        <View style={styles.auditPad}>
+          <EmptyState
+            icon="lock-closed-outline"
+            color={colors.textSecondary}
+            title="The audit trail is restricted."
+            subtitle="Only a super administrator or health administrator can open it."
+          />
+        </View>
+      );
+    }
+
     if (loading) {
       return (
         <View style={styles.skeletonWrap} accessibilityElementsHidden>
@@ -1075,8 +1676,8 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         </ScrollView>
       </View>
 
-      {/* Search Bar */}
-      {activeTab !== 'analytics' && (
+      {/* Search Bar — analytics and audit are not text-filtered */}
+      {activeTab !== 'analytics' && activeTab !== 'audit' && (
         <View style={[styles.searchContainer, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
           <Ionicons name="search-outline" size={20} color={colors.textSecondary} />
           <TextInput
@@ -1206,6 +1807,75 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                       );
                     })}
                   </View>
+
+                  {/* ── Recent activity (INC-12, get_user_audit_log) ──
+                      What this person DID. audit_logs.user_id is the actor
+                      (auth.uid() at write time), so a role change made TO this
+                      account appears in the administrator's list, not here.
+                      The note below says that, and names what is still
+                      unrecorded, rather than letting a short list imply an
+                      unblemished record. */}
+                  {canAudit && (
+                    <>
+                      <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+                        ACTIVITY BY THIS USER · LAST 365 DAYS
+                      </Text>
+                      {userActivityLoading ? (
+                        <View style={styles.trailSkeleton} accessibilityElementsHidden>
+                          <SkeletonBlock height={64} radius={radii.sm} />
+                          <SkeletonBlock height={64} radius={radii.sm} />
+                        </View>
+                      ) : userActivityError ? (
+                        <ErrorCard
+                          message={userActivityError}
+                          onRetry={() => loadUserActivity(selectedUser.id)}
+                        />
+                      ) : userActivity === null ? (
+                        <View style={styles.trailSkeleton} accessibilityElementsHidden>
+                          <SkeletonBlock height={64} radius={radii.sm} />
+                        </View>
+                      ) : userActivity.length === 0 ? (
+                        <EmptyState
+                          icon="document-outline"
+                          color={colors.textSecondary}
+                          title="No recorded activity in the last year."
+                          subtitle="The log loaded and held nothing for this account."
+                        />
+                      ) : (
+                        <View style={[styles.trailCard, { borderColor: colors.border }]}>
+                          {userActivity.slice(0, 12).map((row) => {
+                            const v = actionVisual(row.action_type);
+                            return (
+                              <AuditEntry
+                                key={row.id}
+                                icon={v.icon}
+                                fg={v.fg}
+                                bg={v.bg}
+                                title={`${ACTION_LABEL[row.action_type] ?? row.action_type} · ${TABLE_LABEL[row.table_name] ?? row.table_name}`}
+                                who={
+                                  row.changed_fields && row.changed_fields.length > 0
+                                    ? `Changed: ${row.changed_fields.join(', ')}`
+                                    : shortId(row.record_id)
+                                }
+                                when={auditWhen(row.created_at)}
+                              />
+                            );
+                          })}
+                          {userActivity.length > 12 && (
+                            <Text style={[styles.trailMore, { color: colors.textSecondary }]}>
+                              Showing 12 of {userActivity.length} recorded actions.
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                      <Text style={[styles.trailNote, { color: colors.textSecondary }]}>
+                        What this person did, not what was done to them. Covers disease reports,
+                        water reports, campaigns, health alerts, and changes to a role,
+                        verification or active status. Ordinary profile edits are not recorded.
+                      </Text>
+                    </>
+                  )}
+
                   <View style={{ height: spacing.xl }} />
                 </ScrollView>
 
@@ -1314,6 +1984,64 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                       </View>
                     ))}
                   </View>
+
+                  {/* ── Record history (INC-12, get_audit_trail) ──
+                      Who touched this exact record, in order, oldest first —
+                      the RPC returns ASC and we keep that reading order. */}
+                  {canAudit && (
+                    <>
+                      <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>RECORD HISTORY</Text>
+                      {trailLoading ? (
+                        <View style={styles.trailSkeleton} accessibilityElementsHidden>
+                          <SkeletonBlock height={64} radius={radii.sm} />
+                          <SkeletonBlock height={64} radius={radii.sm} />
+                        </View>
+                      ) : trailError ? (
+                        <ErrorCard
+                          message={trailError}
+                          onRetry={() =>
+                            loadRecordTrail(
+                              reportType === 'disease' ? 'disease_reports' : 'water_quality_reports',
+                              selectedReport.id
+                            )
+                          }
+                        />
+                      ) : trailRows === null ? (
+                        <View style={styles.trailSkeleton} accessibilityElementsHidden>
+                          <SkeletonBlock height={64} radius={radii.sm} />
+                        </View>
+                      ) : trailRows.length === 0 ? (
+                        <EmptyState
+                          icon="document-outline"
+                          color={colors.textSecondary}
+                          title="No history recorded for this report."
+                          subtitle="The trail loaded and held nothing for this record."
+                        />
+                      ) : (
+                        <View style={[styles.trailCard, { borderColor: colors.border }]}>
+                          {trailRows.map((row) => {
+                            const v = actionVisual(row.action_type);
+                            return (
+                              <AuditEntry
+                                key={row.id}
+                                icon={v.icon}
+                                fg={v.fg}
+                                bg={v.bg}
+                                title={ACTION_LABEL[row.action_type] ?? row.action_type}
+                                who={`By ${actorOf(row.user_email)}`}
+                                detail={
+                                  row.changed_fields && row.changed_fields.length > 0
+                                    ? `Changed: ${row.changed_fields.join(', ')}`
+                                    : null
+                                }
+                                when={auditWhen(row.created_at)}
+                              />
+                            );
+                          })}
+                        </View>
+                      )}
+                    </>
+                  )}
 
                   {/* Secondary actions — verify / delete */}
                   {!isVerified(selectedReport) && (
@@ -1619,6 +2347,75 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
+  },
+  /* Audit trail (INC-12) */
+  auditControls: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
+  },
+  auditSegRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  auditSegBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill,
+    borderWidth: 1.5,
+  },
+  auditSegText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  auditPad: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
+  },
+  auditRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    minHeight: 64,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  auditIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trailSkeleton: {
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  trailCard: {
+    borderWidth: 1,
+    borderRadius: radii.md,
+    overflow: 'hidden',
+    marginBottom: spacing.md,
+  },
+  trailMore: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  trailNote: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    marginBottom: spacing.lg,
   },
   /* Analytics — ink numerals, tabular */
   analyticsContainer: {

@@ -13,7 +13,7 @@ import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import {
   DashboardHeader, Section, StatCard, QuickActionBtn,
-  InfoBanner, SectionDivider, ToolCard, SkeletonBlock, ErrorCard,
+  InfoBanner, SectionDivider, ToolCard, SkeletonBlock, ErrorCard, PaybackCard,
 } from './DashboardShared';
 import { AIInsightsPanel } from '../ai/AIInsightsPanel';
 import { MapAndAlertsSection } from '../shared/HealthMapComponent';
@@ -54,6 +54,10 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ myReports: 0, myPending: 0, myApproved: 0, campaigns: 0 });
   const [alerts, setAlerts] = useState<any[]>([]);
+  // NEW-02 — the payback card owns its own queries and its own four states,
+  // so a failure there can never be confused with a failure here. Pull-to-
+  // refresh reloads it by bumping this counter.
+  const [paybackTick, setPaybackTick] = useState(0);
   // null = storage not read yet — the card stays hidden until we know.
   const [firstRunDismissed, setFirstRunDismissed] = useState<boolean | null>(null);
 
@@ -116,7 +120,12 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
   };
 
   useEffect(() => { load(); }, []);
-  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setPaybackTick(n => n + 1);
+    await load();
+    setRefreshing(false);
+  };
   const retry = () => { setLoading(true); load(); };
 
   // Shown until dismissed, and auto-hidden once the user has ≥1 submission
@@ -224,6 +233,21 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
               emptySubtitle="No active health alerts in your district."
             />
           ) : null}
+          <SectionDivider />
+        </>
+      )}
+
+      {/* NEW-02 — the payback card. `overview_stats` ("Role-specific health
+          and activity summary cards") is the widget key: it is already
+          registered for asha_worker AND volunteer in widgetPreferences, it is
+          on by default, and neither field-worker dashboard rendered anything
+          for it — the four official dashboards do. Inventing a new key would
+          need an edit to lib/services/widgetPreferences.ts, and an unregistered
+          key is never visible: isWidgetVisible() checks role registration
+          first. */}
+      {isWidgetVisible('overview_stats') && (
+        <>
+          <PaybackCard profile={profile} onNavigate={onNavigate} refreshKey={paybackTick} />
           <SectionDivider />
         </>
       )}

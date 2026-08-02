@@ -114,28 +114,6 @@ const applyDistrictScope = <T extends { district?: string | null }>(rows: T[], p
   return rows.filter((row) => isAllowedDistrict(row.district, profile));
 };
 
-const mapEscalationLevel = (pendingHours: number): number => {
-  if (pendingHours >= 72) return 3;
-  if (pendingHours >= 36) return 2;
-  if (pendingHours >= 18) return 1;
-  return 0;
-};
-
-const reportTypeLabel = (table: string): string => {
-  switch (table) {
-    case 'disease_reports':
-      return 'disease';
-    case 'water_quality_reports':
-      return 'water';
-    case 'health_campaigns':
-      return 'campaign';
-    case 'health_alerts':
-      return 'alert';
-    default:
-      return 'report';
-  }
-};
-
 // ── Session probe cache ───────────────────────────────────────────────────────
 // Deployments differ in which analytics views/columns exist, so this module
 // probes candidate relation names and select clauses. Probes that fail because
@@ -570,104 +548,319 @@ export async function getCampaignIntelligence(profile: Profile): Promise<string[
   return insights.slice(0, 5);
 }
 
-const mapEscalationRow = (row: GenericRow, fallbackType: string): EscalationRecord => {
+// ── Escalation SLA — the threshold is data, not a number in a function ────────
+//
+// It used to be `is_overdue: pendingHours >= 24` inside the row mapper, with a
+// second hardcoded ladder (18 / 36 / 72 h) deciding the escalation level. One
+// number for every report type, every severity and every district: a block that
+// approves within two hours and a block that approves within two days got the
+// same red badge, and neither could change it without a release.
+//
+// The threshold now lives in ONE tier table, keyed the way an SLA actually
+// varies — report type, severity, and (once the database can hold it) district.
+// `getEscalationSlaPolicy()` is the single seam. Today it returns the built-in
+// policy below and reports `source: 'built-in'`, which the screen states out
+// loud rather than pretending the rule is configurable. When the
+// `escalation_sla_thresholds` table lands (SQL in docs / BRK-19 hand-off), this
+// function reads it, returns `source: 'database'`, and nothing else changes.
+//
+// No probe is issued for a relation that is known not to exist — that was
+// DEL-09's complaint about this module and it is not repeated here.
+
+export type EscalationReportType = 'disease' | 'water' | 'campaign' | 'alert' | 'report';
+
+/** One row of the SLA table. `severity: null` means "any severity of this type". */
+export interface EscalationSlaTier {
+  /** null = applies nationally. Reserved for the per-district rows the migration adds. */
+  district: string | null;
+  report_type: EscalationReportType;
+  severity: string | null;
+  hours: number;
+  label: string;
+}
+
+export interface EscalationSlaPolicy {
+  source: 'built-in' | 'database';
+  /** False while the policy ships in the build — the screen must not imply it is tunable. */
+  editable: boolean;
+  tiers: EscalationSlaTier[];
+}
+
+// Ordered most-specific first. Hours are the wait after which an item is
+// OVERDUE — 2× is escalation level 2, 3× is level 3 (see escalationLevelFor).
+export const DEFAULT_ESCALATION_SLA_TIERS: EscalationSlaTier[] = [
+  // A public alert waiting on approval is a warning nobody has received yet.
+  { district: null, report_type: 'alert', severity: 'critical', hours: 2, label: 'Alert · critical' },
+  { district: null, report_type: 'alert', severity: 'high', hours: 4, label: 'Alert · high' },
+  { district: null, report_type: 'alert', severity: 'medium', hours: 12, label: 'Alert · medium' },
+  { district: null, report_type: 'alert', severity: 'low', hours: 24, label: 'Alert · low' },
+  { district: null, report_type: 'alert', severity: null, hours: 12, label: 'Alert · other' },
+
+  { district: null, report_type: 'disease', severity: 'critical', hours: 6, label: 'Disease · critical' },
+  { district: null, report_type: 'disease', severity: 'high', hours: 12, label: 'Disease · high' },
+  { district: null, report_type: 'disease', severity: 'medium', hours: 24, label: 'Disease · medium' },
+  { district: null, report_type: 'disease', severity: 'low', hours: 48, label: 'Disease · low' },
+  { district: null, report_type: 'disease', severity: null, hours: 24, label: 'Disease · other' },
+
+  { district: null, report_type: 'water', severity: 'unsafe', hours: 12, label: 'Water · unsafe' },
+  { district: null, report_type: 'water', severity: 'marginal', hours: 24, label: 'Water · marginal' },
+  { district: null, report_type: 'water', severity: 'safe', hours: 48, label: 'Water · safe' },
+  { district: null, report_type: 'water', severity: null, hours: 24, label: 'Water · other' },
+
+  { district: null, report_type: 'campaign', severity: null, hours: 72, label: 'Campaign' },
+
+  // Last resort. Deliberately the old 24 h, so an unrecognised type keeps the
+  // behaviour this screen has always had instead of silently becoming lenient.
+  { district: null, report_type: 'report', severity: null, hours: 24, label: 'Other' },
+];
+
+const BUILT_IN_ESCALATION_SLA: EscalationSlaPolicy = {
+  source: 'built-in',
+  editable: false,
+  tiers: DEFAULT_ESCALATION_SLA_TIERS,
+};
+
+/**
+ * The SLA policy in force for this profile.
+ *
+ * Async on purpose: the database read this becomes is a query, and every caller
+ * is already awaiting. Today there is no `escalation_sla_thresholds` relation in
+ * the project, so this returns the built-in policy and says so.
+ */
+export async function getEscalationSlaPolicy(_profile: Profile): Promise<EscalationSlaPolicy> {
+  return BUILT_IN_ESCALATION_SLA;
+}
+
+/** Most-specific match wins: district+type+severity → type+severity → type → 'report'. */
+export function resolveEscalationSla(
+  policy: EscalationSlaPolicy,
+  reportType: EscalationReportType,
+  severityKey: string | null,
+  district?: string | null
+): EscalationSlaTier {
+  const districtKey = normalizeDistrict(district);
+  const severity = severityKey ? normalizeWord(severityKey) : null;
+
+  const candidates: ((tier: EscalationSlaTier) => boolean)[] = [
+    (tier) =>
+      tier.report_type === reportType &&
+      tier.severity === severity &&
+      normalizeDistrict(tier.district) === districtKey &&
+      districtKey.length > 0,
+    (tier) =>
+      tier.report_type === reportType && tier.severity === null &&
+      normalizeDistrict(tier.district) === districtKey && districtKey.length > 0,
+    (tier) => tier.report_type === reportType && tier.severity === severity && tier.district === null,
+    (tier) => tier.report_type === reportType && tier.severity === null && tier.district === null,
+    (tier) => tier.report_type === 'report' && tier.district === null,
+  ];
+
+  for (const matches of candidates) {
+    const tier = policy.tiers.find(matches);
+    if (tier && tier.hours > 0) return tier;
+  }
+
+  return DEFAULT_ESCALATION_SLA_TIERS[DEFAULT_ESCALATION_SLA_TIERS.length - 1];
+}
+
+/**
+ * Level is now a ratio of the item's OWN SLA, so `is_overdue` and
+ * `escalation_level >= 1` can never disagree — the screen's "Overdue" and
+ * "High escalation" counts are the same arithmetic, not two constants.
+ */
+const escalationLevelFor = (pendingHours: number, slaHours: number): number => {
+  if (slaHours <= 0) return 0;
+  const ratio = pendingHours / slaHours;
+  if (ratio >= 3) return 3;
+  if (ratio >= 2) return 2;
+  if (ratio >= 1) return 1;
+  return 0;
+};
+
+/** disease_reports.severity / health_alerts.urgency_level — CHECK: low|medium|high|critical. */
+const normalizeLadderSeverity = (value: unknown): string | null => {
+  const key = normalizeWord(value);
+  return key === 'low' || key === 'medium' || key === 'high' || key === 'critical' ? key : null;
+};
+
+/**
+ * water_quality_reports.overall_quality — CHECK allows
+ * safe|moderate|unsafe|critical|poor|contaminated. Collapsed to the three tiers
+ * an approval SLA can meaningfully distinguish.
+ */
+const normalizeWaterSeverity = (value: unknown): string | null => {
+  const key = normalizeWord(value);
+  if (key === 'unsafe' || key === 'critical' || key === 'contaminated') return 'unsafe';
+  if (key === 'poor' || key === 'moderate') return 'marginal';
+  if (key === 'safe') return 'safe';
+  return null;
+};
+
+/** What the record is, beyond its uuid — a 60-hour cholera row must not read like a routine one. */
+export interface EscalationRecordWithSla extends EscalationRecord {
+  sla_hours: number;
+  sla_label: string;
+  sla_source: EscalationSlaPolicy['source'];
+  /** 0 when inside the SLA; hours past the threshold when not. */
+  overdue_by_hours: number;
+  severity_label: string | null;
+  headline: string | null;
+}
+
+interface EscalationSource {
+  table: string;
+  reportType: EscalationReportType;
+  select: string;
+  severityField: string | null;
+  severityOf: (value: unknown) => string | null;
+  headlineField: string | null;
+}
+
+// Every column below was confirmed present on the live project on 3 Aug 2026,
+// so there is no select-variant fallback: a failure here is a real failure and
+// is raised, not swallowed into an empty list that reads as "queue clear".
+const ESCALATION_SOURCES: EscalationSource[] = [
+  {
+    table: 'disease_reports',
+    reportType: 'disease',
+    select:
+      'id,district,state,location_name,status,approval_status,created_at,updated_at,last_updated_at,severity,disease_name',
+    severityField: 'severity',
+    severityOf: normalizeLadderSeverity,
+    headlineField: 'disease_name',
+  },
+  {
+    table: 'water_quality_reports',
+    reportType: 'water',
+    select:
+      'id,district,state,location_name,status,approval_status,created_at,updated_at,last_updated_at,overall_quality,source_name',
+    severityField: 'overall_quality',
+    severityOf: normalizeWaterSeverity,
+    headlineField: 'source_name',
+  },
+  {
+    table: 'health_campaigns',
+    reportType: 'campaign',
+    select: 'id,district,state,location_name,status,approval_status,created_at,updated_at,campaign_name',
+    severityField: null,
+    severityOf: () => null,
+    headlineField: 'campaign_name',
+  },
+  {
+    table: 'health_alerts',
+    reportType: 'alert',
+    select: 'id,district,state,location_name,status,approval_status,created_at,updated_at,urgency_level,title',
+    severityField: 'urgency_level',
+    severityOf: normalizeLadderSeverity,
+    headlineField: 'title',
+  },
+];
+
+// The one approval_status value that means "waiting for a human". Verified
+// against the CHECK constraint on all four tables:
+// approval_status = ANY (ARRAY['pending_approval','approved','rejected']).
+const PENDING_APPROVAL = 'pending_approval';
+
+// Oldest-first, so if this cap is ever hit the rows that fall off are the
+// NEWEST — the least overdue. Truncating the other way would drop exactly the
+// items this screen exists to surface.
+const ESCALATION_FETCH_LIMIT = 1000;
+
+const mapEscalationRow = (
+  row: GenericRow,
+  source: EscalationSource,
+  policy: EscalationSlaPolicy
+): EscalationRecordWithSla => {
   const createdAt = getStringField(row, ['created_at']) ?? new Date().toISOString();
   const lastUpdated = getStringField(row, ['last_updated_at', 'updated_at']);
 
   const createdMs = toDateMs(createdAt) ?? Date.now();
-  const nowMs = Date.now();
-  const pendingHours = Math.max(0, (nowMs - createdMs) / (1000 * 60 * 60));
-  const escalationLevel = toNumber(row.escalation_level, mapEscalationLevel(pendingHours));
+  const pendingHours = Math.max(0, (Date.now() - createdMs) / (1000 * 60 * 60));
+
+  const district = getStringField(row, ['district']);
+  const severityKey = source.severityField ? source.severityOf(row[source.severityField]) : null;
+  const tier = resolveEscalationSla(policy, source.reportType, severityKey, district);
+  const overdueBy = Math.max(0, pendingHours - tier.hours);
 
   return {
-    report_id: getStringField(row, ['report_id', 'id']) ?? '',
-    report_type: getStringField(row, ['report_type']) ?? fallbackType,
-    district: getStringField(row, ['district']),
+    report_id: getStringField(row, ['id']) ?? '',
+    report_type: source.reportType,
+    district,
     state: getStringField(row, ['state']),
     location_name: getStringField(row, ['location_name']),
     status: getStringField(row, ['status']),
     approval_status: getStringField(row, ['approval_status']),
-    escalation_level: escalationLevel,
+    escalation_level: escalationLevelFor(pendingHours, tier.hours),
     created_at: createdAt,
     last_updated_at: lastUpdated,
     pending_hours: Number(pendingHours.toFixed(1)),
-    is_overdue: pendingHours >= 24,
+    is_overdue: pendingHours >= tier.hours,
+    sla_hours: tier.hours,
+    sla_label: tier.label,
+    sla_source: policy.source,
+    overdue_by_hours: Number(overdueBy.toFixed(1)),
+    severity_label: severityKey,
+    headline: source.headlineField ? getStringField(row, [source.headlineField]) : null,
   };
 };
 
-export async function getEscalationMonitoring(profile: Profile): Promise<EscalationRecord[]> {
+export async function getEscalationMonitoring(profile: Profile): Promise<EscalationRecordWithSla[]> {
   // Probed vw_escalation_monitoring, escalation_monitoring and
   // vw_pending_escalations here. None of the three exists in this database,
   // so the screen paid for three 404s on every open and then did the real
   // work below regardless.
-  const cutoffIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  //
+  // Two things this used to get wrong, both confirmed against the live project:
+  //
+  // 1. It selected `created_at >= now() - 14 days`. A report pending for 15
+  //    days — the single worst SLA breach possible — dropped off the screen
+  //    and the queue read "Queue clear". The window is gone: the filter is
+  //    `approval_status = 'pending_approval'`, which IS the pending queue and
+  //    is bounded by it.
+  // 2. It treated `status = 'reported'` as pending. `reported` is the INSERT
+  //    default of disease_reports.status and is never advanced on approval, so
+  //    two APPROVED reports (d0f30a8c Shimla, 82391218 Kovilancheri) matched
+  //    the pending test. Approval lives in `approval_status`, nowhere else.
+  const policy = await getEscalationSlaPolicy(profile);
 
-  const tables = [
-    {
-      name: 'disease_reports',
-      select: [
-        'id,district,state,location_name,status,approval_status,created_at,updated_at',
-        'id,district,state,location_name,status,created_at,updated_at',
-      ],
-    },
-    {
-      name: 'water_quality_reports',
-      select: [
-        'id,district,state,location_name,status,approval_status,created_at,updated_at',
-        'id,district,state,location_name,status,created_at,updated_at',
-      ],
-    },
-    {
-      name: 'health_campaigns',
-      select: [
-        'id,district,state,location_name,status,approval_status,created_at,updated_at',
-        'id,district,state,location_name,status,created_at,updated_at',
-      ],
-    },
-    {
-      name: 'health_alerts',
-      select: [
-        'id,district,state,location_name,status,approval_status,created_at,updated_at',
-        'id,district,state,location_name,status,created_at,updated_at',
-      ],
-    },
-  ];
+  const rowsBySource = await Promise.all(
+    ESCALATION_SOURCES.map(async (source) => {
+      const { data, error } = await supabase
+        .from(source.table)
+        .select(source.select)
+        .eq('approval_status', PENDING_APPROVAL)
+        .order('created_at', { ascending: true })
+        .limit(ESCALATION_FETCH_LIMIT);
 
-  const rowsByTable = await Promise.all(
-    tables.map(async (table) => ({
-      table: table.name,
-      rows: await selectFirstSuccessful(table.name, table.select, (query) =>
-        query.gte('created_at', cutoffIso).order('created_at', { ascending: false }).limit(1500)
-      ),
-    }))
+      // No `?? []`, no `catch { return [] }`. A failed query must not be
+      // indistinguishable from an empty approval queue on this of all screens.
+      if (error) {
+        throw new Error(`Escalation monitoring could not read ${source.table}: ${error.message}`);
+      }
+
+      return { source, rows: (data ?? []) as unknown as GenericRow[] };
+    })
   );
 
-  const records: EscalationRecord[] = [];
+  const records: EscalationRecordWithSla[] = [];
 
-  rowsByTable.forEach(({ table, rows }) => {
-    const fallbackType = reportTypeLabel(table);
-
+  rowsBySource.forEach(({ source, rows }) => {
     rows.forEach((row) => {
-      const approvalStatus = normalizeWord(row.approval_status);
-      const status = normalizeWord(row.status);
-      const pendingApproval =
-        approvalStatus === 'pending_approval' ||
-        approvalStatus === 'pending' ||
-        status === 'reported' ||
-        status === 'pending';
-
-      if (!pendingApproval) return;
-
-      const mapped = mapEscalationRow(row, fallbackType);
+      const mapped = mapEscalationRow(row, source, policy);
+      if (!mapped.report_id) return;
       if (!isAllowedDistrict(mapped.district, profile)) return;
-
       records.push(mapped);
     });
   });
 
-  return records
-    .filter((record) => record.report_id.length > 0)
-    .sort((a, b) => toNumber(b.pending_hours, 0) - toNumber(a.pending_hours, 0));
+  return records.sort((a, b) => {
+    // Most-breached first: 3 h past a 2 h alert SLA outranks 40 h into a 72 h
+    // campaign SLA. Raw age would have ranked them the other way round.
+    const aRatio = toNumber(a.pending_hours, 0) / Math.max(1, a.sla_hours);
+    const bRatio = toNumber(b.pending_hours, 0) / Math.max(1, b.sla_hours);
+    if (bRatio !== aRatio) return bRatio - aRatio;
+    return toNumber(b.pending_hours, 0) - toNumber(a.pending_hours, 0);
+  });
 }
 
 const mapAIAlertRow = (row: GenericRow, source: 'generated' | 'recommendation'): AIAlert => {

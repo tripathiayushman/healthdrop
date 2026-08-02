@@ -1,15 +1,31 @@
 // =====================================================
-// WEEKLY SUMMARY SCREEN (Bharosa D·03)
+// WEEKLY SUMMARY SCREEN (Bharosa D·03 · NEW-07 + NEW-10)
 // "Weekly summary → WhatsApp": one district, one ISO
 // week, styled like a printed report. The summary card
 // wears a 2px border and the ✓ VERIFIED DATA stamp —
 // every figure comes from human-approved rows only.
-// Share paths: PDF via expo-print + expo-sharing on
-// native, navigator.share / clipboard on web, and a
-// plain-text caption for low-data recipients.
-// 4-state data region; zeros here are real zeros.
+//
+// NEW-07 — what leaves the app. A big-type bilingual
+// POSTER (PDF) for a village WhatsApp group, the IDSP
+// sheet for an officer's inbox, and a plain-text caption
+// for low-data recipients. Every one of them carries the
+// district, the ISO week, when the figures were read and
+// when it was exported, and says in words that it is a
+// snapshot rather than live data. Nothing is ever sent
+// automatically — each artifact exists only because a
+// human pressed a button (§2.3).
+//
+// NEW-10 — offline. loadWeeklySummary() serves this
+// phone's last saved copy when the network fails, with an
+// "as of" stamp and the reason, instead of an empty page.
+// A cache miss stays an error-with-retry: "no data" and
+// "the read failed" must never look the same.
+//
+// FIVE states in the data region: skeleton / live content
+// / cached content with an as-of stamp / quiet-zero /
+// error-with-retry.
 // =====================================================
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -23,19 +39,23 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Profile } from '../../types';
 import { useTheme } from '../../lib/ThemeContext';
+import { formatDateTime, formatTime } from '../../lib/format';
 import { EmptyState, ErrorCard, SkeletonBlock } from '../dashboards/DashboardShared';
 import {
+  ArtifactOptions,
+  buildPosterHtml,
   buildSummaryHtml,
-  buildWeeklySummary,
   buildWhatsAppCaption,
   formatAckRate,
   formatCasesDelta,
+  loadWeeklySummary,
   MAX_WEEKS_BACK,
-  WeeklySummary,
+  WeeklySummaryResult,
 } from '../../lib/services/weeklySummary';
 
 interface ShareStatus {
@@ -43,7 +63,27 @@ interface ShareStatus {
   text: string;
 }
 
-type BusyAction = 'whatsapp' | 'pdf' | 'text' | null;
+type BusyAction = 'poster' | 'sheet' | 'text' | null;
+
+/**
+ * expo-sharing has no web implementation and expo-print's web shim resolves
+ * printToFileAsync() to window.print() returning undefined — destructuring a
+ * uri off it would throw. So the file actions are not rendered at all in a
+ * browser: an honest note beats a button that cannot work (§ web degradation).
+ */
+const CAN_MAKE_FILES = Platform.OS !== 'web';
+
+/** "as of 14:32" today, "14 Jul 09:32" for anything older. Locale-aware. */
+const asOfLabel = (iso: string): string => {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const now = new Date();
+  const sameDay =
+    at.getFullYear() === now.getFullYear() &&
+    at.getMonth() === now.getMonth() &&
+    at.getDate() === now.getDate();
+  return sameDay ? formatTime(at) : formatDateTime(at);
+};
 
 export default function WeeklySummaryScreen({
   profile,
@@ -53,15 +93,19 @@ export default function WeeklySummaryScreen({
   onBack: () => void;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
 
   const district = (profile.district ?? '').trim();
   const [weekOffset, setWeekOffset] = useState(0);
-  const [summary, setSummary] = useState<WeeklySummary | null>(null);
+  const [result, setResult] = useState<WeeklySummaryResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<ShareStatus | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
+
+  const summary = result?.summary ?? null;
+  const fromCache = result?.source === 'cache';
 
   const load = useCallback(async () => {
     if (!district) {
@@ -70,15 +114,23 @@ export default function WeeklySummaryScreen({
     }
     setError(null);
     try {
-      const data = await buildWeeklySummary(district, weekOffset);
-      setSummary(data);
-    } catch {
-      setError("Couldn't load the weekly summary — check connection.");
-      setSummary(null);
+      // Read-through: live first, this phone's saved copy as the fallback.
+      // Throws only when BOTH fail — which is a real error, not an empty week.
+      const next = await loadWeeklySummary(district, weekOffset);
+      setResult(next);
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : t('weekly.loadFailed', {
+              defaultValue: "Couldn't load the weekly summary — check connection.",
+            }),
+      );
+      setResult(null);
     } finally {
       setLoading(false);
     }
-  }, [district, weekOffset]);
+  }, [district, weekOffset, t]);
 
   useEffect(() => {
     setLoading(true);
@@ -93,6 +145,14 @@ export default function WeeklySummaryScreen({
   };
 
   // ── Sharing ─────────────────────────────────────────
+  // Stamp taken at press time, not at load time: a digest read this morning
+  // and forwarded tonight must show both instants, and must say when the
+  // figures came off the phone's cache rather than the network.
+  const artifactOptions = (): ArtifactOptions => ({
+    exportedAtIso: new Date().toISOString(),
+    fromCache,
+  });
+
   const copyCaptionOnWeb = async (caption: string): Promise<boolean> => {
     try {
       const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
@@ -106,14 +166,15 @@ export default function WeeklySummaryScreen({
     return false;
   };
 
-  const sharePdfNative = async (dialogTitle: string) => {
-    if (!summary) return;
-    const html = buildSummaryHtml(summary);
-    const { uri } = await Print.printToFileAsync({ html });
+  /**
+   * Render HTML to a PDF and hand it to the OS share sheet.
+   * Availability is checked BEFORE the file is written so a device with no
+   * receiver never leaves an orphan PDF in the cache directory.
+   */
+  const sharePdfNative = async (html: string, dialogTitle: string) => {
     const available = await Sharing.isAvailableAsync();
-    if (!available) {
-      throw new Error('sharing-unavailable');
-    }
+    if (!available) throw new Error('sharing-unavailable');
+    const { uri } = await Print.printToFileAsync({ html });
     await Sharing.shareAsync(uri, {
       dialogTitle,
       mimeType: 'application/pdf',
@@ -121,80 +182,73 @@ export default function WeeklySummaryScreen({
     });
   };
 
-  const handleShareWhatsApp = async () => {
-    if (!summary || busy) return;
+  const reportShareError = (err: any, fallback: string) => {
+    if (err?.name === 'AbortError') return false; // user closed the sheet
+    setShareStatus({
+      kind: 'error',
+      text:
+        err?.message === 'sharing-unavailable'
+          ? t('weekly.sharingUnavailable', {
+              defaultValue:
+                'This device has no app that can receive a file. Use "Share as text" instead.',
+            })
+          : fallback,
+    });
+    return true;
+  };
+
+  /** NEW-07 — the bilingual poster, the artifact meant for a WhatsApp group. */
+  const handleSharePoster = async () => {
+    if (!summary || busy || !CAN_MAKE_FILES) return;
     setShareStatus(null);
-    setBusy('whatsapp');
+    setBusy('poster');
     try {
-      const caption = buildWhatsAppCaption(summary);
-      if (Platform.OS === 'web') {
-        const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
-        if (nav?.share) {
-          await nav.share({ text: caption });
-          setShareStatus({ kind: 'success', text: 'Share sheet opened — pick WhatsApp.' });
-        } else if (await copyCaptionOnWeb(caption)) {
-          setShareStatus({
-            kind: 'success',
-            text: 'Caption copied — paste it into WhatsApp Web.',
-          });
-        } else {
-          setShareStatus({
-            kind: 'error',
-            text: "Couldn't open sharing or copy here — use the mobile app to share.",
-          });
-        }
-      } else {
-        await sharePdfNative('Share weekly summary');
-        setShareStatus({
-          kind: 'success',
-          text: 'PDF ready to send. Use "Share as text" for low-data recipients.',
-        });
-      }
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        // The user closed the share sheet — not an error.
-        setBusy(null);
-        return;
-      }
+      await sharePdfNative(
+        buildPosterHtml(summary, artifactOptions()),
+        t('weekly.posterDialog', { defaultValue: 'Share weekly poster' }),
+      );
       setShareStatus({
-        kind: 'error',
-        text: "Couldn't share the summary — try again, or use Share as text.",
+        kind: 'success',
+        text: t('weekly.posterReady', {
+          defaultValue:
+            'Poster ready — pick WhatsApp in the sheet. It carries the district, the week and when the figures were read.',
+        }),
       });
+    } catch (err: any) {
+      reportShareError(
+        err,
+        t('weekly.posterFailed', {
+          defaultValue: "Couldn't build the poster — try again, or use Share as text.",
+        }),
+      );
     } finally {
       setBusy(null);
     }
   };
 
-  const handleSavePdf = async () => {
-    if (!summary || busy) return;
+  /** The IDSP table — for an officer's inbox, not for a village group. */
+  const handleShareSheet = async () => {
+    if (!summary || busy || !CAN_MAKE_FILES) return;
     setShareStatus(null);
-    setBusy('pdf');
+    setBusy('sheet');
     try {
-      if (Platform.OS === 'web') {
-        const caption = buildWhatsAppCaption(summary);
-        if (await copyCaptionOnWeb(caption)) {
-          setShareStatus({
-            kind: 'success',
-            text: 'PDF export needs the mobile app — the text caption was copied instead.',
-          });
-        } else {
-          setShareStatus({
-            kind: 'error',
-            text: 'PDF export needs the mobile app, and copying the caption failed here.',
-          });
-        }
-      } else {
-        await sharePdfNative('Save weekly summary PDF');
-        setShareStatus({
-          kind: 'success',
-          text: 'PDF generated — choose "Save to Files" (or a drive app) in the sheet.',
-        });
-      }
-    } catch {
+      await sharePdfNative(
+        buildSummaryHtml(summary, artifactOptions()),
+        t('weekly.sheetDialog', { defaultValue: 'Share IDSP summary sheet' }),
+      );
       setShareStatus({
-        kind: 'error',
-        text: "Couldn't create the PDF — try again in a moment.",
+        kind: 'success',
+        text: t('weekly.sheetReady', {
+          defaultValue: 'IDSP sheet ready — choose a recipient, or "Save to Files" to keep a copy.',
+        }),
       });
+    } catch (err: any) {
+      reportShareError(
+        err,
+        t('weekly.sheetFailed', {
+          defaultValue: "Couldn't create the PDF — try again in a moment.",
+        }),
+      );
     } finally {
       setBusy(null);
     }
@@ -205,19 +259,44 @@ export default function WeeklySummaryScreen({
     setShareStatus(null);
     setBusy('text');
     try {
-      const caption = buildWhatsAppCaption(summary);
+      const caption = buildWhatsAppCaption(summary, artifactOptions());
       if (Platform.OS === 'web') {
-        if (await copyCaptionOnWeb(caption)) {
-          setShareStatus({ kind: 'success', text: 'Caption copied to clipboard.' });
+        const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
+        if (nav?.share) {
+          await nav.share({ text: caption });
+          setShareStatus({
+            kind: 'success',
+            text: t('weekly.webShareOpened', { defaultValue: 'Share sheet opened — pick WhatsApp.' }),
+          });
+        } else if (await copyCaptionOnWeb(caption)) {
+          setShareStatus({
+            kind: 'success',
+            text: t('weekly.captionCopied', { defaultValue: 'Summary copied to clipboard.' }),
+          });
         } else {
-          setShareStatus({ kind: 'error', text: "Couldn't copy the caption here." });
+          setShareStatus({
+            kind: 'error',
+            text: t('weekly.captionCopyFailed', {
+              defaultValue: "This browser wouldn't let the app copy or share. Select the card text by hand.",
+            }),
+          });
         }
       } else {
         await Share.share({ message: caption });
-        setShareStatus({ kind: 'success', text: 'Caption ready to send.' });
+        setShareStatus({
+          kind: 'success',
+          text: t('weekly.captionReady', { defaultValue: 'Summary ready to send as text.' }),
+        });
       }
-    } catch {
-      setShareStatus({ kind: 'error', text: "Couldn't share the text caption." });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        setBusy(null);
+        return;
+      }
+      setShareStatus({
+        kind: 'error',
+        text: t('weekly.captionFailed', { defaultValue: "Couldn't share the text summary." }),
+      });
     } finally {
       setBusy(null);
     }
@@ -237,6 +316,9 @@ export default function WeeklySummaryScreen({
       : summary && summary.casesDelta < 0
         ? colors.success
         : colors.textSecondary;
+
+  /** The instant these figures were read — shown whenever they are not live. */
+  const asOfText = useMemo(() => (result ? asOfLabel(result.fetchedAtIso) : ''), [result]);
 
   const quietWeek =
     !!summary &&
@@ -385,6 +467,48 @@ export default function WeeklySummaryScreen({
               <ErrorCard message={error} onRetry={load} />
             ) : summary ? (
               <>
+                {/* ── NEW-10: cached content is content, not an error — but it
+                       never pretends to be live. Stamp, reason, retry. ── */}
+                {fromCache && (
+                  <View
+                    accessibilityLiveRegion="polite"
+                    style={[
+                      styles.cacheBanner,
+                      { backgroundColor: colors.warningBg, borderColor: colors.warning },
+                    ]}
+                  >
+                    <Ionicons name="cloud-offline-outline" size={18} color={colors.warning} />
+                    <View style={styles.cacheBannerBody}>
+                      <Text
+                        style={[styles.cacheBannerTitle, { color: colors.text }]}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        {t('weekly.savedCopy', {
+                          defaultValue: 'Saved copy · as of {{when}}',
+                          when: asOfText,
+                        })}
+                      </Text>
+                      <Text
+                        style={[styles.cacheBannerText, { color: colors.textSecondary }]}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        {result?.staleReason ??
+                          t('weekly.savedCopyReason', {
+                            defaultValue: 'The server could not be reached just now.',
+                          })}
+                      </Text>
+                      <Text
+                        style={[styles.cacheBannerText, { color: colors.textSecondary }]}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        {t('weekly.savedCopyMayHaveChanged', {
+                          defaultValue: 'Figures may have changed since. Pull down to refresh.',
+                        })}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
                 {/* ── THE SUMMARY CARD — printed-report style, 2px border ── */}
                 <View
                   style={[
@@ -397,6 +521,14 @@ export default function WeeklySummaryScreen({
                   </Text>
                   <Text style={[styles.cardMeta, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
                     {summary.rangeLabel} · {summary.district}
+                  </Text>
+                  {/* The card is what gets screenshotted, so it carries the same
+                      read-instant the exported artifacts do. */}
+                  <Text style={[styles.cardStamp, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
+                    {t('weekly.figuresRead', {
+                      defaultValue: 'Figures read {{when}}',
+                      when: asOfText,
+                    })}
                   </Text>
                   <View style={[styles.cardRule, { backgroundColor: colors.borderStrong }]} />
 
@@ -489,66 +621,129 @@ export default function WeeklySummaryScreen({
                   </View>
                 )}
 
-                {/* ── Actions ── */}
-                <Pressable
-                  onPress={handleShareWhatsApp}
-                  disabled={!!busy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Share on WhatsApp"
-                  style={({ pressed }) => [
-                    styles.primaryBtn,
-                    { backgroundColor: pressed ? colors.primaryPressed : colors.primary },
-                    busy && styles.disabled,
-                  ]}
-                >
-                  {busy === 'whatsapp' ? (
-                    <ActivityIndicator size="small" color={colors.onPrimary} />
-                  ) : (
-                    <Ionicons name="logo-whatsapp" size={20} color={colors.onPrimary} />
-                  )}
-                  <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
-                    Share on WhatsApp
-                  </Text>
-                </Pressable>
+                {/* ── Actions ──
+                    File actions exist only where a file can actually be made
+                    and handed over. In a browser they are not rendered at all
+                    and the note below says why. ── */}
+                {CAN_MAKE_FILES ? (
+                  <>
+                    <Pressable
+                      onPress={handleSharePoster}
+                      disabled={!!busy}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('weekly.sharePosterA11y', {
+                        defaultValue: 'Share the weekly poster, opens the share sheet',
+                      })}
+                      style={({ pressed }) => [
+                        styles.primaryBtn,
+                        { backgroundColor: pressed ? colors.primaryPressed : colors.primary },
+                        busy && styles.disabled,
+                      ]}
+                    >
+                      {busy === 'poster' ? (
+                        <ActivityIndicator size="small" color={colors.onPrimary} />
+                      ) : (
+                        <Ionicons name="logo-whatsapp" size={20} color={colors.onPrimary} />
+                      )}
+                      <Text
+                        style={[styles.primaryBtnText, { color: colors.onPrimary }]}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        {t('weekly.sharePoster', { defaultValue: 'Share poster on WhatsApp' })}
+                      </Text>
+                    </Pressable>
 
-                <Pressable
-                  onPress={handleSavePdf}
-                  disabled={!!busy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Save PDF"
-                  style={({ pressed }) => [
-                    styles.outlineBtn,
-                    {
-                      borderColor: colors.inputBorder,
-                      backgroundColor: pressed ? colors.cardHover : 'transparent',
-                    },
-                    busy && styles.disabled,
-                  ]}
-                >
-                  {busy === 'pdf' ? (
-                    <ActivityIndicator size="small" color={colors.text} />
-                  ) : (
-                    <Ionicons name="document-outline" size={20} color={colors.text} />
-                  )}
-                  <Text style={[styles.outlineBtnText, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                    Save PDF
-                  </Text>
-                </Pressable>
+                    <Pressable
+                      onPress={handleShareSheet}
+                      disabled={!!busy}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('weekly.shareSheetA11y', {
+                        defaultValue: 'Share the I D S P summary sheet as a PDF',
+                      })}
+                      style={({ pressed }) => [
+                        styles.outlineBtn,
+                        {
+                          borderColor: colors.inputBorder,
+                          backgroundColor: pressed ? colors.cardHover : 'transparent',
+                        },
+                        busy && styles.disabled,
+                      ]}
+                    >
+                      {busy === 'sheet' ? (
+                        <ActivityIndicator size="small" color={colors.text} />
+                      ) : (
+                        <Ionicons name="document-outline" size={20} color={colors.text} />
+                      )}
+                      <Text
+                        style={[styles.outlineBtnText, { color: colors.text }]}
+                        maxFontSizeMultiplier={1.3}
+                      >
+                        {t('weekly.shareSheet', { defaultValue: 'IDSP sheet (PDF)' })}
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <View
+                    style={[
+                      styles.webNote,
+                      { backgroundColor: colors.infoBg, borderColor: colors.border },
+                    ]}
+                  >
+                    <Ionicons name="information-circle-outline" size={18} color={colors.text} />
+                    <Text
+                      style={[styles.webNoteText, { color: colors.text }]}
+                      maxFontSizeMultiplier={1.3}
+                    >
+                      {t('weekly.webNoFiles', {
+                        defaultValue:
+                          'Poster and PDF export need the HealthDrop app on a phone — a browser cannot hand a file to WhatsApp. The text summary below works here.',
+                      })}
+                    </Text>
+                  </View>
+                )}
 
                 <Pressable
                   onPress={handleShareText}
                   disabled={!!busy}
                   accessibilityRole="button"
-                  accessibilityLabel="Share as text"
-                  style={({ pressed }) => [styles.textLink, pressed && { opacity: 0.7 }, busy && styles.disabled]}
+                  accessibilityLabel={t('weekly.shareTextA11y', {
+                    defaultValue: 'Share the summary as plain text',
+                  })}
+                  style={({ pressed }) => [
+                    CAN_MAKE_FILES ? styles.textLink : styles.primaryBtn,
+                    !CAN_MAKE_FILES && {
+                      backgroundColor: pressed ? colors.primaryPressed : colors.primary,
+                    },
+                    CAN_MAKE_FILES && pressed && { opacity: 0.7 },
+                    busy && styles.disabled,
+                  ]}
                 >
-                  <Text style={[styles.textLinkLabel, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>
-                    {Platform.OS === 'web' ? 'Copy caption as text' : 'Share as text'}
+                  {busy === 'text' && !CAN_MAKE_FILES && (
+                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                  )}
+                  <Text
+                    style={
+                      CAN_MAKE_FILES
+                        ? [styles.textLinkLabel, { color: colors.primary }]
+                        : [styles.primaryBtnText, { color: colors.onPrimary }]
+                    }
+                    maxFontSizeMultiplier={1.3}
+                  >
+                    {CAN_MAKE_FILES
+                      ? t('weekly.shareText', { defaultValue: 'Share as text' })
+                      : t('weekly.copyText', { defaultValue: 'Copy summary as text' })}
                   </Text>
                 </Pressable>
 
+                {/* Anything that leaves the app is a decision, and it cannot be
+                    taken back — say so before the button is pressed, not after. */}
                 <Text style={[styles.footnote, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  Goes as a document + a plain-text caption for low-data recipients.
+                  {t('weekly.shareFootnote', {
+                    defaultValue:
+                      'Every shared copy is stamped with {{district}}, {{week}} and the time the figures were read, and states it is a snapshot. It is for health staff, not an official public notice — and once sent it cannot be corrected.',
+                    district: summary.district,
+                    week: summary.weekTag,
+                  })}
                 </Text>
               </>
             ) : null}
@@ -654,10 +849,58 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontVariant: ['tabular-nums'],
   },
+  cardStamp: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
   cardRule: {
     height: 1,
     marginTop: 12,
     marginBottom: 2,
+  },
+  cacheBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  cacheBannerBody: {
+    flex: 1,
+    gap: 2,
+  },
+  cacheBannerTitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  cacheBannerText: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+  },
+  webNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  webNoteText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
   },
   statRow: {
     flexDirection: 'row',
