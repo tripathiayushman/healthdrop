@@ -24,14 +24,18 @@ import { DiseaseReport, Profile } from '../../types';
 import { useTheme, radii, spacing } from '../../lib/ThemeContext';
 import { EmptyState, ErrorCard, SkeletonBlock, getSeverityColor } from '../dashboards/DashboardShared';
 import {
+  AlertLink,
   Outbreak,
   OutbreakThreshold,
   OUTBREAK_CONFIRM_MARKER,
+  isAlertPubliclyIssued,
   outbreaksService,
 } from '../../lib/services/outbreaks';
 
 const OUTBREAK_ERROR = "Couldn't load this signal — check connection.";
 const REPORTS_ERROR = "Couldn't load the contributing reports — check connection.";
+const ALERT_LINK_ERROR =
+  "Couldn't check whether an alert was issued for this signal — check connection.";
 
 const shortDate = (iso?: string | null): string => {
   if (!iso) return '';
@@ -323,6 +327,9 @@ export default function OutbreakSignalScreen({
                 alert — nothing reaches villagers until a human decides.
               </Text>
             </View>
+
+            {/* Where the public alert actually stands — its own four states */}
+            <AlertStatusCard outbreak={outbreak} onRetry={retry} />
 
             {/* ── Region 2: the evidence (stats · chart · reports) ── */}
             {reportsLoading ? (
@@ -625,6 +632,76 @@ export default function OutbreakSignalScreen({
 }
 
 // ─────────────────────────────────────────────────────
+//  AlertStatusCard — the one claim this screen may not
+//  overstate. It reads the alert link the service resolved
+//  (outbreaks.linked_alert_id, or health_alerts.metadata
+//  ->>'outbreak_id'), never the raw alert_sent column: the
+//  detection trigger sets that flag TRUE the moment it fires,
+//  so a plain read of it tells an officer the public was
+//  warned when no alert row exists at all. When the check
+//  itself failed we say so and offer a retry — "no alert"
+//  and "couldn't ask" are different facts.
+// ─────────────────────────────────────────────────────
+const AlertStatusCard: React.FC<{ outbreak: Outbreak; onRetry: () => void }> = ({
+  outbreak,
+  onRetry,
+}) => {
+  const { colors, isDark } = useTheme();
+  const link: AlertLink = outbreak.alert_link ?? { kind: 'unknown' };
+
+  if (link.kind === 'unknown') {
+    return (
+      <View style={{ marginTop: spacing.md }}>
+        <ErrorCard message={ALERT_LINK_ERROR} onRetry={onRetry} />
+      </View>
+    );
+  }
+
+  const issued = isAlertPubliclyIssued(link);
+  const drafted = link.kind === 'linked' && !issued;
+  const accent = issued ? colors.info : drafted ? colors.warning : colors.textTertiary;
+
+  let title: string;
+  let detail: string;
+  if (link.kind === 'linked' && issued) {
+    title = `Public alert issued — “${link.alert.title}”`;
+    detail = link.alert.approved_at
+      ? `Approved ${shortDateTime(link.alert.approved_at)} · ${link.alert.district || outbreak.district}`
+      : `Approval time not recorded · ${link.alert.district || outbreak.district}`;
+  } else if (link.kind === 'linked') {
+    title = `Alert drafted, awaiting approval — “${link.alert.title}”`;
+    detail = 'Nothing has reached the public yet. An alert goes out only after a person approves it.';
+  } else {
+    title = 'Not yet alerted — no public alert has been issued for this signal';
+    detail = outbreak.officials_notified
+      ? 'When the rule fired it filed an in-app notice to district officials. That is not a public alert — villagers have not been warned.'
+      : 'Alerts are written and approved by a person. A detection rule never sends one.';
+  }
+
+  return (
+    <View
+      style={[
+        styles.alertStatusCard,
+        { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: accent },
+        !isDark && styles.cardShadow,
+      ]}
+      accessible
+      accessibilityLabel={`${title}. ${detail}`}
+    >
+      <Ionicons
+        name={issued ? 'megaphone' : drafted ? 'time-outline' : 'megaphone-outline'}
+        size={20}
+        color={accent}
+      />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.alertStatusTitle, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.alertStatusDetail, { color: colors.textSecondary }]}>{detail}</Text>
+      </View>
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────
 //  StatTile — compact Big Number: tabular ink numeral
 //  over a label, 3px semantic top rule. Two per row.
 // ─────────────────────────────────────────────────────
@@ -688,6 +765,15 @@ const styles = StyleSheet.create({
   },
   ruleTitle: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
   ruleMeta: { fontSize: 13, lineHeight: 18, fontWeight: '500' },
+
+  /* ── Public-alert status ── */
+  alertStatusCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md,
+    borderWidth: 1, borderLeftWidth: 3, borderRadius: radii.md,
+    padding: spacing.lg, marginTop: spacing.md,
+  },
+  alertStatusTitle: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  alertStatusDetail: { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2 },
 
   /* ── Stats ── */
   statsRow: { flexDirection: 'row', gap: spacing.sm },

@@ -27,13 +27,51 @@ export interface Outbreak {
   status: OutbreakStatus;
   triggered_by_report_id?: string | null;
   detected_by_trigger?: boolean | null;
+  /**
+   * "A public alert exists for this outbreak" — and NOTHING ELSE may set it.
+   *
+   * The raw DB column does not mean that. `detect_outbreak_after_report()`
+   * runs `UPDATE outbreaks SET alert_sent = TRUE` immediately after inserting
+   * in-app notification rows for officials — before any human decides
+   * anything, and without creating a `health_alerts` row. Rows that leave
+   * this service therefore carry the RECOMPUTED value: true only when a
+   * specific approved alert row is genuinely linked (see `alert_link`).
+   * The raw column is preserved as `officials_notified`.
+   */
   alert_sent?: boolean | null;
+  /** The raw trigger flag, honestly named: officials got an in-app notice. */
+  officials_notified?: boolean | null;
+  /** Result of this service's linked-alert check. Never guessed. */
+  alert_link?: AlertLink;
+  /** Set by the BRK-10 migration; absent on the live schema today. */
+  linked_alert_id?: string | null;
   response_notes?: string | null;
   resolved_by?: string | null;
   resolved_at?: string | null;
   created_at: string;
   updated_at?: string | null;
 }
+
+/** The alert row an outbreak points at — enough to name it and date it. */
+export interface LinkedAlert {
+  id: string;
+  title: string;
+  district?: string | null;
+  status?: string | null;
+  approval_status?: string | null;
+  approved_at?: string | null;
+  created_at: string;
+}
+
+/**
+ * Whether a public alert is attached to an outbreak. Three states, because
+ * "we checked and there is none" and "we could not check" are different
+ * facts and a screen must never render them the same way.
+ */
+export type AlertLink =
+  | { kind: 'none' }
+  | { kind: 'linked'; alert: LinkedAlert }
+  | { kind: 'unknown' };
 
 export interface OutbreakThreshold {
   disease_name: string;
@@ -59,6 +97,116 @@ export const OUTBREAK_CONFIRM_MARKER = 'Confirmed outbreak';
 
 export const isOutbreakConfirmed = (outbreak: Pick<Outbreak, 'response_notes'>): boolean =>
   (outbreak.response_notes ?? '').includes(OUTBREAK_CONFIRM_MARKER);
+
+// ─────────────────────────────────────────────────────
+//  Alert linkage — what "alert_sent" is allowed to mean
+//
+//  Only two things count as a link between an outbreak and
+//  a public alert:
+//    1. outbreaks.linked_alert_id                (once the column exists)
+//    2. health_alerts.metadata->>'outbreak_id'   (works on today's schema)
+//  Nothing else. Matching on disease name or district is a
+//  guess, and the response console used to guess: with no
+//  alert naming the disease it fell back to the newest alert
+//  in the district and reported THAT alert's acknowledgement
+//  rate as this outbreak's reach. An officer read a five-month
+//  old typhoid notice's numbers as today's cholera response.
+// ─────────────────────────────────────────────────────
+
+const LINKED_ALERT_COLUMNS = 'id, title, district, status, approval_status, approved_at, created_at';
+
+/** An alert only warned the public once a human approved it. */
+export const isAlertPubliclyIssued = (link?: AlertLink | null): boolean =>
+  link?.kind === 'linked' && link.alert.approval_status === 'approved';
+
+/**
+ * Resolve the alert link for a batch of outbreaks in at most two queries.
+ * Any failure marks EVERY row 'unknown' — an unreachable alerts table must
+ * not be reported as "no alert was issued".
+ */
+async function fetchAlertLinks(rows: Outbreak[]): Promise<Map<string, AlertLink>> {
+  const links = new Map<string, AlertLink>();
+  if (rows.length === 0) return links;
+  try {
+    const alertsById = new Map<string, LinkedAlert>();
+    const outbreakIdByAlertId = new Map<string, string>();
+
+    // (2) Alerts that name the outbreak in their metadata. Verified against
+    // the live project: `metadata->>outbreak_id=in.(…)` is a valid filter.
+    const { data: tagged, error: taggedError } = await supabase
+      .from('health_alerts')
+      .select(`${LINKED_ALERT_COLUMNS}, metadata`)
+      .in('metadata->>outbreak_id', rows.map((r) => r.id));
+    if (taggedError) throw taggedError;
+    (tagged ?? []).forEach((row: any) => {
+      const outbreakId = String(row?.metadata?.outbreak_id ?? '');
+      if (!outbreakId) return;
+      alertsById.set(row.id, row as LinkedAlert);
+      outbreakIdByAlertId.set(row.id, outbreakId);
+    });
+
+    // (1) The explicit column wins where it exists.
+    const explicitIds = Array.from(
+      new Set(rows.map((r) => r.linked_alert_id).filter((id): id is string => !!id)),
+    );
+    if (explicitIds.length > 0) {
+      const { data: explicit, error: explicitError } = await supabase
+        .from('health_alerts')
+        .select(LINKED_ALERT_COLUMNS)
+        .in('id', explicitIds);
+      if (explicitError) throw explicitError;
+      (explicit ?? []).forEach((row: any) => alertsById.set(row.id, row as LinkedAlert));
+    }
+
+    const taggedByOutbreak = new Map<string, LinkedAlert>();
+    outbreakIdByAlertId.forEach((outbreakId, alertId) => {
+      const alert = alertsById.get(alertId);
+      // Newest link wins if an outbreak somehow carries two.
+      const current = taggedByOutbreak.get(outbreakId);
+      if (alert && (!current || alert.created_at > current.created_at)) {
+        taggedByOutbreak.set(outbreakId, alert);
+      }
+    });
+
+    rows.forEach((row) => {
+      if (row.linked_alert_id) {
+        const alert = alertsById.get(row.linked_alert_id);
+        // A link pointing at a row we cannot see is a question, not a "no".
+        links.set(row.id, alert ? { kind: 'linked', alert } : { kind: 'unknown' });
+        return;
+      }
+      const tagged = taggedByOutbreak.get(row.id);
+      links.set(row.id, tagged ? { kind: 'linked', alert: tagged } : { kind: 'none' });
+    });
+    return links;
+  } catch (error: any) {
+    console.error('Error resolving outbreak alert links:', error);
+    rows.forEach((row) => links.set(row.id, { kind: 'unknown' }));
+    return links;
+  }
+}
+
+/**
+ * Rewrite `alert_sent` so it means what the UI says it means. Every read
+ * path in this service goes through here — including the rows returned by
+ * updates, so adding a note cannot flip a banner back to the raw flag.
+ * Exported for the screens that query `outbreaks` directly: pass the rows
+ * through here rather than reading the raw column.
+ */
+export async function withHonestAlertState(rows: Outbreak[]): Promise<Outbreak[]> {
+  const links = await fetchAlertLinks(rows);
+  return rows.map((row) => {
+    const link = links.get(row.id) ?? { kind: 'unknown' as const };
+    return {
+      ...row,
+      officials_notified: row.alert_sent === true,
+      alert_link: link,
+      // 'unknown' resolves to false: under-claiming sends the officer to
+      // check the alert; over-claiming makes them stop chasing it.
+      alert_sent: isAlertPubliclyIssued(link),
+    };
+  });
+}
 
 // ─────────────────────────────────────────────────────
 //  Response-notes audit log helpers
@@ -144,7 +292,7 @@ export const outbreaksService = {
       if (district) query = query.eq('district', district);
       const { data, error } = await query;
       if (error) throw error;
-      return { data: (data ?? []) as Outbreak[], error: null };
+      return { data: await withHonestAlertState((data ?? []) as Outbreak[]), error: null };
     } catch (error: any) {
       console.error('Error fetching active outbreaks:', error);
       return { data: null, error: error.message };
@@ -159,7 +307,8 @@ export const outbreaksService = {
         .eq('id', id)
         .single();
       if (error) throw error;
-      return { data: data as Outbreak, error: null };
+      const [outbreak] = await withHonestAlertState([data as Outbreak]);
+      return { data: outbreak, error: null };
     } catch (error: any) {
       console.error('Error fetching outbreak:', error);
       return { data: null, error: error.message };
@@ -182,7 +331,7 @@ export const outbreaksService = {
       if (district) query = query.eq('district', district);
       const { data, error } = await query;
       if (error) throw error;
-      return { data: (data ?? []) as Outbreak[], error: null };
+      return { data: await withHonestAlertState((data ?? []) as Outbreak[]), error: null };
     } catch (error: any) {
       console.error('Error listing outbreaks:', error);
       return { data: null, error: error.message };
@@ -252,7 +401,8 @@ export const outbreaksService = {
         .select()
         .single();
       if (error) throw error;
-      return { data: data as Outbreak, error: null };
+      const [outbreak] = await withHonestAlertState([data as Outbreak]);
+      return { data: outbreak, error: null };
     } catch (error: any) {
       console.error('Error adding outbreak note:', error);
       return { data: null, error: error.message };
@@ -290,7 +440,8 @@ export const outbreaksService = {
         .select()
         .single();
       if (error) throw error;
-      return { data: data as Outbreak, error: null };
+      const [outbreak] = await withHonestAlertState([data as Outbreak]);
+      return { data: outbreak, error: null };
     } catch (error: any) {
       console.error('Error updating outbreak status:', error);
       return { data: null, error: error.message };

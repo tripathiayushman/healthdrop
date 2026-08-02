@@ -6,6 +6,9 @@
 // In-app password recovery: 3-step email-OTP flow
 // (email → emailed code → new password) on an isolated
 // auth client — see lib/services/authRecovery.ts.
+// Fully translated (EN/हिन्दी) with the language toggle
+// in the header band — the first screen a Hindi speaker
+// sees must not require English to get past (INC-06).
 // =====================================================
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -17,10 +20,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
+import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import {
   requestResetCode, verifyResetCode, setNewPassword, cancelRecovery,
 } from '../lib/services/authRecovery';
+import { setAppLanguage, type AppLanguage } from '../lib/i18n';
 import { Profile } from '../types';
 import { useTheme, spacing, radii } from '../lib/ThemeContext';
 
@@ -58,10 +63,22 @@ const INDIAN_STATES = [
 ];
 
 // ── Roles (icon = Ionicons base name; outline at rest, filled selected) ──
-const SIGNUP_ROLES: { value: Profile['role']; label: string; icon: string; desc: string }[] = [
-  { value: 'clinic',      label: 'Clinic',       icon: 'medical',   desc: 'Healthcare facility' },
-  { value: 'asha_worker', label: 'ASHA Worker',  icon: 'heart',     desc: 'Community health worker' },
-  { value: 'volunteer',   label: 'Volunteer',    icon: 'hand-left', desc: 'Community participant' },
+// `label` stays English in both languages: these are the account-type names
+// used verbatim across the app and by district administrators. Only the
+// one-line description — the part that actually explains the choice — is
+// translated.
+const SIGNUP_ROLES: { value: Profile['role']; label: string; icon: string; descKey: string }[] = [
+  { value: 'clinic',      label: 'Clinic',       icon: 'medical',   descKey: 'auth.roles.clinicDesc' },
+  { value: 'asha_worker', label: 'ASHA Worker',  icon: 'heart',     descKey: 'auth.roles.ashaDesc' },
+  { value: 'volunteer',   label: 'Volunteer',    icon: 'hand-left', descKey: 'auth.roles.volunteerDesc' },
+];
+
+// ── Language toggle — EN / हिन्दी, one 48dp target each ──
+// Each option is written in its own script, so it is legible to the person
+// who needs it without knowing the other language.
+const LANGUAGE_CHOICES: { value: AppLanguage; label: string; a11y: string }[] = [
+  { value: 'en', label: 'EN',     a11y: 'English' },
+  { value: 'hi', label: 'हिन्दी', a11y: 'हिन्दी' },
 ];
 
 // ── GPS: Nominatim reverse-geocode (works on web too) ─
@@ -98,6 +115,72 @@ const reverseGeocode = async (lat: number, lon: number) => {
 
 const WEB_NO_OUTLINE = Platform.OS === 'web' ? ({ outlineStyle: 'none', outline: 'none' } as any) : null;
 
+// ── Language toggle (header band) ─────────────────────
+// Before this existed the only picker was in Profile — behind sign-in AND
+// sign-up — so a Hindi reader had to be walked through an English form by
+// someone else before she could ever change the language.
+// Same mechanism as the ProfileScreen picker, deliberately: setAppLanguage()
+// switches i18next and persists 'healthdrop:language', which survives
+// sign-out, so the choice made here is still in force at the next cold start.
+// There is no profile row to write to yet; the sign-up path below sends the
+// choice to profiles.preferred_language the moment one exists.
+const LanguageToggle: React.FC = () => {
+  const { colors, isDark } = useTheme();
+  const { t, i18n } = useTranslation();
+  const current: AppLanguage = i18n.language?.startsWith('hi') ? 'hi' : 'en';
+
+  const pick = (lang: AppLanguage) => {
+    if (lang === current) return;
+    setAppLanguage(lang).catch(error => {
+      // changeLanguage failed — the screen stays in the current language
+      // rather than half-switching. Storage failures are already swallowed
+      // inside setAppLanguage.
+      console.warn('Failed to apply app language:', error);
+    });
+  };
+
+  return (
+    <View
+      style={[s.langWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}
+      accessibilityRole="radiogroup"
+      accessibilityLabel={t('auth.languageA11y')}
+    >
+      {LANGUAGE_CHOICES.map(opt => {
+        const active = current === opt.value;
+        return (
+          <Pressable
+            key={opt.value}
+            style={({ pressed }) => [
+              s.langBtn,
+              active
+                ? { backgroundColor: colors.primaryLight }
+                : pressed && { backgroundColor: colors.cardHover },
+            ]}
+            onPress={() => pick(opt.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: active }}
+            accessibilityLabel={opt.a11y}
+          >
+            <Text
+              style={[
+                s.langTxt,
+                {
+                  color: active ? (isDark ? colors.primary : colors.primaryDark) : colors.textSecondary,
+                  fontWeight: active ? '700' : '600',
+                },
+              ]}
+              maxFontSizeMultiplier={1.3}
+              numberOfLines={1}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+};
+
 // ── Inline field error (spec: no Alert.alert for validation) ──
 const FieldError: React.FC<{ message?: string }> = ({ message }) => {
   const { colors } = useTheme();
@@ -114,7 +197,7 @@ const FieldError: React.FC<{ message?: string }> = ({ message }) => {
 
 // ── Labeled input — label ABOVE, 52dp field, 1.5px border ──
 const LabeledField: React.FC<{
-  label: string; icon: string; value: string; onChange: (t: string) => void;
+  label: string; icon: string; value: string; onChange: (text: string) => void;
   placeholder: string; keyboardType?: any; secure?: boolean;
   autoCapitalize?: any; autoComplete?: any; rightElement?: React.ReactNode;
   error?: string; onLayout?: (e: LayoutChangeEvent) => void;
@@ -152,25 +235,26 @@ const LabeledField: React.FC<{
 
 // ── District + inline GPS button ──────────────────────
 const DistrictField: React.FC<{
-  value: string; onChange: (t: string) => void;
+  value: string; onChange: (text: string) => void;
   loading: boolean; onGPS: () => void; error?: string;
   onLayout?: (e: LayoutChangeEvent) => void;
 }> = ({ value, onChange, loading, onGPS, error, onLayout }) => {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [focused, setFocused] = useState(false);
   const borderColor = error ? colors.inputErrorBorder : focused ? colors.inputFocusBorder : colors.inputBorder;
   const borderWidth = error || focused ? 2 : 1.5;
   return (
     <View style={s.fieldWrap} onLayout={onLayout}>
       <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-        District
+        {t('auth.districtLabel')}
       </Text>
       <View style={s.gpsRow}>
         <View style={[s.fieldRow, { flex: 1, backgroundColor: colors.inputBackground, borderColor, borderWidth }]}>
           <Ionicons name="business-outline" size={16} color={colors.textSecondary} />
           <TextInput
             style={[s.fieldInput, { color: colors.text }, WEB_NO_OUTLINE]}
-            placeholder="District / City"
+            placeholder={t('auth.districtPlaceholder')}
             placeholderTextColor={colors.placeholder}
             value={value}
             onChangeText={onChange}
@@ -184,7 +268,7 @@ const DistrictField: React.FC<{
           onPress={onGPS}
           disabled={loading}
           accessibilityRole="button"
-          accessibilityLabel="Use GPS to fill district and state"
+          accessibilityLabel={t('auth.gpsA11y')}
         >
           {loading
             ? <ActivityIndicator size="small" color={colors.primary} />
@@ -207,20 +291,23 @@ const StatesDropdown: React.FC<{
   onLayout?: (e: LayoutChangeEvent) => void;
 }> = ({ value, onSelect, error, onLayout }) => {
   const { colors, reduceMotion } = useTheme();
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  // State names themselves stay in English in both languages — they are the
+  // values written to profiles.state and matched against reverse-geocoding.
   const filtered = INDIAN_STATES.filter(st => st.toLowerCase().includes(search.toLowerCase()));
   const borderColor = error ? colors.inputErrorBorder : colors.inputBorder;
   return (
     <View style={s.fieldWrap} onLayout={onLayout}>
       <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-        State
+        {t('auth.stateLabel')}
       </Text>
       <TouchableOpacity
         style={[s.fieldRow, { backgroundColor: colors.inputBackground, borderColor, borderWidth: error ? 2 : 1.5 }]}
         onPress={() => setOpen(true)}
         accessibilityRole="button"
-        accessibilityLabel={value ? `State: ${value}. Change state` : 'Select state'}
+        accessibilityLabel={value ? t('auth.changeStateA11y', { state: value }) : t('auth.selectStateA11y')}
       >
         <Ionicons name="map-outline" size={16} color={colors.textSecondary} />
         <Text
@@ -228,7 +315,7 @@ const StatesDropdown: React.FC<{
           numberOfLines={1}
           maxFontSizeMultiplier={1.3}
         >
-          {value || 'Select State'}
+          {value || t('auth.selectState')}
         </Text>
         <Ionicons name="chevron-down" size={16} color={colors.textTertiary} />
       </TouchableOpacity>
@@ -239,15 +326,17 @@ const StatesDropdown: React.FC<{
           style={[s.modalOverlay, { backgroundColor: colors.overlay }]}
           onPress={() => setOpen(false)}
           accessibilityRole="button"
-          accessibilityLabel="Close state list"
+          accessibilityLabel={t('auth.closeStateList')}
         />
         <View style={[s.ddPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[s.ddHeading, { color: colors.text }]} maxFontSizeMultiplier={1.3}>Select State</Text>
+          <Text style={[s.ddHeading, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+            {t('auth.selectState')}
+          </Text>
           <View style={[s.ddSearch, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
             <Ionicons name="search-outline" size={16} color={colors.textSecondary} />
             <TextInput
               style={[s.fieldInput, { color: colors.text }, WEB_NO_OUTLINE]}
-              placeholder="Search states…"
+              placeholder={t('auth.searchStates')}
               placeholderTextColor={colors.placeholder}
               value={search}
               onChangeText={setSearch}
@@ -290,6 +379,7 @@ const StatesDropdown: React.FC<{
 // ══════════════════════════════════════════════════════
 export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const { colors, isDark, reduceMotion } = useTheme();
+  const { t, i18n } = useTranslation();
   const [isLogin, setIsLogin]       = useState(true);
   const [email, setEmail]           = useState('');
   const [password, setPassword]     = useState('');
@@ -348,7 +438,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     setMsgCallback(() => cb ?? null); setMsgVisible(true);
   };
   const closeMsg = () => { setMsgVisible(false); msgCallback?.(); };
-  const isValidEmail = (t: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
+  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
   const clearError = (key: string) => {
     setErrors(prev => {
@@ -375,7 +465,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       } else {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          showMsg('error', 'Permission Denied', 'Location permission is required to auto-fill.');
+          showMsg('error', t('auth.msgPermissionTitle'), t('auth.msgPermissionBody'));
           return;
         }
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -385,7 +475,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
       const geo = await reverseGeocode(lat, lon);
       if (!geo || (!geo.district && !geo.state)) {
-        showMsg('error', 'Location Unavailable', 'Could not resolve your address. Please enter manually.');
+        showMsg('error', t('auth.msgLocationUnavailableTitle'), t('auth.msgLocationUnavailableBody'));
         return;
       }
 
@@ -398,7 +488,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       }
       if (geo.pincode) setPincode(geo.pincode);
     } catch {
-      showMsg('error', 'Location Error', 'Could not access GPS. Please enter location manually.');
+      showMsg('error', t('auth.msgLocationErrorTitle'), t('auth.msgLocationErrorBody'));
     } finally {
       setFetchLoc(false);
     }
@@ -414,15 +504,15 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
-    if (!email.trim()) next.email = 'Email is required';
-    else if (!isValidEmail(email)) next.email = 'Enter a valid email address';
-    if (!password) next.password = 'Password is required';
+    if (!email.trim()) next.email = t('auth.errEmailRequired');
+    else if (!isValidEmail(email)) next.email = t('auth.errEmailInvalid');
+    if (!password) next.password = t('auth.errPasswordRequired');
     if (!isLogin) {
-      if (!fullName.trim()) next.fullName = 'Full name is required';
-      if (password && password.length < 8) next.password = 'Password must be at least 8 characters';
-      if (password && confirmPw !== password) next.confirmPw = "Passwords don't match";
-      if (!district.trim()) next.district = 'District is required';
-      if (!userState) next.state = 'State is required';
+      if (!fullName.trim()) next.fullName = t('auth.errNameRequired');
+      if (password && password.length < 8) next.password = t('auth.errPasswordShort');
+      if (password && confirmPw !== password) next.confirmPw = t('auth.errPasswordMismatch');
+      if (!district.trim()) next.district = t('auth.errDistrictRequired');
+      if (!userState) next.state = t('auth.errStateRequired');
     }
     setErrors(next);
     if (Object.keys(next).length > 0) {
@@ -459,8 +549,8 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   };
 
   const handleSendCode = async (isResend: boolean) => {
-    if (!rEmail.trim()) { setErrors({ rEmail: 'Email is required' }); return; }
-    if (!isValidEmail(rEmail.trim())) { setErrors({ rEmail: 'Enter a valid email address' }); return; }
+    if (!rEmail.trim()) { setErrors({ rEmail: t('auth.errEmailRequired') }); return; }
+    if (!isValidEmail(rEmail.trim())) { setErrors({ rEmail: t('auth.errEmailInvalid') }); return; }
     setLoading(true);
     const res = await requestResetCode(rEmail);
     setLoading(false);
@@ -473,7 +563,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     setErrors({});
     setResendIn(60);
     if (isResend) {
-      setResendNote('New code sent — the old one no longer works.');
+      setResendNote(t('auth.resendSent'));
     } else {
       setRCode('');
       setResendNote('');
@@ -490,7 +580,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     if (!new RegExp(`^\\d{${OTP_MIN_LENGTH},${OTP_MAX_LENGTH}}$`).test(code)) {
       // Accept 6..10, but name the length the server actually issues — being
       // told "6–10 digits" when every code is 6 reads like the app is unsure.
-      setErrors({ rCode: `Enter the ${OTP_EXPECTED_LENGTH}-digit code from the email` });
+      setErrors({ rCode: t('auth.errCodeFormat', { n: OTP_EXPECTED_LENGTH }) });
       return;
     }
     setLoading(true);
@@ -504,9 +594,9 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
   const handleSetNewPassword = async () => {
     const next: Record<string, string> = {};
-    if (!rPw) next.rPw = 'Password is required';
-    else if (rPw.length < 8) next.rPw = 'Password must be at least 8 characters';
-    if (rPw && rPw2 !== rPw) next.rPw2 = "Passwords don't match";
+    if (!rPw) next.rPw = t('auth.errPasswordRequired');
+    else if (rPw.length < 8) next.rPw = t('auth.errPasswordShort');
+    if (rPw && rPw2 !== rPw) next.rPw2 = t('auth.errPasswordMismatch');
     setErrors(next);
     if (Object.keys(next).length > 0) return;
     setLoading(true);
@@ -535,10 +625,12 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         if (error) {
           setLoading(false);
           if (error.message.includes('Invalid login credentials'))
-            showMsg('error', 'Login Failed', 'Incorrect email or password.');
+            showMsg('error', t('auth.msgLoginFailedTitle'), t('auth.msgLoginFailedBody'));
           else if (error.message.includes('Email not confirmed'))
-            showMsg('error', 'Email Not Verified', 'Please confirm your email before signing in.');
-          else showMsg('error', 'Login Error', error.message);
+            showMsg('error', t('auth.msgEmailUnverifiedTitle'), t('auth.msgEmailUnverifiedBody'));
+          // Unrecognised server text is shown verbatim, in English — a
+          // translated guess about an unknown failure would be a lie.
+          else showMsg('error', t('auth.msgLoginErrorTitle'), error.message);
           return;
         }
         if (data?.session) {
@@ -556,57 +648,57 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           } catch { /* fail open */ }
           setLoading(false);
           if (deactivated) {
-            showMsg(
-              'error',
-              'Account Deactivated',
-              'This account was deactivated by an administrator. Contact your district office to restore access.'
-            );
+            showMsg('error', t('auth.msgDeactivatedTitle'), t('auth.msgDeactivatedBody'));
             return;
           }
           onAuthSuccess();
         } else {
           setLoading(false);
-          showMsg('error', 'Login Failed', 'Unable to sign in. Please try again.');
+          showMsg('error', t('auth.msgLoginFailedTitle'), t('auth.msgSignInUnavailableBody'));
         }
       } else {
         const { data: sd, error: se } = await supabase.auth.signUp({
           email, password,
           options: { data: { full_name: fullName, role, district, state: userState, phone, pincode } },
         });
-        if (se) { setLoading(false); showMsg('error', 'Sign Up Error', se.message); return; }
+        if (se) { setLoading(false); showMsg('error', t('auth.msgSignUpErrorTitle'), se.message); return; }
         if (sd?.user) {
           if (sd.session) {
             // Surface the profile write honestly — never pretend success.
+            // preferred_language carries the choice made on THIS screen to the
+            // server, so push notifications reach her in the language she
+            // signed up in without a detour through Profile.
             const { error: profileError } = await supabase.from('profiles').upsert({
               id: sd.user.id, email, full_name: fullName, role,
               phone: phone || null, district: district || null,
               state: userState || null, is_active: true, created_at: new Date().toISOString(),
+              preferred_language: i18n.language?.startsWith('hi') ? 'hi' : 'en',
             }, { onConflict: 'id' });
             if (profileError) {
               setLoading(false);
               showMsg(
                 'error',
-                'Profile Not Saved',
-                `Your account was created, but your profile details could not be saved (${profileError.message}). Please sign in to try again.`,
+                t('auth.msgProfileNotSavedTitle'),
+                t('auth.msgProfileNotSavedBody', { reason: profileError.message }),
                 () => setIsLogin(true)
               );
               return;
             }
             await new Promise(r => setTimeout(r, 500));
             setLoading(false);
-            showMsg('success', 'Account Created', 'Welcome to HealthDrop.', () => onAuthSuccess());
+            showMsg('success', t('auth.msgAccountCreatedTitle'), t('auth.msgAccountCreatedBody'), () => onAuthSuccess());
           } else {
             setLoading(false);
-            showMsg('success', 'Check Your Email', 'Click the confirmation link we sent to verify your account.', () => setIsLogin(true));
+            showMsg('success', t('auth.msgCheckEmailTitle'), t('auth.msgCheckEmailBody'), () => setIsLogin(true));
           }
         } else {
           setLoading(false);
-          showMsg('error', 'Sign Up Error', 'Unable to create account. Please try again.');
+          showMsg('error', t('auth.msgSignUpErrorTitle'), t('auth.msgSignUpErrorBody'));
         }
       }
     } catch {
       setLoading(false);
-      showMsg('error', 'Unexpected Error', 'Something went wrong. Please try again.');
+      showMsg('error', t('auth.msgUnexpectedTitle'), t('auth.msgUnexpectedBody'));
     }
   };
 
@@ -638,21 +730,28 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
             { backgroundColor: colors.headerBg, borderBottomWidth: 1, borderBottomColor: colors.border },
           ]}
         >
-          <Text style={[s.headerTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-            HealthDrop
-          </Text>
-          <Text style={[s.headerSub, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-            Community health surveillance
-          </Text>
+          <View style={s.headerRow}>
+            <View style={s.headerTextWrap}>
+              {/* Product name — never translated */}
+              <Text style={[s.headerTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                HealthDrop
+              </Text>
+              <Text style={[s.headerSub, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                {t('auth.tagline')}
+              </Text>
+            </View>
+            <LanguageToggle />
+          </View>
         </View>
 
         {/* ── Sign In / Sign Up switcher ── */}
         <View style={[s.topBar, { borderBottomColor: colors.border }]}>
-          {(['Sign In', 'Sign Up'] as const).map((label, i) => {
+          {(['signIn', 'signUp'] as const).map((key, i) => {
             const active = (i === 0) === isLogin;
+            const label = t(`auth.${key}`);
             return (
               <TouchableOpacity
-                key={label}
+                key={key}
                 style={[s.topTab, active && { borderBottomColor: colors.primary }]}
                 onPress={() => switchMode(i === 0)}
                 accessibilityRole="tab"
@@ -686,7 +785,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               <View style={[s.successRow, { backgroundColor: colors.successLight, borderColor: colors.success }]}>
                 <Ionicons name="checkmark-circle" size={18} color={colors.success} />
                 <Text style={[s.successRowTxt, { color: colors.success }]} maxFontSizeMultiplier={1.3}>
-                  Password changed — sign in with your new password.
+                  {t('auth.passwordChanged')}
                 </Text>
               </View>
             )}
@@ -696,35 +795,37 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 style={s.backRow}
                 onPress={exitReset}
                 accessibilityRole="button"
-                accessibilityLabel="Back to sign in"
+                accessibilityLabel={t('auth.backToSignIn')}
               >
                 <Ionicons name="arrow-back" size={18} color={colors.textSecondary} />
                 <Text style={[s.backTxt, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                  Back to sign in
+                  {t('auth.backToSignIn')}
                 </Text>
               </TouchableOpacity>
             )}
 
             {resetStep && (
               <Text style={[s.sectionLabel, { color: colors.textTertiary, marginTop: 0 }]} maxFontSizeMultiplier={1.3}>
-                {`Step ${resetStep === 'email' ? 1 : resetStep === 'code' ? 2 : 3} of 3`}
+                {t('auth.stepOf', { n: resetStep === 'email' ? 1 : resetStep === 'code' ? 2 : 3 })}
               </Text>
             )}
 
             <Text style={[s.heading, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-              {resetStep ? 'Reset your password' : isLogin ? 'Sign in to continue' : 'Create your account'}
+              {resetStep
+                ? t('auth.resetHeading')
+                : isLogin ? t('auth.signInHeading') : t('auth.signUpHeading')}
             </Text>
 
             {resetStep === 'email' ? (
               /* ══ RECOVERY 1/3 — EMAIL ═════════════════ */
               <>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  We'll email you a code to reset your password.
+                  {t('auth.resetEmailHelp')}
                 </Text>
                 <LabeledField
-                  label="Email" icon="at-outline" value={rEmail}
-                  onChange={(t) => { setREmail(t); clearError('rEmail'); }}
-                  placeholder="Email address" keyboardType="email-address" autoComplete="email"
+                  label={t('auth.emailLabel')} icon="at-outline" value={rEmail}
+                  onChange={(txt) => { setREmail(txt); clearError('rEmail'); }}
+                  placeholder={t('auth.emailPlaceholder')} keyboardType="email-address" autoComplete="email"
                   error={errors.rEmail}
                 />
               </>
@@ -733,11 +834,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               /* ══ RECOVERY 2/3 — CODE ══════════════════ */
               <>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  {`Enter the code we sent to ${rEmail.trim()}.`}
+                  {t('auth.codeSentTo', { email: rEmail.trim() })}
                 </Text>
                 <View style={s.fieldWrap}>
                   <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                    Code from the email
+                    {t('auth.codeLabel')}
                   </Text>
                   <TextInput
                     style={[
@@ -753,7 +854,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                       WEB_NO_OUTLINE,
                     ]}
                     value={rCode}
-                    onChangeText={(t) => { setRCode(t.replace(/\D/g, '').slice(0, OTP_MAX_LENGTH)); clearError('rCode'); }}
+                    onChangeText={(txt) => { setRCode(txt.replace(/\D/g, '').slice(0, OTP_MAX_LENGTH)); clearError('rCode'); }}
                     placeholder="••••••"
                     placeholderTextColor={colors.placeholder}
                     keyboardType="number-pad"
@@ -761,7 +862,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                     textContentType="oneTimeCode"
                     onFocus={() => setCodeFocused(true)}
                     onBlur={() => setCodeFocused(false)}
-                    accessibilityLabel="Code from the email"
+                    accessibilityLabel={t('auth.codeLabel')}
                   />
                   <FieldError message={errors.rCode} />
                 </View>
@@ -774,7 +875,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   </View>
                 )}
                 <Text style={[s.disclosure, { color: colors.textTertiary, marginTop: spacing.xs }]} maxFontSizeMultiplier={1.3}>
-                  Check your spam folder if it doesn't arrive.
+                  {t('auth.spamHint')}
                 </Text>
                 <TouchableOpacity
                   style={s.resendBtn}
@@ -782,13 +883,13 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   disabled={resendIn > 0 || loading}
                   accessibilityRole="button"
                   accessibilityState={{ disabled: resendIn > 0 || loading }}
-                  accessibilityLabel={resendIn > 0 ? `Resend code available in ${resendIn} seconds` : 'Resend code'}
+                  accessibilityLabel={resendIn > 0 ? t('auth.resendInA11y', { n: resendIn }) : t('auth.resend')}
                 >
                   <Text
                     style={[s.resendTxt, { color: resendIn > 0 ? colors.textTertiary : colors.primary }]}
                     maxFontSizeMultiplier={1.3}
                   >
-                    {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
+                    {resendIn > 0 ? t('auth.resendIn', { n: resendIn }) : t('auth.resend')}
                   </Text>
                 </TouchableOpacity>
               </>
@@ -797,35 +898,35 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               /* ══ RECOVERY 3/3 — NEW PASSWORD ══════════ */
               <>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  Choose a new password — at least 8 characters.
+                  {t('auth.newPasswordHelp')}
                 </Text>
                 <LabeledField
-                  label="New Password" icon="lock-closed-outline" value={rPw}
-                  onChange={(t) => { setRPw(t); clearError('rPw'); }}
-                  placeholder="New password (min 8 chars)" secure={!showRPw} autoComplete="new-password"
+                  label={t('auth.newPasswordLabel')} icon="lock-closed-outline" value={rPw}
+                  onChange={(txt) => { setRPw(txt); clearError('rPw'); }}
+                  placeholder={t('auth.newPasswordPlaceholder')} secure={!showRPw} autoComplete="new-password"
                   error={errors.rPw}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowRPw(p => !p)}
                       hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
-                      accessibilityLabel={showRPw ? 'Hide password' : 'Show password'}
+                      accessibilityLabel={showRPw ? t('auth.hidePassword') : t('auth.showPassword')}
                     >
                       <Ionicons name={showRPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
                   }
                 />
                 <LabeledField
-                  label="Confirm New Password" icon="lock-closed-outline" value={rPw2}
-                  onChange={(t) => { setRPw2(t); clearError('rPw2'); }}
-                  placeholder="Confirm new password" secure={!showRPw2} autoComplete="new-password"
-                  error={errors.rPw2 || (rPw2.length > 0 && rPw2 !== rPw ? "Passwords don't match" : undefined)}
+                  label={t('auth.confirmNewPasswordLabel')} icon="lock-closed-outline" value={rPw2}
+                  onChange={(txt) => { setRPw2(txt); clearError('rPw2'); }}
+                  placeholder={t('auth.confirmNewPasswordPlaceholder')} secure={!showRPw2} autoComplete="new-password"
+                  error={errors.rPw2 || (rPw2.length > 0 && rPw2 !== rPw ? t('auth.errPasswordMismatch') : undefined)}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowRPw2(p => !p)}
                       hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
-                      accessibilityLabel={showRPw2 ? 'Hide password' : 'Show password'}
+                      accessibilityLabel={showRPw2 ? t('auth.hidePassword') : t('auth.showPassword')}
                     >
                       <Ionicons name={showRPw2 ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
@@ -837,16 +938,16 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               /* ══ SIGN IN ══════════════════════════════ */
               <>
                 <LabeledField
-                  label="Email" icon="at-outline" value={email}
-                  onChange={(t) => { setEmail(t); clearError('email'); }}
-                  placeholder="Email address" keyboardType="email-address" autoComplete="email"
+                  label={t('auth.emailLabel')} icon="at-outline" value={email}
+                  onChange={(txt) => { setEmail(txt); clearError('email'); }}
+                  placeholder={t('auth.emailPlaceholder')} keyboardType="email-address" autoComplete="email"
                   error={errors.email}
                   onLayout={trackY('email')}
                 />
                 <LabeledField
-                  label="Password" icon="lock-closed-outline" value={password}
-                  onChange={(t) => { setPassword(t); clearError('password'); }}
-                  placeholder="Password" secure={!showPw} autoComplete="password"
+                  label={t('auth.passwordLabel')} icon="lock-closed-outline" value={password}
+                  onChange={(txt) => { setPassword(txt); clearError('password'); }}
+                  placeholder={t('auth.passwordPlaceholder')} secure={!showPw} autoComplete="password"
                   error={errors.password}
                   onLayout={trackY('password')}
                   rightElement={
@@ -854,7 +955,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                       onPress={() => setShowPw(p => !p)}
                       hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
-                      accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                      accessibilityLabel={showPw ? t('auth.hidePassword') : t('auth.showPassword')}
                     >
                       <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
@@ -864,10 +965,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   style={s.forgotBtn}
                   onPress={openReset}
                   accessibilityRole="button"
-                  accessibilityLabel="Forgot password? Reset it with an emailed code"
+                  accessibilityLabel={t('auth.forgotA11y')}
                 >
                   <Text style={[s.forgotTxt, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>
-                    Forgot password?
+                    {t('auth.forgot')}
                   </Text>
                 </TouchableOpacity>
               </>
@@ -876,35 +977,36 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               /* ══ SIGN UP ══════════════════════════════ */
               <>
                 <LabeledField
-                  label="Full Name" icon="person-outline" value={fullName}
-                  onChange={(t) => { setFullName(t); clearError('fullName'); }}
-                  placeholder="Full name" autoCapitalize="words"
+                  label={t('auth.fullNameLabel')} icon="person-outline" value={fullName}
+                  onChange={(txt) => { setFullName(txt); clearError('fullName'); }}
+                  placeholder={t('auth.fullNamePlaceholder')} autoCapitalize="words"
                   error={errors.fullName}
                   onLayout={trackY('fullName')}
                 />
                 <LabeledField
-                  label="Email" icon="at-outline" value={email}
-                  onChange={(t) => { setEmail(t); clearError('email'); }}
-                  placeholder="Email address" keyboardType="email-address" autoComplete="email"
+                  label={t('auth.emailLabel')} icon="at-outline" value={email}
+                  onChange={(txt) => { setEmail(txt); clearError('email'); }}
+                  placeholder={t('auth.emailPlaceholder')} keyboardType="email-address" autoComplete="email"
                   error={errors.email}
                   onLayout={trackY('email')}
                 />
                 <LabeledField
-                  label="Phone (Optional)" icon="call-outline" value={phone}
+                  label={t('auth.phoneLabel')} icon="call-outline" value={phone}
                   onChange={setPhone}
-                  placeholder="Phone number" keyboardType="phone-pad" autoComplete="tel"
+                  placeholder={t('auth.phonePlaceholder')} keyboardType="phone-pad" autoComplete="tel"
                 />
 
                 {/* Role */}
                 <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                  Role
+                  {t('auth.roleSection')}
                 </Text>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  Official roles are provisioned by your district administrator.
+                  {t('auth.roleNote')}
                 </Text>
                 <View style={s.roleWrap}>
                   {SIGNUP_ROLES.map(r => {
                     const active = role === r.value;
+                    const desc = t(r.descKey);
                     return (
                       <TouchableOpacity
                         key={r.value}
@@ -917,7 +1019,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                         onPress={() => setRole(r.value)}
                         accessibilityRole="button"
                         accessibilityState={{ selected: active }}
-                        accessibilityLabel={`Role: ${r.label}. ${r.desc}`}
+                        accessibilityLabel={t('auth.roleA11y', { role: r.label, desc })}
                       >
                         <Ionicons
                           name={(active ? r.icon : `${r.icon}-outline`) as any}
@@ -935,7 +1037,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                             style={[s.roleDesc, { color: active ? colors.onPrimary : colors.textSecondary }]}
                             maxFontSizeMultiplier={1.3}
                           >
-                            {r.desc}
+                            {desc}
                           </Text>
                         </View>
                         {active && <Ionicons name="checkmark-circle" size={20} color={colors.onPrimary} />}
@@ -946,14 +1048,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
                 {/* Location */}
                 <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                  Location
+                  {t('auth.locationSection')}
                 </Text>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  Your location is sent to OpenStreetMap to fill district/state.
+                  {t('auth.locationNote')}
                 </Text>
                 <DistrictField
                   value={district}
-                  onChange={(t) => { setDistrict(t); clearError('district'); }}
+                  onChange={(txt) => { setDistrict(txt); clearError('district'); }}
                   loading={fetchingLoc}
                   onGPS={fetchLocation}
                   error={errors.district}
@@ -966,19 +1068,19 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   onLayout={trackY('state')}
                 />
                 <LabeledField
-                  label="Pincode (Optional)" icon="pin-outline" value={pincode}
+                  label={t('auth.pincodeLabel')} icon="pin-outline" value={pincode}
                   onChange={setPincode}
-                  placeholder="Pincode" keyboardType="numeric"
+                  placeholder={t('auth.pincodePlaceholder')} keyboardType="numeric"
                 />
 
                 {/* Password */}
                 <Text style={[s.sectionLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                  Password
+                  {t('auth.passwordSection')}
                 </Text>
                 <LabeledField
-                  label="Password" icon="lock-closed-outline" value={password}
-                  onChange={(t) => { setPassword(t); clearError('password'); }}
-                  placeholder="Create password (min 8 chars)" secure={!showPw} autoComplete="new-password"
+                  label={t('auth.passwordLabel')} icon="lock-closed-outline" value={password}
+                  onChange={(txt) => { setPassword(txt); clearError('password'); }}
+                  placeholder={t('auth.createPasswordPlaceholder')} secure={!showPw} autoComplete="new-password"
                   error={errors.password}
                   onLayout={trackY('password')}
                   rightElement={
@@ -986,24 +1088,24 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                       onPress={() => setShowPw(p => !p)}
                       hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
-                      accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                      accessibilityLabel={showPw ? t('auth.hidePassword') : t('auth.showPassword')}
                     >
                       <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
                   }
                 />
                 <LabeledField
-                  label="Confirm Password" icon="lock-closed-outline" value={confirmPw}
-                  onChange={(t) => { setConfirmPw(t); clearError('confirmPw'); }}
-                  placeholder="Confirm password" secure={!showCPw} autoComplete="new-password"
-                  error={errors.confirmPw || (confirmPw.length > 0 && confirmPw !== password ? "Passwords don't match" : undefined)}
+                  label={t('auth.confirmPasswordLabel')} icon="lock-closed-outline" value={confirmPw}
+                  onChange={(txt) => { setConfirmPw(txt); clearError('confirmPw'); }}
+                  placeholder={t('auth.confirmPasswordPlaceholder')} secure={!showCPw} autoComplete="new-password"
+                  error={errors.confirmPw || (confirmPw.length > 0 && confirmPw !== password ? t('auth.errPasswordMismatch') : undefined)}
                   onLayout={trackY('confirmPw')}
                   rightElement={
                     <TouchableOpacity
                       onPress={() => setShowCPw(p => !p)}
                       hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       accessibilityRole="button"
-                      accessibilityLabel={showCPw ? 'Hide password' : 'Show password'}
+                      accessibilityLabel={showCPw ? t('auth.hidePassword') : t('auth.showPassword')}
                     >
                       <Ionicons name={showCPw ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
@@ -1027,21 +1129,24 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               }
               disabled={loading}
               accessibilityRole="button"
+              // Sentence-case action labels, separate from the Title-Case
+              // button text: screen readers announce these, and the e2e login
+              // driver matches [aria-label="Sign in"] exactly.
               accessibilityLabel={
-                resetStep === 'email' ? 'Send code'
-                : resetStep === 'code' ? 'Verify code'
-                : resetStep === 'password' ? 'Set new password'
-                : isLogin ? 'Sign in' : 'Create account'
+                resetStep === 'email' ? t('auth.a11ySendCode')
+                : resetStep === 'code' ? t('auth.a11yVerifyCode')
+                : resetStep === 'password' ? t('auth.a11ySetNewPassword')
+                : isLogin ? t('auth.a11ySignIn') : t('auth.a11yCreateAccount')
               }
             >
               {loading
                 ? <ActivityIndicator size="small" color={colors.onPrimary} />
                 : (
                   <Text style={[s.submitTxt, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
-                    {resetStep === 'email' ? 'Send Code'
-                      : resetStep === 'code' ? 'Verify Code'
-                      : resetStep === 'password' ? 'Set New Password'
-                      : isLogin ? 'Sign In' : 'Create Account'}
+                    {resetStep === 'email' ? t('auth.sendCode')
+                      : resetStep === 'code' ? t('auth.verifyCode')
+                      : resetStep === 'password' ? t('auth.setNewPassword')
+                      : isLogin ? t('auth.signIn') : t('auth.createAccount')}
                   </Text>
                 )}
             </Pressable>
@@ -1051,7 +1156,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           <View style={s.footer}>
             <Ionicons name="shield-checkmark-outline" size={16} color={colors.textTertiary} />
             <Text style={[s.footerTxt, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-              Secured by Supabase · Encrypted at rest
+              {t('auth.footer')}
             </Text>
           </View>
         </ScrollView>
@@ -1079,9 +1184,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 ]}
                 onPress={closeMsg}
                 accessibilityRole="button"
-                accessibilityLabel="OK"
+                accessibilityLabel={t('common.ok')}
               >
-                <Text style={[s.submitTxt, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>OK</Text>
+                <Text style={[s.submitTxt, { color: colors.onPrimary }]} maxFontSizeMultiplier={1.3}>
+                  {t('common.ok')}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -1104,8 +1211,26 @@ const s = StyleSheet.create({
     paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? spacing.xl) + spacing.sm : spacing.lg,
     paddingBottom: spacing.md,
   },
+  headerRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  headerTextWrap: { flex: 1 },
   headerTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   headerSub:   { fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 2 },
+
+  /* Language toggle — segmented, one 48dp target per language */
+  langWrap: {
+    flexDirection: 'row',
+    borderRadius: radii.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  langBtn: {
+    minHeight: 48,
+    minWidth: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  langTxt: { fontSize: 14, lineHeight: 20 },
 
   /* Mode switcher */
   topBar: { flexDirection: 'row', borderBottomWidth: 1 },

@@ -15,6 +15,11 @@
 //   watchdog that falls back to the district list when tiles
 //   repeatedly fail ("Map tiles need internet — data below is
 //   from your last sync")
+// - Honest EMPTY states (BRK-05): an empty alert list only earns
+//   the green "all clear" when the server really has no active
+//   alert. A district filter that emptied a non-empty result, a
+//   profile with no district, and a check that never completed
+//   each say so in their own words.
 // =====================================================
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -27,8 +32,9 @@ import { useNetInfo } from '@react-native-community/netinfo';
 import { supabase } from '../../lib/supabase';
 import { Profile } from '../../types';
 import { useTheme, Theme } from '../../lib/ThemeContext';
-import { AlertCard, EmptyState, getSeverityColor } from '../dashboards/DashboardShared';
-import { filterAlertsForProfile } from '../../lib/services/alertRadius';
+import { AlertCard, EmptyState, SkeletonBlock, getSeverityColor } from '../dashboards/DashboardShared';
+import { ALERT_RADIUS_KM, filterAlertsForProfile, isRadiusScopedRole } from '../../lib/services/alertRadius';
+import { computeCompleteness } from '../../lib/services/profileCompleteness';
 import { LEAFLET_CSS, LEAFLET_JS } from './leafletAssets';
 
 // Import WebView for native map rendering
@@ -735,6 +741,10 @@ const MapPanel: React.FC<MapPanelProps> = ({
   // Tile watchdog verdict — the map shell (vendored Leaflet) rendered fine but
   // tiles keep failing. Distinct from netinfo-offline and from data-fetch errors.
   const [tilesFailed, setTilesFailed] = useState(false);
+  // How many alert rows the client-side district filter dropped from the last
+  // fetch (BRK-05). A map with no pins must never be read as "nothing is
+  // happening" when the server did return rows — it means we hid them.
+  const [alertsHiddenByScope, setAlertsHiddenByScope] = useState(0);
 
   // Give tiles another chance when the layer changes or connectivity returns.
   useEffect(() => { setTilesFailed(false); }, [activeLayer, offline]);
@@ -807,6 +817,7 @@ const MapPanel: React.FC<MapPanelProps> = ({
   const fetchAlertLayerData = useCallback(async () => {
     setLoadingData(true);
     setLayerErrors(prev => ({ ...prev, alerts: undefined }));
+    setAlertsHiddenByScope(0);
     try {
       const runAlertQuery = async (selectClause: string) => {
         let q = supabase
@@ -827,7 +838,11 @@ const MapPanel: React.FC<MapPanelProps> = ({
         console.error('Failed to load alert layer data:', error);
         setLayerErrors(prev => ({ ...prev, alerts: "Couldn't load alert data — check connection" }));
       } else if (data) {
-        setAlertLayerData(filterAlertsForProfile(data as unknown as AlertLayerRow[], profile));
+        const rows = data as unknown as AlertLayerRow[];
+        const inScope = filterAlertsForProfile(rows, profile);
+        // Remember what the district filter removed so the map can admit it.
+        setAlertsHiddenByScope(rows.length - inScope.length);
+        setAlertLayerData(inScope);
       }
     } catch (error) {
       console.error('Unexpected alert layer fetch error:', error);
@@ -898,6 +913,25 @@ const MapPanel: React.FC<MapPanelProps> = ({
       fetchLayerData();
     }
   }, [activeLayer, fetchAlertLayerData, fetchLayerData]);
+
+  // An alerts map with no pins has three different meanings and only one of
+  // them is calm. Say which one this is, right under the map (BRK-05).
+  const districtNotSet = React.useMemo(
+    () => isRadiusScopedRole(profile.role) && computeCompleteness(profile).missing.includes('district'),
+    [profile],
+  );
+  const alertScopeNotice = React.useMemo(() => {
+    if (activeLayer !== 'alerts' || offline || activeLayerError) return null;
+    if (districtNotSet) {
+      return "Your district isn't set, so no alert can be matched to you. Add it in Profile — an empty map here is not an all-clear.";
+    }
+    if (alertsHiddenByScope > 0) {
+      const n = alertsHiddenByScope;
+      const where = profile.district ? `${profile.district} and ${ALERT_RADIUS_KM} km around it` : `your area`;
+      return `${n} active alert${n === 1 ? ' is' : 's are'} not on this map — ${n === 1 ? 'it is' : 'they are'} outside ${where}.`;
+    }
+    return null;
+  }, [activeLayer, offline, activeLayerError, districtNotSet, alertsHiddenByScope, profile.district]);
 
   const showReportOverlay = !offline && !activeLayerError && !tilesFailed && (activeLayer === 'disease' || activeLayer === 'water') && reportItems.length > 0;
   const showAlertOverlay = !offline && !activeLayerError && !tilesFailed && !!isExpanded && activeLayer === 'alerts' && alertSource.length > 0;
@@ -1071,6 +1105,18 @@ const MapPanel: React.FC<MapPanelProps> = ({
         )}
       </View>
 
+      {/* Scope confession — the pins on this map are filtered client-side, and
+          "no pins" must never be mistaken for "nothing is happening". */}
+      {alertScopeNotice && (
+        <View
+          style={[mp.scopeNotice, { backgroundColor: colors.warningBg, borderColor: colors.warning }]}
+          accessibilityLiveRegion="polite"
+        >
+          <Ionicons name="alert-circle-outline" size={14} color={colors.warning} />
+          <Text style={[mp.scopeNoticeText, { color: colors.text }]}>{alertScopeNotice}</Text>
+        </View>
+      )}
+
       {/* Layer chips — selection is never conveyed by tint alone */}
       <View style={[mp.filterBar, isExpanded ? mp.filterBarExpanded : mp.filterBarInline]}>
         <View style={mp.filterContent}>
@@ -1180,6 +1226,19 @@ const mp = StyleSheet.create({
   tilesFallbackRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tilesFallbackDot: { width: 8, height: 8, borderRadius: 4 },
   tilesFallbackRowText: { fontSize: 12, lineHeight: 16, fontVariant: ['tabular-nums'] },
+  // Scope confession strip — wraps rather than truncates; the sentence is the
+  // whole point of it, so it may never be clipped at 360dp.
+  scopeNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderRadius: 8,
+  },
+  scopeNoticeText: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '600' },
   filterBar: { marginTop: 8, marginBottom: 2 },
   filterBarInline: { minHeight: 48 },
   filterBarExpanded: { minHeight: 56 },
@@ -1240,6 +1299,69 @@ const mp = StyleSheet.create({
 });
 
 // ══════════════════════════════════════════════════════
+//  Why is the alert list empty?  (BRK-05)
+// ══════════════════════════════════════════════════════
+// The `alerts` we are handed have already been through
+// filterAlertsForProfile on the caller's side: an exact district-string match,
+// widened to ALERT_RADIUS_KM only for the pairs that both appear in a 105-entry
+// hardcoded gazetteer. So an empty array means one of four different things,
+// and exactly one of them deserves the green tick. Telling a health worker her
+// district is clear when three alerts are live is the most dangerous lie this
+// app can tell, so when the list is empty we go and ask the server whether it
+// really is.
+type AlertsEmptyReason =
+  | { kind: 'probing' }                        // we don't know yet — skeleton, never a tick
+  | { kind: 'clear' }                          // server has none: the calm state is TRUE
+  | { kind: 'scoped-out'; hidden: number }     // rows exist, the district filter ate them
+  | { kind: 'no-district' }                    // profile has no district: nothing can match
+  | { kind: 'unconfirmed'; offline: boolean }; // the check failed — say so, offer retry
+
+/** Server-side truth for "are there any active alerts at all?".
+ *  Runs only while the list is empty, and counts with head:true — no rows,
+ *  no payload; the cost of honesty here is one HEAD request. */
+function useAlertsEmptyReason(profile: Profile, isEmpty: boolean, offline: boolean) {
+  const [reason, setReason] = useState<AlertsEmptyReason>({ kind: 'probing' });
+  const [retryToken, setRetryToken] = useState(0);
+  // 'Not specified' is a provisioning default, not a district — one live
+  // volunteer profile holds exactly that string and would otherwise be told,
+  // in green, that all is well forever.
+  const districtNotSet =
+    isRadiusScopedRole(profile.role) && computeCompleteness(profile).missing.includes('district');
+
+  useEffect(() => {
+    if (!isEmpty) return;
+    if (districtNotSet) { setReason({ kind: 'no-district' }); return; }
+
+    let cancelled = false;
+    setReason({ kind: 'probing' });
+    (async () => {
+      try {
+        const { count, error } = await supabase
+          .from('health_alerts')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'active')
+          .eq('approval_status', 'approved');
+        if (cancelled) return;
+        if (error || count === null) {
+          console.error('Alert all-clear check failed:', error);
+          setReason({ kind: 'unconfirmed', offline });
+          return;
+        }
+        setReason(count > 0 ? { kind: 'scoped-out', hidden: count } : { kind: 'clear' });
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Alert all-clear check failed:', e);
+        setReason({ kind: 'unconfirmed', offline });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isEmpty, districtNotSet, offline, retryToken]);
+
+  const retry = useCallback(() => setRetryToken(n => n + 1), []);
+  return { reason, retry };
+}
+
+// ══════════════════════════════════════════════════════
 //  MapAndAlertsSection — EXPORTED — used by dashboards
 //  Renders [MAP | ALERTS] side by side
 // ══════════════════════════════════════════════════════
@@ -1269,6 +1391,11 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
   // 412px browser window get the same single column, a tablet gets two.
   const { width: windowWidth } = useWindowDimensions();
   const isNarrow = windowWidth < STACK_BREAKPOINT;
+  const netInfo = useNetInfo();
+  // NetInfo reports isInternetReachable === null before the first probe — treat as online.
+  const offline = netInfo.isConnected === false || netInfo.isInternetReachable === false;
+  const { reason: emptyReason, retry: retryEmptyReason } =
+    useAlertsEmptyReason(profile, alerts.length === 0, offline);
   const [expanded,    setExpanded   ] = useState(false);
   const [userLat,     setUserLat    ] = useState<number | undefined>(getCachedLocation()?.lat);
   const [userLon,     setUserLon    ] = useState<number | undefined>(getCachedLocation()?.lon);
@@ -1362,6 +1489,96 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
       setLocating(false);
     }
   }, [showLocationAlert]);
+
+  // The four legitimate faces of an empty alert list. Only 'clear' has earned
+  // the green tick; every other branch names what actually happened, because a
+  // worker who reads "District is Clear" will stop looking.
+  const renderEmptyAlerts = () => {
+    switch (emptyReason.kind) {
+      case 'probing':
+        return (
+          <View style={s.emptyProbing} accessible accessibilityLabel="Checking whether any alerts are active">
+            <SkeletonBlock height={72} radius={12} />
+            <SkeletonBlock height={72} radius={12} style={s.emptyProbingGap} />
+          </View>
+        );
+
+      case 'no-district':
+        return (
+          <View accessibilityLiveRegion="polite">
+            <EmptyState
+              icon="location-outline"
+              color={colors.warning}
+              title="Your district isn't set"
+              subtitle="Alerts are matched to your district, so none can reach you yet. This is not an all-clear — open Profile and set your district."
+            />
+          </View>
+        );
+
+      case 'scoped-out': {
+        const n = emptyReason.hidden;
+        const plural = n === 1 ? '' : 's';
+        const scoped = isRadiusScopedRole(profile.role);
+        return (
+          <View accessibilityLiveRegion="polite">
+            <EmptyState
+              icon="alert-circle-outline"
+              color={colors.warning}
+              title={scoped
+                ? `${n} active alert${plural} — none in your area`
+                : `${n} active alert${plural} not shown here`}
+              subtitle={scoped
+                ? `This list only covers ${profile.district} and ${ALERT_RADIUS_KM} km around it. ${n === 1 ? 'The one active alert is' : `All ${n} active alerts are`} outside that, so this is not an all-clear.`
+                : `The server has ${n} active alert${plural}, but none of them reached this list. This is not an all-clear.`}
+            />
+            {onViewAllAlerts && (
+              <TouchableOpacity
+                style={[s.emptyAction, { borderColor: colors.warning, backgroundColor: colors.surface }]}
+                onPress={onViewAllAlerts}
+                accessibilityRole="button"
+                accessibilityLabel={`See all ${n} active alert${plural}`}
+              >
+                <Ionicons name="list-outline" size={16} color={isDark ? colors.primary : colors.primaryDark} />
+                <Text style={[s.emptyActionText, { color: isDark ? colors.primary : colors.primaryDark }]} maxFontSizeMultiplier={1.3}>
+                  See the full alert list
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        );
+      }
+
+      case 'unconfirmed':
+        return (
+          <View accessibilityLiveRegion="polite">
+            <EmptyState
+              icon={emptyReason.offline ? 'cloud-offline-outline' : 'alert-circle-outline'}
+              color={colors.danger}
+              title={emptyReason.offline
+                ? "You're offline — alerts not confirmed"
+                : "Couldn't check for active alerts"}
+              subtitle="Nothing is listed, but we could not reach the server to confirm that. Do not read this as an all-clear."
+            />
+            <TouchableOpacity
+              style={[s.emptyAction, { borderColor: colors.danger, backgroundColor: colors.surface }]}
+              onPress={retryEmptyReason}
+              accessibilityRole="button"
+              accessibilityLabel="Check again for active alerts"
+            >
+              <Ionicons name="refresh-outline" size={16} color={colors.danger} />
+              <Text style={[s.emptyActionText, { color: colors.danger }]} maxFontSizeMultiplier={1.3}>
+                Check again
+              </Text>
+            </TouchableOpacity>
+          </View>
+        );
+
+      case 'clear':
+      default:
+        // Verified against the server: there really is nothing active.
+        return <EmptyState icon="checkmark-circle-outline" color={colors.success} title={emptyTitle} subtitle={emptySubtitle} />;
+    }
+  };
 
   return (
     <>
@@ -1503,7 +1720,7 @@ export const MapAndAlertsSection: React.FC<MapAndAlertsSectionProps> = ({
             onContentSizeChange={(_, h) => setAlertsContentHeight(h)}
           >
             {alerts.length === 0
-              ? <EmptyState icon="checkmark-circle-outline" color={colors.success} title={emptyTitle} subtitle={emptySubtitle} />
+              ? renderEmptyAlerts()
               : alerts.map(a => (
                   <AlertCard
                     key={a.id}
@@ -1659,6 +1876,26 @@ const s = StyleSheet.create({
     gap: 6,
   },
   readMoreText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  // Empty-state affordances — full 48dp because they are the only way out of
+  // the "we hid your alerts" / "we couldn't check" states.
+  emptyProbing: { paddingVertical: 4 },
+  emptyProbingGap: { marginTop: 8 },
+  emptyAction: {
+    marginTop: 8,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  emptyActionText: {
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',

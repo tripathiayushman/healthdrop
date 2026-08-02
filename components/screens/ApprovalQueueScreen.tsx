@@ -5,7 +5,7 @@
 // hairline dividers, token-driven status pills, 4-state
 // data region, One-Hand Action Bar on the detail modal.
 // =====================================================
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, Modal, ActivityIndicator, RefreshControl,
@@ -67,6 +67,58 @@ interface HealthAlert {
 }
 
 type QueueItem = DiseaseReport | WaterReport | Campaign | HealthAlert;
+
+/**
+ * One network page. Twenty-five rows fill roughly three screens on a 412 dp
+ * phone — an officer clears the top of the queue long before page two, and a
+ * district with a real backlog no longer parses the whole table to open this
+ * screen.
+ */
+const PAGE_SIZE = 25;
+
+const TABLES: Record<QueueTab, string> = {
+  disease:   'disease_reports',
+  water:     'water_quality_reports',
+  campaigns: 'health_campaigns',
+  alerts:    'health_alerts',
+};
+
+/**
+ * Exactly the columns the row and the detail modal render — never `*`.
+ * `select('*')` on the two report tables also drags down `location_geo`, a
+ * PostGIS geography blob no screen has ever shown, on every queue open and
+ * again after every approve/reject.
+ *
+ * The campaigns list is shorter than the `Campaign` interface on purpose:
+ * `title`, `name`, `target_population` and `volunteers_needed` are NOT columns
+ * on `health_campaigns` (verified against the live schema), so naming them
+ * would 42703 the entire query. They came back undefined under `select('*')`
+ * too — nothing on screen changes.
+ */
+const COLUMNS: Record<QueueTab, string> = {
+  disease:
+    'id,disease_name,disease_type,severity,cases_count,deaths_count,location_name,district,state,' +
+    'symptoms,age_group,gender,treatment_status,latitude,longitude,reporter_id,status,approval_status,created_at',
+  water:
+    'id,source_name,source_type,location_name,district,state,overall_quality,contamination_type,' +
+    'ph_level,turbidity,latitude,longitude,reporter_id,status,approval_status,notes,created_at',
+  campaigns:
+    'id,campaign_name,campaign_type,district,state,start_date,end_date,status,approval_status,created_at',
+  alerts:
+    'id,title,description,alert_type,urgency_level,location_name,district,state,status,created_by,' +
+    'approval_status,affected_population,cases_reported,disease_or_issue,immediate_actions,' +
+    'precautionary_measures,created_at',
+};
+
+/** How far a tab has been paged / how many rows sit behind it, per stream. */
+type TabCursor = { pending: number; decided: number };
+type TabCursors = Record<QueueTab, TabCursor>;
+const zeroCursors = (): TabCursors => ({
+  disease:   { pending: 0, decided: 0 },
+  water:     { pending: 0, decided: 0 },
+  campaigns: { pending: 0, decided: 0 },
+  alerts:    { pending: 0, decided: 0 },
+});
 
 /** Legacy disease-severity vocab → severity token key */
 const severityKey = (s: string): string => {
@@ -138,11 +190,34 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch]       = useState('');
 
+  // Rows loaded SO FAR, already in queue order. Not the whole table any more.
   const [diseaseReports, setDiseaseReports] = useState<DiseaseReport[]>([]);
   const [waterReports, setWaterReports]     = useState<WaterReport[]>([]);
   const [campaigns, setCampaigns]           = useState<Campaign[]>([]);
   const [alerts, setAlerts]                 = useState<HealthAlert[]>([]);
-  const [pendingCounts, setPendingCounts]   = useState({ disease: 0, water: 0, campaigns: 0, alerts: 0 });
+  // Paging truth: how much is on the phone, and how much exists behind it.
+  const [loadedCounts, setLoadedCounts] = useState<TabCursors>(zeroCursors);
+  const [totalCounts, setTotalCounts]   = useState<TabCursors>(zeroCursors);
+  const [loadingMore, setLoadingMore]   = useState(false);
+  const [moreError, setMoreError]       = useState<string | null>(null);
+  // Every load() invalidates whatever page fetch is still in flight. Without
+  // this, a page that lands after an approve-triggered reload appends itself
+  // onto a list that no longer matches its cursor — and the rows the cursor
+  // then skips are pending items nobody ever sees.
+  const loadGen = useRef(0);
+
+  // Badges and the "PENDING · n" header read a head:true COUNT of the whole
+  // filtered table, never the length of whichever page happens to be down.
+  // A paged list that counted its own rows would under-report the backlog.
+  const pendingCounts = {
+    disease:   totalCounts.disease.pending,
+    water:     totalCounts.water.pending,
+    campaigns: totalCounts.campaigns.pending,
+    alerts:    totalCounts.alerts.pending,
+  };
+  const loadedOfTab = loadedCounts[tab].pending + loadedCounts[tab].decided;
+  const totalOfTab  = totalCounts[tab].pending + totalCounts[tab].decided;
+  const hasMore     = loadedOfTab < totalOfTab;
 
   // C·02 evidence meta — supplementary; the card never blocks on these.
   const [reporterStats, setReporterStats] = useState<Map<string, ReporterTrackRecord>>(new Map());
@@ -187,14 +262,158 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     : allTabs;
 
   // ── Load ─────────────────────────────────────────────────────────────────
+  // Scoping is unchanged: only a district_officer with a district actually set
+  // is narrowed, and only on the three district-carrying tables. Alerts stay
+  // national, as before (and only admins ever load that tab).
+  const scopeToDistrict = (t: QueueTab): boolean =>
+    t !== 'alerts' && isDistrictOfficer && !!profile.district && profile.district.trim() !== '';
+
+  // Same role gates as before: clinics don't approve campaigns, only admins
+  // approve alerts.
+  const tabLoads = (t: QueueTab): boolean =>
+    t === 'campaigns' ? !isClinic : t === 'alerts' ? isAdmin : true;
+
+  /**
+   * The queue is two streams. `pending` waits on a human; `decided` is
+   * everything else — NULL `approval_status` included, so a legacy row with no
+   * status can never fall out of BOTH filters and vanish from the screen.
+   */
+  const queueQuery = (t: QueueTab, stream: 'pending' | 'decided', columns: string, countOnly = false) => {
+    let q: any = supabase
+      .from(TABLES[t])
+      .select(columns, countOnly ? { count: 'exact', head: true } : undefined);
+    q = stream === 'pending'
+      ? q.eq('approval_status', 'pending_approval')
+      : q.or('approval_status.neq.pending_approval,approval_status.is.null');
+    if (scopeToDistrict(t)) q = q.eq('district', profile.district);
+    return q;
+  };
+
+  /** head:true — the server counts, no rows cross the wire. */
+  const countStream = async (t: QueueTab, stream: 'pending' | 'decided'): Promise<number> => {
+    const { count, error } = await queueQuery(t, stream, 'id', true);
+    if (error) throw error;
+    return count ?? 0;
+  };
+
+  const fetchStream = async (t: QueueTab, stream: 'pending' | 'decided', from: number, take: number): Promise<any[]> => {
+    const asc = stream === 'pending';
+    const { data, error } = await queueQuery(t, stream, COLUMNS[t])
+      .order('created_at', { ascending: asc })
+      // Stable tiebreak — without it two rows sharing a created_at can repeat
+      // or skip across page boundaries.
+      .order('id', { ascending: asc })
+      .range(from, from + take - 1);
+    if (error) throw error;
+    return data ?? [];
+  };
+
+  /**
+   * One page, in the order the screen actually shows: the pending block
+   * oldest-first — the triage order the "OLDEST FIRST ↓" header promises —
+   * then decided history newest-first. Paging the two streams separately is
+   * what makes the cap honest: a single newest-first page would cut off
+   * exactly the oldest pending rows the officer opened this screen to clear.
+   */
+  const fetchPage = async (t: QueueTab, from: TabCursor, totals: TabCursor) => {
+    const rows: any[] = [];
+    const next: TabCursor = { ...from };
+
+    const takePending = Math.min(PAGE_SIZE, Math.max(0, totals.pending - from.pending));
+    if (takePending > 0) {
+      const got = await fetchStream(t, 'pending', from.pending, takePending);
+      rows.push(...got);
+      next.pending = from.pending + got.length;
+    }
+    // Only once the pending block is exhausted does a page start spending
+    // itself on history.
+    const takeDecided = Math.min(PAGE_SIZE - rows.length, Math.max(0, totals.decided - from.decided));
+    if (takeDecided > 0) {
+      const got = await fetchStream(t, 'decided', from.decided, takeDecided);
+      rows.push(...got);
+      next.decided = from.decided + got.length;
+    }
+    return { rows, next };
+  };
+
+  /** Rows land in the tab's own array; `append` is the "Load more" path.
+   *  De-duped by id because a row another admin decides mid-page could
+   *  otherwise arrive in both streams. */
+  const setRowsFor = (t: QueueTab, rows: any[], append: boolean) => {
+    const merge = <T extends { id: string }>(prev: T[]): T[] => {
+      if (!append) return rows as T[];
+      const seen = new Set(prev.map(r => r.id));
+      return [...prev, ...(rows as T[]).filter(r => !seen.has(r.id))];
+    };
+    if (t === 'disease')        setDiseaseReports(merge);
+    else if (t === 'water')     setWaterReports(merge);
+    else if (t === 'campaigns') setCampaigns(merge);
+    else                        setAlerts(merge);
+  };
+
+  /**
+   * Full reset to page one. Also runs after every approve/reject/delete, when
+   * the pending/decided split has just moved underneath the cursors — anything
+   * loaded past page one is deliberately dropped rather than left stale.
+   */
   const load = async () => {
+    const gen = ++loadGen.current;
     setLoading(true);
+    setLoadingMore(false);
+    setMoreError(null);
     try {
-      await Promise.all([loadDiseaseReports(), loadWaterReports(), loadCampaigns(), loadAlerts()]);
+      const tabs = allTabs.map(t => t.id).filter(tabLoads);
+      const pages = await Promise.all(tabs.map(async t => {
+        const [pending, decided] = await Promise.all([countStream(t, 'pending'), countStream(t, 'decided')]);
+        const totals: TabCursor = { pending, decided };
+        return { t, totals, page: await fetchPage(t, { pending: 0, decided: 0 }, totals) };
+      }));
+      if (gen !== loadGen.current) return; // a newer load already owns the list
+      pages.forEach(p => setRowsFor(p.t, p.page.rows, false));
+      setTotalCounts(prev => {
+        const next = { ...prev };
+        pages.forEach(p => { next[p.t] = p.totals; });
+        return next;
+      });
+      setLoadedCounts(prev => {
+        const next = { ...prev };
+        pages.forEach(p => { next[p.t] = p.page.next; });
+        return next;
+      });
       setFetchError(null);
     } catch {
-      setFetchError("Couldn't load the queue — check connection");
-    } finally { setLoading(false); setRefreshing(false); }
+      if (gen === loadGen.current) setFetchError("Couldn't load the queue — check connection");
+    } finally {
+      if (gen === loadGen.current) { setLoading(false); setRefreshing(false); }
+    }
+  };
+
+  /**
+   * "Load more" pages the CURRENT tab only, and only on a tap — never on
+   * scroll. On a metered one-bar connection the officer decides when to spend
+   * the next page. Its four states live in the list footer: skeleton while
+   * fetching, an error card with Retry when the page fails, the button while
+   * rows remain, and a quiet closing line at the end.
+   */
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    const t = tab;
+    const gen = loadGen.current;
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const page = await fetchPage(t, loadedCounts[t], totalCounts[t]);
+      if (gen !== loadGen.current) return; // the list was reset under us
+      setRowsFor(t, page.rows, true);
+      setLoadedCounts(prev => ({ ...prev, [t]: page.next }));
+      // The counts were taken moments ago. An empty page means the backlog
+      // they promised has since been decided or deleted by someone else —
+      // snap the totals to what actually exists so the button can't sit there
+      // offering rows that will never arrive.
+      if (page.rows.length === 0) setTotalCounts(prev => ({ ...prev, [t]: { ...page.next } }));
+    } catch {
+      if (gen === loadGen.current) setMoreError("Couldn't load more — check connection");
+    } finally { setLoadingMore(false); }
   };
 
   useEffect(() => { load(); }, []);
@@ -232,43 +451,6 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     }
   }, [diseaseReports, waterReports]);
 
-  const loadDiseaseReports = async () => {
-    let q = supabase.from('disease_reports').select('*').order('created_at', { ascending: false });
-    if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
-    const { data, error } = await q;
-    if (error) throw error;
-    const rows = data ?? [];
-    setDiseaseReports(rows);
-    setPendingCounts(p => ({ ...p, disease: rows.filter(r => r.approval_status === 'pending_approval').length }));
-  };
-  const loadWaterReports = async () => {
-    let q = supabase.from('water_quality_reports').select('*').order('created_at', { ascending: false });
-    if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
-    const { data, error } = await q;
-    if (error) throw error;
-    const rows = data ?? [];
-    setWaterReports(rows);
-    setPendingCounts(p => ({ ...p, water: rows.filter(r => r.approval_status === 'pending_approval').length }));
-  };
-  const loadCampaigns = async () => {
-    if (isClinic) return; // clinics dont approve campaigns
-    let q = supabase.from('health_campaigns').select('*').order('created_at', { ascending: false });
-    if (isDistrictOfficer && profile.district && profile.district.trim() !== '') q = q.eq('district', profile.district);
-    const { data, error } = await q;
-    if (error) throw error;
-    const rows = data ?? [];
-    setCampaigns(rows);
-    setPendingCounts(p => ({ ...p, campaigns: rows.filter(r => r.approval_status === 'pending_approval').length }));
-  };
-  const loadAlerts = async () => {
-    if (!isAdmin) return; // only admins approve alerts
-    const { data, error } = await supabase.from('health_alerts').select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    const rows = data ?? [];
-    setAlerts(rows);
-    setPendingCounts(p => ({ ...p, alerts: rows.filter(r => r.approval_status === 'pending_approval').length }));
-  };
-
   // ── Delete (reports/campaigns/alerts — records without a soft-delete flag) ─
   const deleteItem = (id: string, type: QueueTab) => {
     // Use a custom Modal instead of Alert.alert (Alert.alert is no-op on web)
@@ -281,8 +463,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     setShowDeleteConfirm(false);
     setActionLoading(true);
     try {
-      const table = { disease:'disease_reports', water:'water_quality_reports', campaigns:'health_campaigns', alerts:'health_alerts' }[deleteTarget.type];
-      const { error } = await supabase.from(table as string).delete().eq('id', deleteTarget.id);
+      const { error } = await supabase.from(TABLES[deleteTarget.type]).delete().eq('id', deleteTarget.id);
       if (error) throw error;
       setShowDetailModal(false);
       load();
@@ -308,8 +489,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     setActionLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const table = { disease:'disease_reports', water:'water_quality_reports', campaigns:'health_campaigns', alerts:'health_alerts' }[type];
-      const { error } = await supabase.from(table as string)
+      const { error } = await supabase.from(TABLES[type])
         .update({ approval_status: 'approved', approved_by: user?.id, approved_at: new Date().toISOString() })
         .eq('id', id);
       if (error) throw error;
@@ -326,8 +506,7 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
     setActionLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const table = { disease:'disease_reports', water:'water_quality_reports', campaigns:'health_campaigns', alerts:'health_alerts' }[type];
-      const { error } = await supabase.from(table as string)
+      const { error } = await supabase.from(TABLES[type])
         .update({ approval_status: 'rejected', approved_by: user?.id, approved_at: new Date().toISOString(), rejection_reason: reason || 'Rejected by admin' })
         .eq('id', id);
       if (error) throw error;
@@ -633,7 +812,8 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
             <TouchableOpacity
               key={t.id}
               style={qst.tabItem}
-              onPress={() => setTab(t.id)}
+              // A failed "Load more" belongs to the tab it happened on.
+              onPress={() => { setTab(t.id); setMoreError(null); }}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
               accessibilityLabel={count > 0 ? `${t.label}, ${count} pending` : t.label}
@@ -683,9 +863,18 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
 
       {/* Column-header eyebrow row */}
       <View style={[qst.tableHead, { backgroundColor: colors.surfaceVariant, borderBottomColor: colors.border }]}>
+        {/* The count says which number it is. Search filters only what has
+            been paged in, so while more rows exist it must not read as a
+            count of the whole tab. */}
         <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
           OLDEST FIRST ↓
-          <Text style={{ fontVariant: ['tabular-nums'] }}>{` · ${currentData.length}`}</Text>
+          <Text style={{ fontVariant: ['tabular-nums'] }}>
+            {search
+              ? ` · ${currentData.length} of ${loadedOfTab} loaded`
+              : hasMore
+              ? ` · ${loadedOfTab} of ${totalOfTab}`
+              : ` · ${currentData.length}`}
+          </Text>
         </Text>
         <Text style={[qst.tableHeadText, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
           PENDING
@@ -716,15 +905,55 @@ export const ApprovalQueueScreen: React.FC<Props> = ({ profile, onBack, initialT
           ListEmptyComponent={
             fetchError ? null : (
               <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
+                {/* Search runs over the pages already on the phone. Saying
+                    "no items match" while unread pages exist would be a lie. */}
                 <EmptyState
                   icon={search ? 'search-outline' : 'checkmark-circle-outline'}
                   color={search ? colors.textSecondary : colors.success}
                   title={search
-                    ? 'No items match — try a different search.'
+                    ? (hasMore
+                        ? `No match in the ${loadedOfTab} loaded so far.`
+                        : 'No items match — try a different search.')
                     : 'Queue clear — nothing waiting for review.'}
+                  subtitle={search && hasMore ? 'Load more below to keep looking.' : undefined}
                 />
               </View>
             )
+          }
+          /* Four states for the next page: error-with-retry, skeleton,
+             the affordance itself, then a quiet close. */
+          ListFooterComponent={
+            moreError ? (
+              <View style={qst.footerWrap}>
+                <ErrorCard message={moreError} onRetry={loadMore} />
+              </View>
+            ) : loadingMore ? (
+              <View style={qst.footerWrap} accessibilityElementsHidden>
+                <SkeletonBlock height={64} radius={radii.sm} />
+                <SkeletonBlock height={64} radius={radii.sm} />
+              </View>
+            ) : hasMore ? (
+              <View style={qst.footerWrap}>
+                <Pressable
+                  onPress={loadMore}
+                  style={({ pressed }) => [
+                    qst.loadMoreBtn,
+                    { backgroundColor: pressed ? colors.cardHover : colors.card, borderColor: colors.border },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Load more, ${totalOfTab - loadedOfTab} still to load`}
+                >
+                  <Ionicons name="arrow-down-circle-outline" size={18} color={colors.primary} />
+                  <Text style={[qst.loadMoreText, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>
+                    {`Load more · ${totalOfTab - loadedOfTab} left`}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : loadedOfTab > 0 ? (
+              <Text style={[qst.footerEnd, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
+                {`All ${loadedOfTab} loaded`}
+              </Text>
+            ) : null
           }
         />
       )}
@@ -1153,6 +1382,14 @@ const qst = StyleSheet.create({
   pillText: { fontSize: 12, lineHeight: 16, fontWeight: '800', letterSpacing: 0.6 },
   /* Skeleton */
   skeletonWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.md },
+  /* Load-more footer */
+  footerWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.md },
+  loadMoreBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    minHeight: 48, borderRadius: radii.md, borderWidth: 1.5,
+  },
+  loadMoreText: { fontSize: 15, lineHeight: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  footerEnd: { fontSize: 12, lineHeight: 16, fontWeight: '600', textAlign: 'center', paddingVertical: spacing.lg, fontVariant: ['tabular-nums'] },
   /* Detail modal */
   overlay: { flex: 1, justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, maxHeight: '92%', overflow: 'hidden' },

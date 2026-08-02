@@ -16,6 +16,8 @@ import {
   Modal,
   TextInput,
   ActivityIndicator,
+  Platform,
+  Linking,
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -43,9 +45,7 @@ interface ProfileScreenProps {
  */
 const ACCENT_TINT_ALPHA = '14';
 
-const NOTIFICATIONS_KEY = 'healthdrop:notificationsEnabled';
 const LANGUAGE_KEY = 'healthdrop:language';
-const CRITICAL_OVERRIDE_KEY = 'healthdrop:criticalOverridesDnd';
 
 type AppLanguage = 'en' | 'hi';
 
@@ -86,8 +86,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const { colors, isDark, toggleTheme, reduceMotion } = useTheme();
   const { t } = useTranslation();
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const [criticalOverride, setCriticalOverride] = useState(false);
   const [language, setLanguage] = useState<AppLanguage>('en');
   const [showLanguageModal, setShowLanguageModal] = useState(false);
 
@@ -115,6 +113,8 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [feedbackError, setFeedbackError] = useState('');
   // GPS status message shown inline inside the location modal
   const [gpsMessage, setGpsMessage] = useState('');
+  // Shown under the Notifications card when the OS settings screen won't open
+  const [notificationSettingsError, setNotificationSettingsError] = useState('');
 
   // Form states
   const [editFormData, setEditFormData] = useState({
@@ -136,22 +136,8 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackCategory, setFeedbackCategory] = useState('general');
 
-  // Load persisted settings (notifications, critical-override, language)
+  // Load persisted settings (language)
   useEffect(() => {
-    AsyncStorage.getItem(NOTIFICATIONS_KEY)
-      .then(value => {
-        if (value !== null) setNotificationsEnabled(value === 'true');
-      })
-      .catch(() => {
-        /* storage unavailable — keep default */
-      });
-    AsyncStorage.getItem(CRITICAL_OVERRIDE_KEY)
-      .then(value => {
-        if (value !== null) setCriticalOverride(value === 'true');
-      })
-      .catch(() => {
-        /* storage unavailable — keep default */
-      });
     AsyncStorage.getItem(LANGUAGE_KEY)
       .then(value => {
         if (value === 'en' || value === 'hi') setLanguage(value);
@@ -161,24 +147,35 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       });
   }, []);
 
-  const toggleNotifications = () => {
-    setNotificationsEnabled(prev => {
-      const next = !prev;
-      AsyncStorage.setItem(NOTIFICATIONS_KEY, String(next)).catch(() => {
-        /* storage unavailable — in-memory toggle still applies */
+  // Notifications — there used to be two in-app switches here ("Notifications"
+  // and "Critical alerts override silent mode"). Both were theatre: they wrote
+  // AsyncStorage keys nothing ever read, and the send path
+  // (notify_users_push) filters only on profiles.is_active plus the target
+  // role/district — it never consults profiles.notification_enabled. A worker
+  // who switched notifications OFF kept being woken by every alert, which
+  // teaches people to swipe alerts away. Until the server fan-out honours the
+  // preference (BRK-18's server half), the only control that truly silences a
+  // push is the operating system's, so that is the one we offer.
+  const handleOpenNotificationSettings = () => {
+    setNotificationSettingsError('');
+    // react-native-web has no openSettings(); guard before calling it.
+    if (Platform.OS === 'web' || typeof Linking.openSettings !== 'function') {
+      setNotificationSettingsError(
+        'Open your browser or device settings to change notifications for this app.',
+      );
+      return;
+    }
+    try {
+      Promise.resolve(Linking.openSettings()).catch(() => {
+        setNotificationSettingsError(
+          "Couldn't open settings — go to your phone's Settings → Apps → Health Drop → Notifications.",
+        );
       });
-      return next;
-    });
-  };
-
-  const toggleCriticalOverride = () => {
-    setCriticalOverride(prev => {
-      const next = !prev;
-      AsyncStorage.setItem(CRITICAL_OVERRIDE_KEY, String(next)).catch(() => {
-        /* storage unavailable — in-memory toggle still applies */
-      });
-      return next;
-    });
+    } catch {
+      setNotificationSettingsError(
+        "Couldn't open settings — go to your phone's Settings → Apps → Health Drop → Notifications.",
+      );
+    }
   };
 
   const handleSelectLanguage = (lang: AppLanguage) => {
@@ -563,6 +560,8 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   interface MenuSection {
     section: string;
     items: MenuItem[];
+    /** Inline error shown under the card — never a popup */
+    error?: string;
   }
 
   const menuItems: MenuSection[] = [
@@ -600,21 +599,14 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     },
     {
       section: 'Notifications',
+      error: notificationSettingsError,
       items: [
         {
           iconName: 'notifications-outline',
-          label: 'Notifications',
-          action: toggleNotifications,
-          hasSwitch: true,
-          switchValue: notificationsEnabled,
-        },
-        {
-          iconName: 'alert-circle-outline',
-          label: 'Critical alerts override silent mode',
-          caption: 'Recommended for field roles — applies from the next app start',
-          action: toggleCriticalOverride,
-          hasSwitch: true,
-          switchValue: criticalOverride,
+          label: 'Notification settings',
+          caption:
+            'Health Drop sends alerts about outbreaks and unsafe water in your district. Your phone controls whether they arrive.',
+          action: handleOpenNotificationSettings,
         },
       ],
     },
@@ -827,6 +819,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
               </Pressable>
             ))}
           </View>
+          {section.error ? <InlineError message={section.error} /> : null}
         </View>
       ))}
 
