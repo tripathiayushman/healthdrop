@@ -116,3 +116,48 @@ CREATE POLICY campaigns_select ON public.campaigns
 --   claim_push_token: anon revoked / authenticated ok  PASS
 --   get_my_role + get_my_district still EXECUTE-able   PASS  (or every query 500s)
 -- =====================================================================
+
+-- =====================================================================
+-- ADDENDUM — get_my_role() / get_my_district() revoked from anon
+-- Applied 2026-08-02, after the assertion suite's first CI run.
+--
+-- Phase 1 left these EXECUTE-able by everyone, with the note that they are
+-- evaluated INSIDE RLS policies so revoking them locks users out. That is
+-- true of `authenticated`. It was never true of `anon`.
+--
+-- Exactly two anon-reachable policies called them, and BOTH were DELETE:
+--     profiles  :: profiles_delete_policy   get_my_role() = 'super_admin'
+--     campaigns :: campaigns_delete         get_my_role() = 'admin'
+--
+-- An unauthenticated caller has no business deleting a profile or a campaign
+-- under any expression, so both were scoped to `authenticated` first, which
+-- removed anon's need for the helpers, and only then were the grants pulled.
+-- Order matters: revoking first turns a clean policy denial into a permission
+-- error on the function.
+--
+-- campaigns_delete also still gated on the dead 'admin' role, so no one could
+-- delete a campaign at all. Since it was being rewritten anyway it now uses
+-- is_admin() — which removes an assertion allowlist entry instead of adding
+-- one, even though the table itself is queued for deletion.
+DROP POLICY IF EXISTS profiles_delete_policy ON public.profiles;
+CREATE POLICY profiles_delete_policy ON public.profiles
+  FOR DELETE TO authenticated
+  USING (get_my_role() = 'super_admin');
+
+DROP POLICY IF EXISTS campaigns_delete ON public.campaigns;
+CREATE POLICY campaigns_delete ON public.campaigns
+  FOR DELETE TO authenticated
+  USING (is_admin());
+
+REVOKE ALL ON FUNCTION public.get_my_role()     FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.get_my_district() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_my_role()     TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_my_district() TO authenticated;
+
+-- Verification (live, 2026-08-02). E3/E4 are the ones that matter: they prove
+-- RLS still evaluates for a real signed-in user. Getting this wrong makes
+-- every query in the app fail, so "the grant looks right" is not enough.
+--   E1 anon EXECUTE on get_my_role            PASS - revoked
+--   E2 authenticated EXECUTE preserved        PASS
+--   E3 asha reads disease_reports (2 rows)    PASS
+--   E4 asha reads profiles (1 rows)           PASS

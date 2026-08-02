@@ -52,16 +52,18 @@ DECLARE
   --    be able to EXECUTE. Format: 'name(identity_args)'.
   --    Routines owned by an extension (PostGIS et al.) and routines that
   --    RETURN trigger are excluded structurally by the query below.
-  k_secdef_anon_allow CONSTANT text[] := ARRAY[
-    -- These two are evaluated INSIDE RLS policy expressions, and a policy's
-    -- function calls require EXECUTE for the role running the query. Revoking
-    -- them is the trap in a blanket "revoke everything" sweep: it locks every
-    -- user out of every table in the schema. They are also harmless to an
-    -- unauthenticated caller — auth.uid() is NULL for anon, so get_my_role()
-    -- returns 'none' and get_my_district() returns NULL. No data, no bypass.
-    'get_my_role()',
-    'get_my_district()'
-  ];
+  --    Empty, and it should stay that way.
+  --
+  --    get_my_role()/get_my_district() were briefly listed here on the
+  --    reasoning that they are evaluated inside RLS policies and revoking
+  --    them locks everyone out. That is true of `authenticated` and false of
+  --    `anon`: exactly two anon-reachable policies called them, both DELETE
+  --    policies, and an unauthenticated caller has no business deleting a
+  --    profile or a campaign under any expression. Scoping those two policies
+  --    to `authenticated` removed the need, and the grants were then revoked.
+  --    An allowlist entry should be the last resort, after asking whether the
+  --    thing being excused is actually necessary.
+  k_secdef_anon_allow CONSTANT text[] := ARRAY[]::text[];
 
   -- ── ALLOWLIST A2: SECURITY DEFINER routines allowed to run without a
   --    pinned search_path. There is no good reason for one; keep empty.
@@ -80,7 +82,6 @@ DECLARE
   --    done here. Delete these four entries the moment the tables go; the
   --    suite will then fail if anyone reintroduces the dead role.
   k_role_literal_allow CONSTANT text[] := ARRAY[
-    'campaigns :: campaigns_delete|admin',
     'campaigns :: campaigns_insert|admin',
     'campaign_volunteers :: Users can update own enrollment|admin',
     'campaign_volunteers :: Volunteers can view own enrollments|admin'
@@ -212,7 +213,15 @@ BEGIN
       UNION ALL
       SELECT 'routine',
              p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
-             p.prosrc
+             -- Strip SQL comments before matching. Without this, a comment
+             -- EXPLAINING that a routine used to gate on 'admin' re-triggers
+             -- the very invariant the fix satisfied — so the assertion would
+             -- punish documenting the bug you just removed, and the cheapest
+             -- way to go green would be to delete the explanation. Caught on
+             -- purge_old_audit_logs, whose only remaining 'admin' is prose.
+             regexp_replace(
+               regexp_replace(p.prosrc, '--[^\n]*', '', 'g'),   -- line comments
+               '/\*.*?\*/', '', 'gs')                           -- block comments
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
       LEFT JOIN pg_depend d ON d.objid = p.oid AND d.deptype = 'e' AND d.classid = 'pg_proc'::regclass
