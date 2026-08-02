@@ -145,6 +145,21 @@ const norm = (v: string | null | undefined): string => (v ?? '').trim().toLowerC
 // ─────────────────────────────────────────────────────
 //  The merged timeline: queued items first (they still
 //  need her), then everything that reached the server.
+//
+//  Scope note (deliberate, and its cost is real): the
+//  queued half shows EVERY queue type, because it has to
+//  agree with the Sync Pebble and the Outbox — a pebble
+//  reading "2 waiting" beside a screen listing 1 would
+//  re-create the confusion this merge exists to end.
+//  The server half queries only disease / water / alert,
+//  so a queued `feedback` or `campaign` appears here
+//  while it is on the phone and then has no row to
+//  become once it uploads. Disease, water and alert —
+//  everything a field worker files — do have a twin and
+//  survive the transition. Closing the gap means giving
+//  this screen a fourth source (user_feedback) with its
+//  own four states; that is a separate change, not a
+//  silent narrowing of what she is allowed to see.
 // ─────────────────────────────────────────────────────
 type ListEntry =
   | { entry: 'queuedHeader'; key: string; count: number }

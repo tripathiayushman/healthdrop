@@ -768,6 +768,48 @@ const PRINT_RULE = '#cccccc';
 const PRINT_STAMP_GREEN = '#157A3C';
 
 /**
+ * A4 at 72 PPI, in the units expo-print's `width`/`height` options take.
+ *
+ * Read out of the INSTALLED module rather than assumed, because the previous
+ * `@page { size: A4; margin: 18mm }` was decorative twice over:
+ *
+ *  • Paper size. Both platforms default to 612 × 792 — US LETTER, not A4
+ *    (`android/.../PrintPDFRenderTask.kt:23-24` DEFAULT_MEDIA_WIDTH/HEIGHT,
+ *    `ios/PrintOptions.swift:42` kLetterPaperSize). The renderer imposes the
+ *    page box, so a CSS `@page size` cannot change the PDF's page. A district
+ *    sheet meant for an Indian office was coming out on American paper.
+ *
+ *  • Margin. Both platforms default the printable inset to ZERO — Android
+ *    builds its PrintAttributes with `Margins.NO_MARGINS`
+ *    (`PrintPDFRenderTask.kt:78`), iOS returns `UIEdgeInsets.zero`
+ *    (`PrintOptions.swift:61-72`) — and iOS renders through
+ *    UIPrintPageRenderer/printableRect, which does not honour CSS `@page`
+ *    margins at all. So the poster's 3px border could land hard against the
+ *    paper edge, which is exactly where a physical printer clips it.
+ *
+ * The fix is to state the size to the module (below) and to make the margin
+ * real `padding` on <body> in physical `mm`, which every renderer honours.
+ */
+export const PRINT_PAGE = { width: 595, height: 842 } as const;
+
+/**
+ * Shared page CSS for both artifacts.
+ * `@page margin: 0` because the paper margin is now body padding — declaring it
+ * in both places would double it on the one renderer that does honour `@page`.
+ * `print-color-adjust` keeps the green VERIFIED stamp — the only meaningful
+ * colour on the sheet — from being dropped by a colour-saving print path.
+ */
+const pageCss = (paddingMm: number): string => `
+      @page { size: A4; margin: 0; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        padding: ${paddingMm}mm;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }`;
+
+/**
  * Monochrome pictograms for the poster.
  *
  * Inline SVG, not emoji and not an icon font: the poster is rendered by the
@@ -839,12 +881,10 @@ export function buildSummaryHtml(
   <head>
     <meta charset="utf-8" />
     <style>
-      @page { size: A4; margin: 18mm; }
-      * { box-sizing: border-box; }
+      ${pageCss(16)}
       body {
         font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         color: ${PRINT_INK};
-        margin: 0;
         font-size: 12px;
         line-height: 1.5;
       }
@@ -999,12 +1039,10 @@ export function buildPosterHtml(summary: WeeklySummary, options: ArtifactOptions
   <head>
     <meta charset="utf-8" />
     <style>
-      @page { size: A4; margin: 14mm; }
-      * { box-sizing: border-box; }
+      ${pageCss(13)}
       body {
         font-family: -apple-system, 'Segoe UI', Roboto, 'Noto Sans Devanagari', Helvetica, Arial, sans-serif;
         color: ${PRINT_INK};
-        margin: 0;
         font-size: 13px;
         line-height: 1.45;
       }

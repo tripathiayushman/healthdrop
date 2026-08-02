@@ -834,6 +834,7 @@ interface OwnReportRow {
 }
 
 interface OwnWaterRow extends OwnReportRow {
+  id: string | null;
   source_name: string | null;
   district: string | null;
   overall_quality: string | null;
@@ -845,6 +846,8 @@ interface RegistryRow {
   district: string | null;
   current_status: string | null;
   last_reported_at: string | null;
+  last_report_id: string | null;
+  flagged_at: string | null;
 }
 
 export interface PaybackFacts {
@@ -860,7 +863,9 @@ export interface PaybackFacts {
   lastVerifiedAt: string | null;
   /** Distinct sources her own reports flagged unsafe/critical. */
   flagged: number;
-  /** …that have a newer reading than her flag. */
+  /** …that were found on the water register (verified, not assumed). */
+  onRegister: number;
+  /** …that somebody else has read again since her flag. */
   retested: number;
   /** …that an official has since taken off unsafe/critical. */
   cleared: number;
@@ -896,7 +901,7 @@ const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> =>
         .limit(PAYBACK_ROW_LIMIT),
       supabase
         .from('water_quality_reports')
-        .select('approval_status, approved_by, approved_at, source_name, district, overall_quality, created_at', { count: 'exact' })
+        .select('id, approval_status, approved_by, approved_at, source_name, district, overall_quality, created_at', { count: 'exact' })
         .eq('reporter_id', userId)
         .order('created_at', { ascending: false })
         .limit(PAYBACK_ROW_LIMIT),
@@ -954,7 +959,11 @@ const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> =>
     // is the same relation the trigger itself used. No fuzzy matching: it
     // could merge two real sources and invent a retest that never happened.
     const flags = new Map<string, { name: string; district: string; at: number }>();
+    // Her own water reports, by id. The registry's newest reading being one of
+    // these means she went back herself — see the retest loop below.
+    const ownWaterIds = new Set<string>();
     for (const row of waterRows) {
+      if (row.id) ownWaterIds.add(row.id);
       const quality = (row.overall_quality ?? '').toLowerCase();
       if (!FLAG_QUALITIES.includes(quality)) continue;
       if (!row.source_name || !row.district) continue;
@@ -966,6 +975,7 @@ const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> =>
       if (!seen || at > seen.at) flags.set(key, { name: row.source_name, district: row.district, at });
     }
 
+    let onRegister = 0;
     let retested = 0;
     let cleared = 0;
     const waterExact = flags.size <= PAYBACK_SOURCE_LIMIT;
@@ -977,7 +987,7 @@ const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> =>
       // them. Truncation here can only UNDER-count, never invent a retest.
       const registryRes = await supabase
         .from('water_sources')
-        .select('source_name, district, current_status, last_reported_at')
+        .select('source_name, district, current_status, last_reported_at, last_report_id, flagged_at')
         .in('source_name', entries.map(([, v]) => v.name))
         .in('district', entries.map(([, v]) => v.district))
         .limit(500);
@@ -995,15 +1005,30 @@ const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> =>
 
       for (const [key, flag] of entries) {
         const source = registry.get(key);
+        // Only a source we actually found may be called "on the register".
         if (!source) continue;
+        onRegister += 1;
         // "Retested" = a reading was filed on this source after her flag. The
         // registry is written on INSERT regardless of approval, so this claims
         // a test happened — never that its result was accepted.
         const lastAt = msOf(source.last_reported_at);
         if (!Number.isFinite(lastAt) || lastAt <= flag.at) continue;
+        // …but if that newest reading is one of HER OWN, her flag did not
+        // bring anyone back to the handpump — she walked back herself. Telling
+        // her "a source you flagged has been retested" would be dressing her
+        // own second visit up as a consequence of the first. When we cannot
+        // prove ownership (last_report_id NULL on rows seeded before the
+        // trigger) the passive claim still holds, so the row survives.
+        if (source.last_report_id && ownWaterIds.has(source.last_report_id)) continue;
         retested += 1;
         // `cleared` is kept a strict subset of `retested` so the caption's
-        // "N of them" is literally true.
+        // "N of them" is literally true. `flagged_at` is the registry's own
+        // proof that a flag ever landed on this source — without it, "no
+        // longer marked unsafe" would be a claim about a state that never
+        // existed. sync_water_source_registry() stamps it and nothing clears
+        // it, not even waterSources.reopen(), which is the human path that
+        // lowers current_status back to 'safe'.
+        if (!source.flagged_at) continue;
         if (CLEARED_STATUSES.includes((source.current_status ?? '').toLowerCase())) cleared += 1;
       }
     }
@@ -1017,6 +1042,7 @@ const loadPaybackFacts = async (userId: string): Promise<PaybackFacts | null> =>
       verifiedByReviewer,
       lastVerifiedAt,
       flagged: flags.size,
+      onRegister,
       retested,
       cleared,
       waterExact,
@@ -1164,7 +1190,11 @@ export const PaybackCard: React.FC<PaybackCardProps> = ({
     lines.push({
       key: 'water',
       icon: 'water-outline',
-      color: colors.waterSafe,
+      // The water ladder's cyan means SAFE WATER, so it is spent only when a
+      // source actually came off unsafe. A retest whose result we are not
+      // claiming gets the neutral informational tier instead — otherwise the
+      // colour would assert an improvement the data has not shown.
+      color: facts.cleared > 0 ? colors.waterSafe : colors.info,
       text: facts.retested === 1
         ? t('payback.waterRetestedOne', { defaultValue: '1 water source you flagged has been retested' })
         : t('payback.waterRetestedMany', { n: facts.retested, defaultValue: '{{n}} water sources you flagged have been retested' }),
@@ -1175,14 +1205,30 @@ export const PaybackCard: React.FC<PaybackCardProps> = ({
         : undefined,
       onPress: () => onNavigate('water-sources'),
     });
+  } else if (facts.waterExact && facts.onRegister > 0) {
+    // Nobody has been back yet, but the flag is on the register officials
+    // read — and we know that because we just found the row, not because
+    // the trigger is supposed to have written it.
+    lines.push({
+      key: 'waterOnRegister',
+      icon: 'water-outline',
+      color: colors.info,
+      text: facts.onRegister === 1
+        ? t('payback.waterOnRegisterOne', { defaultValue: '1 water source you flagged is on the water register' })
+        : t('payback.waterOnRegisterMany', { n: facts.onRegister, defaultValue: '{{n}} water sources you flagged are on the water register' }),
+      onPress: () => onNavigate('water-sources'),
+    });
   } else if (facts.flagged > 0) {
+    // The register could not be checked (more sources than one query covers),
+    // so this states only what her own reports say and claims nothing about
+    // what the system did with them.
     lines.push({
       key: 'waterFlagged',
       icon: 'water-outline',
       color: colors.info,
       text: facts.flagged === 1
-        ? t('payback.waterFlaggedOne', { defaultValue: '1 water source you flagged is on the register' })
-        : t('payback.waterFlaggedMany', { n: facts.flagged, defaultValue: '{{n}} water sources you flagged are on the register' }),
+        ? t('payback.waterFlaggedOne', { defaultValue: 'You flagged 1 water source as unsafe' })
+        : t('payback.waterFlaggedMany', { n: facts.flagged, defaultValue: 'You flagged {{n}} water sources as unsafe' }),
       onPress: () => onNavigate('water-sources'),
     });
   }

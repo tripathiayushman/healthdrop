@@ -38,6 +38,34 @@
 // A cache miss is silent by design: nothing here can turn a
 // failed query into an empty success — the fetcher's error is
 // returned untouched when no cached answer stands in.
+//
+// ── ADOPTION STATUS, stated plainly ─────────────────
+// This module is MACHINERY. As of this change no screen has
+// opted in, so nothing below is yet visible to a worker.
+// Written down because "the app now works offline" would be
+// a lie, and because the next person needs the exact list:
+//
+//   WRAPPED AND CALLED (cache is being WRITTEN today):
+//     waterSources.list / getById / reportsForSource
+//       ← components/screens/WaterSourcesScreen.tsx
+//     waterQuality.getById, waterSources.getById
+//       ← components/forms/WaterQualityReportForm.tsx
+//     diseaseReports.getById
+//       ← components/forms/DiseaseReportForm.tsx
+//   WRAPPED, ZERO CALL SITES (write path never runs):
+//     diseaseReports.getAll / getByReporter / getRecent,
+//     waterQuality.getAll / getRecent / getByQuality,
+//     waterSources.flagged
+//   NOT WRAPPED AT ALL: health alerts (lib/services/alerts.ts)
+//     — the first thing INC-05 names and the thing a worker
+//     most needs to re-read on a bus. That file is owned by
+//     another change; the wrapping is three lines and is
+//     spelled out in the INC-05 report.
+//
+// To ADOPT on a screen, two things must both happen — the
+// call passes `{ offlineFallback: true }` AND the screen
+// renders `res.asOf` (t('common.asOf', { when: res.asOf })).
+// One without the other is exactly the lie rule 2 forbids.
 // =====================================================
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -392,11 +420,23 @@ export const offlineCache = {
   /**
    * Drop the cached reads a just-SYNCED queue item contradicts.
    *
-   * Call from OfflineSyncService the moment an item is marked 'synced' — that
-   * is the instant the server gains a row the cache does not know about, and
-   * the only place that instant is observable. Unknown types and types that
-   * own no cache namespace are a silent no-op, so adding a queue type never
-   * breaks this.
+   * NOT YET WIRED — and that is a real gap, not a nicety. The service that
+   * owns the moment a queued report lands on the server
+   * (src/services/offlineSync/OfflineSyncService.ts, syncItem() line ~323) is
+   * outside this change's file ownership, so this function currently has zero
+   * callers. Until it is called, a report filed with no signal and synced an
+   * hour later leaves the cache holding a list assembled BEFORE her report
+   * existed — and the one row missing from it would be hers.
+   *
+   * The two lines it needs, at the point the item is marked 'synced':
+   *
+   *   import { offlineCache } from '../../../lib/offlineCache';
+   *   await syncQueue.updateItem(fresh.localId, { status: 'synced' });
+   *   await offlineCache.invalidateForSyncedType(fresh.type);   // ← add
+   *
+   * Unknown types and types that own no cache namespace are a silent no-op, so
+   * adding a queue type never breaks this, and it never throws — a failed
+   * invalidation must not turn a successful sync into a failed one.
    */
   async invalidateForSyncedType(queueItemType: string): Promise<void> {
     const namespaces = SYNC_TYPE_CACHE_NAMESPACES[queueItemType];

@@ -1,7 +1,7 @@
 // =====================================================
 // DISEASE REPORTS SERVICE
 // =====================================================
-import { supabase, describeSubmitError } from '../supabase';
+import { supabase, describeSubmitError, describeRequestError } from '../supabase';
 import { DiseaseReport, DiseaseReportInput, ReportStatus, ApiResponse } from '../../types';
 import NetInfo from '@react-native-community/netinfo';
 import { syncQueue } from '../../src/services/offlineSync/SyncQueue';
@@ -281,7 +281,11 @@ export const diseaseReportsService = {
       return { data: data as DiseaseReport, error: null };
     } catch (error: any) {
       console.error('Error updating disease report:', error);
-      return { data: null, error: error.message };
+      // Transport failures get human copy; a real server answer (RLS, a
+      // constraint) keeps its own message. Same reasoning as
+      // normalizeSubmitErrorMessage above — a raw
+      // 'RequestTimeoutError: …' is not a sentence anyone can act on.
+      return { data: null, error: describeRequestError(error, 'Could not update this report.') };
     }
   },
 
@@ -309,7 +313,7 @@ export const diseaseReportsService = {
       return { data: data as DiseaseReport, error: null };
     } catch (error: any) {
       console.error('Error verifying disease report:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not verify this report.') };
     }
   },
 
@@ -333,7 +337,7 @@ export const diseaseReportsService = {
       return { data: null, error: null };
     } catch (error: any) {
       console.error('Error deleting disease report:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not delete this report.') };
     }
   },
 
@@ -388,9 +392,12 @@ export const diseaseReportsService = {
         .select('id', { count: 'exact' })
         .eq('status', 'reported');
 
-      if (totalError || activeError || criticalError || pendingError) {
-        throw new Error('Error fetching statistics');
-      }
+      // Rethrow the ACTUAL failure, not a generic stand-in: 'Error fetching
+      // statistics' erased whether the query was refused, timed out or never
+      // left the phone, and describeRequestError below can only be honest
+      // about a failure it can still see.
+      const failure = [totalError, activeError, criticalError, pendingError].find(Boolean);
+      if (failure) throw failure;
 
       return {
         data: {
@@ -403,7 +410,7 @@ export const diseaseReportsService = {
       };
     } catch (error: any) {
       console.error('Error fetching statistics:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not load report statistics.') };
     }
   },
 

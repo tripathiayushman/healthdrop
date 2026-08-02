@@ -11,7 +11,7 @@
 // to super_admin / health_admin / district_officer /
 // clinic — the UI role-gates to match.
 // =====================================================
-import { supabase, readPersistedUserId } from '../supabase';
+import { supabase, readPersistedUserId, describeRequestError } from '../supabase';
 import { ApiResponse, WaterQualityReport } from '../../types';
 import { offlineCache, CachedApiResponse, ReadThroughOptions } from '../offlineCache';
 
@@ -165,7 +165,17 @@ export const waterSourcesService = {
       return { data: data as unknown as WaterSourceRecord, error: null };
     } catch (error: any) {
       console.error('Error assigning water source retest:', error);
-      return { data: null, error: error.message };
+      // These three actions are the ONLY writes in this service and all three
+      // land in WaterSourcesScreen's sheet as `res.error`, drawn verbatim. A
+      // fired deadline therefore reached an officer as
+      // 'RequestTimeoutError: Request timed out after 30s' — the same defect
+      // P3 found on the submit path, on a different screen.
+      // describeRequestError only replaces TRANSPORT failures, so the two
+      // validation messages thrown above ("Pick who will retest this
+      // source", "Pick a due date…") and any RLS refusal keep their own words.
+      // "Tap retry" is honest here: every one of these updates sets fixed
+      // values, so re-sending it cannot do anything a second time.
+      return { data: null, error: describeRequestError(error, 'Could not assign the retest.') };
     }
   },
 
@@ -185,7 +195,7 @@ export const waterSourcesService = {
       return { data: data as unknown as WaterSourceRecord, error: null };
     } catch (error: any) {
       console.error('Error logging water source treatment:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not save the treatment note.') };
     }
   },
 
@@ -215,7 +225,7 @@ export const waterSourcesService = {
       return { data: data as unknown as WaterSourceRecord, error: null };
     } catch (error: any) {
       console.error('Error reopening water source:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not reopen this source.') };
     }
   },
 

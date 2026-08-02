@@ -695,9 +695,15 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
       // any admin or district officer — and nothing about who, when or where
       // may be asserted about it.
       if (!record.selfRecorded) {
+        // Third person, and no claim about the source either way. "Recorded by
+        // the organiser" would be a guess: all we know is that the row says
+        // 'attended' and carries no audit line — it could have been the
+        // organiser, an admin, a district officer, or a build of this app that
+        // predates the audit line. What the screen may state is exactly that:
+        // the register says attended, and this app knows nothing more.
         const headline = t('campaigns.checkin.markedAttended', { defaultValue: 'Marked as attended' });
         const detail = t('campaigns.checkin.markedByRegister', {
-          defaultValue: 'Recorded on the camp register, not from this phone. No check-in time or location was saved with it.',
+          defaultValue: 'The register for this camp says attended. This app holds no record of when it was marked, where, or by whom, so none is shown here.',
         });
         return (
           <View
@@ -789,18 +795,26 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
               "Saves the time, and your phone's position if it is available. No map coordinates are stored for this camp, so your position cannot be compared with the camp site.",
           })}
         </Text>
-        {/* Audience. participants_select grants read to the row owner, the
-            campaign organiser, and — as a bare role check with no district
-            scoping — every super_admin, health_admin and district_officer in
-            the service. participants_update grants the same set write access
-            to this notes column. "District officials" understated both. */}
+        {/* Audience. Re-verified against pg_policies on 3 Aug 2026.
+            participants_select qual:
+              user_id = auth.uid()
+              OR get_my_role() = ANY('super_admin','health_admin','district_officer')
+              OR EXISTS(health_campaigns hc WHERE hc.id = campaign_id
+                        AND hc.organizer_id = auth.uid())
+            participants_update carries that same expression in BOTH USING and
+            WITH CHECK, so every one of those roles can also rewrite this notes
+            column. The role branch is a BARE role test — no district predicate —
+            so it is every holder of those roles in the service, not the ones
+            near this camp. The copy names all three roles for that reason;
+            "district officials" named one of them and implied a scope that
+            does not exist. */}
         <Text
           style={[styles.checkinCaptionMeta, { color: colors.textTertiary }]}
           maxFontSizeMultiplier={1.5}
         >
           {t('campaigns.checkin.whoSees', {
             defaultValue:
-              'The camp organiser can see this, and so can district officers and health administrators anywhere in the service — not only in your district. They can also change it.',
+              'The camp organiser can see this. So can every district officer, health administrator and system administrator in the service — not only the ones in your district — and any of them can change it.',
           })}
         </Text>
       </View>
@@ -1229,8 +1243,15 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
     return filteredCampaigns.map((campaign) => {
       const typeInfo = getCampaignTypeInfo(campaign.campaign_type);
       const maxPart = campaign.max_participants || campaign.target_beneficiaries || 0;
-      const currentPart = campaign.current_participants || 0;
-      const progressPercent = maxPart > 0 ? (currentPart / maxPart) * 100 : 0;
+      // current_participants is NULLABLE (information_schema, 3 Aug 2026:
+      // default 0, is_nullable YES). `|| 0` printed "0/500" — "nobody has
+      // enrolled yet" — over a row that simply carries no count, which is the
+      // same defaulting-away-of-an-unknown this item exists to remove. Not
+      // knowing is its own answer, and the bar is withheld rather than drawn
+      // empty, because an empty bar reads as zero.
+      const rawCount = campaign.current_participants;
+      const countKnown = typeof rawCount === 'number' && Number.isFinite(rawCount);
+      const progressPercent = countKnown && maxPart > 0 ? (rawCount / maxPart) * 100 : 0;
       const campaignIsActive = isCampaignActive(campaign);
 
       return (
@@ -1283,17 +1304,21 @@ const CampaignsScreen: React.FC<CampaignsScreenProps> = ({ profile, onNavigateTo
                   {t('campaigns.participation', { defaultValue: 'Participation' })}
                 </Text>
                 <Text style={[styles.progressValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                  {currentPart}/{maxPart}
+                  {countKnown
+                    ? `${rawCount}/${maxPart}`
+                    : t('campaigns.participationUnknown', { defaultValue: 'Not recorded' })}
                 </Text>
               </View>
-              <View style={[styles.progressBar, { backgroundColor: colors.surfaceVariant }]}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    { width: `${Math.min(progressPercent, 100)}%`, backgroundColor: colors.primary },
-                  ]}
-                />
-              </View>
+              {countKnown && (
+                <View style={[styles.progressBar, { backgroundColor: colors.surfaceVariant }]}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      { width: `${Math.min(progressPercent, 100)}%`, backgroundColor: colors.primary },
+                    ]}
+                  />
+                </View>
+              )}
             </View>
           )}
 
@@ -2065,9 +2090,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     flex: 1,
   },
+  /* 48dp floor — this was 44 with no hitSlop, the only control on the screen
+     under the minimum. */
   modalCloseBtn: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: radii.pill,
     alignItems: 'center',
     justifyContent: 'center',

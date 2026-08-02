@@ -1045,13 +1045,22 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   // ==================== TAB CONFIG ====================
   // Filter tabs based on role - Clinic only sees reports, not users/analytics
+  /**
+   * Order matters more than it looks. Each tab is 32 dp of padding + a 20 dp
+   * icon + an 8 dp gap + its label, i.e. ~96–125 dp; six of them are ~660 dp
+   * against a 360 dp screen. Appended last, Audit sat ~570 dp in — past five
+   * tabs, invisible on first paint, and the one tab nobody knew to look for.
+   * It is second now, so on a 360 dp screen it is on screen before any
+   * scrolling, and the tab clipped by the right edge is an ordinary one whose
+   * partial visibility is itself the "there is more" cue.
+   */
   const allTabs: { id: TabType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
     { id: 'users', label: 'Users', icon: 'people-outline' },
+    { id: 'audit', label: 'Audit', icon: 'receipt-outline' },
     { id: 'disease', label: 'Disease', icon: 'medkit-outline' },
     { id: 'water', label: 'Water', icon: 'water-outline' },
     { id: 'campaigns', label: 'Campaigns', icon: 'megaphone-outline' },
     { id: 'analytics', label: 'Analytics', icon: 'stats-chart-outline' },
-    { id: 'audit', label: 'Audit', icon: 'receipt-outline' },
   ];
 
   const tabs = (isClinic
@@ -1198,7 +1207,13 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
             {' – '}
             {item.end_date ? format(new Date(item.end_date), 'd MMM yyyy') : 'TBD'}
             {' · Target '}
-            <Text style={{ fontVariant: ['tabular-nums'] }}>{item.target_population?.toLocaleString() || 0}</Text>
+            {/* An unset target is "not set", never a confident 0 — the row
+                loaded fine; the number simply was never entered. */}
+            {item.target_population != null ? (
+              <Text style={{ fontVariant: ['tabular-nums'] }}>{item.target_population.toLocaleString()}</Text>
+            ) : (
+              'not set'
+            )}
           </Text>
         </View>
         <Pill label={item.status || 'unknown'} fg={campaignStatusColor(item.status)} bg={campaignStatusBg(item.status)} />
@@ -1355,7 +1370,8 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         ))}
       </View>
     </ScrollView>
-  );
+    );
+  };
 
   // ==================== RENDER AUDIT TRAIL (INC-12) ====================
   const actionVisual = (action: string): { icon: keyof typeof Ionicons.glyphMap; fg: string; bg: string } => {
@@ -1532,7 +1548,7 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
         <InfoBanner
           icon="information-circle-outline"
           color={colors.warning}
-          text="Covered: disease reports, water reports, campaigns and health alerts — every insert, update and delete. Profiles are recorded only for role, verification and active-status changes; no other profile edit and no deleted profile is recorded. The approvals list holds changes to an approval, so a record approved the moment it was created never appears in it."
+          text="Covered: disease reports, water reports, campaigns and health alerts — every insert, update and delete. For profiles, only the creation of an account and changes to a role, verification or active status are recorded; no other profile edit, and no deleted profile, is recorded. The approvals list holds changes to an approval, so a record approved the moment it was created never appears in it."
         />
       </View>
 
@@ -1570,6 +1586,8 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
       );
     }
 
+    // Analytics is excluded because it owns its own error state (statsError)
+    // and renders its own retry — not because a failure there is tolerable.
     if (loadError && activeTab !== 'analytics') {
       return (
         <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
@@ -1712,7 +1730,10 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
       {/* Tabs */}
       <View style={[styles.tabsContainer, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScroll}>
+        {/* The strip really does scroll, so it says so: the indicator is left
+            on here (it is hidden on the content lists below, where the vertical
+            scroll is obvious). */}
+        <ScrollView horizontal contentContainerStyle={styles.tabsScroll}>
           {tabs.map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -1941,8 +1962,9 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
                       )}
                       <Text style={[styles.trailNote, { color: colors.textSecondary }]}>
                         What this person did, not what was done to them. Covers disease reports,
-                        water reports, campaigns, health alerts, and changes to a role,
-                        verification or active status. Ordinary profile edits are not recorded.
+                        water reports, campaigns, health alerts, the creation of an account, and
+                        changes to a role, verification or active status. Ordinary profile edits
+                        are not recorded.
                       </Text>
                     </>
                   )}

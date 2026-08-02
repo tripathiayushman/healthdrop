@@ -975,7 +975,12 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                           area: scopeArea,
                         })
                       : hasSearch
-                        ? t('alertScope.listScopedBodyFiltered', {
+                        /* Renamed off `listScopedBodyFiltered`: that key is
+                           already merged with the shorter sentence, which would
+                           have overridden the added clause about other alerts
+                           being hidden. The name now also matches its two new
+                           siblings below. Retire listScopedBodyFiltered. */
+                        ? t('alertScope.listScopedBodyFilteredSearch', {
                             defaultValue: 'Of the alerts matching your search, none are inside {{area}}. Other active alerts may be hidden by that search, so this is not an all-clear.',
                             area: scopeArea,
                           })
@@ -1504,8 +1509,23 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                         approval_status**, and this write does not touch that
                         column. The old copy claimed "tells everyone who was
                         warned"; nobody is told anything until they come here. */}
+                    {/* P1(b) — A NEW KEY, DELIBERATELY.
+                        `alertStandDown.zoneHint` is already merged into
+                        en.json/hi.json carrying the sentence this finding is
+                        about ("…and tells everyone who was warned that it has
+                        ended"), and i18next resolves a PRESENT resource ahead
+                        of any defaultValue — proved by initialising the real
+                        bundles in node and resolving that key with the corrected
+                        defaultValue: it still returned the OLD sentence
+                        verbatim, in English and in Hindi. Rewriting the
+                        defaultValue alone would therefore have changed nothing
+                        a user can see. A safety-critical correction may not
+                        depend on a JSON merge landing correctly, so the honest
+                        copy lives on a key that has never been translated: the
+                        stale entry cannot win a key that does not exist.
+                        Retire alertStandDown.zoneHint from both locale files. */}
                     <Text style={[as.standDownZoneHint, { color: colors.textSecondary }]}>
-                      {t('alertStandDown.zoneHint', {
+                      {t('alertStandDown.zoneScope', {
                         defaultValue: 'Is this over? Standing it down removes the alert from the map and from every alert list, everywhere. Your closing note then sits under "Recently ended" on this screen for 14 days.',
                       })}
                     </Text>
@@ -1543,9 +1563,13 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                     </Text>
                     {/* P1 — "Everyone who saw this alert will read what you
                         write here" was false, and false in the direction that
-                        makes an officer stop telling people herself. */}
+                        makes an officer stop telling people herself. That
+                        sentence is the FIRST HALF of the already-merged
+                        `alertStandDown.formHint` value, so — as with zoneScope
+                        above — deleting it from the defaultValue could not
+                        remove it from the screen. New key; retire formHint. */}
                     <Text style={[as.standDownFormHint, { color: colors.textSecondary }]}>
-                      {t('alertStandDown.formHint', {
+                      {t('alertStandDown.formSay', {
                         defaultValue: 'Say what changed — the outbreak is contained, the water tested clean, the source was repaired.',
                       })}
                     </Text>
@@ -1619,7 +1643,11 @@ const AllAlertsScreen: React.FC<Props> = ({ profile, onBack }) => {
                         disabled={!noteReady || standDownSaving}
                         accessibilityRole="button"
                         accessibilityState={{ disabled: !noteReady || standDownSaving }}
-                        accessibilityLabel={t('alertStandDown.confirmA11y', {
+                        /* New key for the same reason as zoneScope/formSay: the
+                           merged `confirmA11y` reads "stand this alert down for
+                           everyone", which is the P1 claim spoken aloud to the
+                           one user who cannot see the screen. Retire it. */
+                        accessibilityLabel={t('alertStandDown.confirmA11yQuiet', {
                           defaultValue: 'Confirm — stand this alert down. No notification is sent.',
                         })}
                         /* P4 — THE STATE THIS FORM OPENS INTO.

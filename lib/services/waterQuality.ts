@@ -264,7 +264,9 @@ export const waterQualityService = {
       return { data: data as WaterQualityReport, error: null };
     } catch (error: any) {
       console.error('Error updating water quality report:', error);
-      return { data: null, error: error.message };
+      // Transport failures get human copy; a real server answer keeps its own
+      // message. See diseaseReports.update for the fuller note.
+      return { data: null, error: describeRequestError(error, 'Could not update this reading.') };
     }
   },
 
@@ -292,7 +294,7 @@ export const waterQualityService = {
       return { data: data as WaterQualityReport, error: null };
     } catch (error: any) {
       console.error('Error verifying water quality report:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not verify this reading.') };
     }
   },
 
@@ -311,7 +313,7 @@ export const waterQualityService = {
       return { data: null, error: null };
     } catch (error: any) {
       console.error('Error deleting water quality report:', error);
-      return { data: null, error: error.message };
+      return { data: null, error: describeRequestError(error, 'Could not delete this reading.') };
     }
   },
 

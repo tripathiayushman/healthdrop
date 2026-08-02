@@ -25,7 +25,7 @@
 // / cached content with an as-of stamp / quiet-zero /
 // error-with-retry.
 // =====================================================
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -53,8 +53,11 @@ import {
   buildWhatsAppCaption,
   formatAckRate,
   formatCasesDelta,
+  getWeekWindow,
   loadWeeklySummary,
   MAX_WEEKS_BACK,
+  PRINT_PAGE,
+  readCachedWeeklySummary,
   WeeklySummaryResult,
 } from '../../lib/services/weeklySummary';
 
@@ -106,19 +109,58 @@ export default function WeeklySummaryScreen({
 
   const summary = result?.summary ?? null;
   const fromCache = result?.source === 'cache';
+  /**
+   * Cached figures are on screen and the live read has not answered yet.
+   * Distinguishes "showing the saved copy while we check" from "showing the
+   * saved copy because the server could not be reached" — two different
+   * sentences, and telling the user the wrong one is its own small lie.
+   */
+  const revalidating = fromCache && result?.staleReason === null;
+
+  /**
+   * Guards against a stale answer overwriting a fresh one. The week arrows stay
+   * live during pull-to-refresh, so two loads can be in flight at once; without
+   * this the slower one wins and the card shows W30's figures under a "1 week
+   * back" label. Only the newest request may touch state.
+   */
+  const requestSeq = useRef(0);
 
   const load = useCallback(async () => {
     if (!district) {
       setLoading(false);
       return;
     }
+    const seq = ++requestSeq.current;
     setError(null);
+
+    // ── Paint the saved copy FIRST (AsyncStorage, no network) ──
+    // This is the whole point of NEW-10. A read has a 15 s deadline
+    // (READ_TIMEOUT_MS) and this digest issues seven of them, so on the weak
+    // signal where the digest matters most the old order — network, then
+    // fallback — meant staring at a skeleton for up to half a minute before
+    // the phone showed figures it already had. The live read below still runs
+    // and replaces this; until it does, the banner says so.
+    const cached = await readCachedWeeklySummary(district, weekOffset);
+    if (seq !== requestSeq.current) return;
+    if (cached) {
+      setResult({
+        summary: cached.summary,
+        source: 'cache',
+        fetchedAtIso: cached.fetchedAtIso,
+        staleReason: null,
+        offline: false,
+      });
+      setLoading(false);
+    }
+
     try {
       // Read-through: live first, this phone's saved copy as the fallback.
       // Throws only when BOTH fail — which is a real error, not an empty week.
       const next = await loadWeeklySummary(district, weekOffset);
+      if (seq !== requestSeq.current) return;
       setResult(next);
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setError(
         err instanceof Error && err.message
           ? err.message
@@ -126,9 +168,12 @@ export default function WeeklySummaryScreen({
               defaultValue: "Couldn't load the weekly summary — check connection.",
             }),
       );
+      // Reached only when there was no cached copy either — loadWeeklySummary
+      // returns the cache rather than throwing whenever one exists. So this
+      // never wipes figures the user can still see.
       setResult(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [district, weekOffset, t]);
 
@@ -174,7 +219,15 @@ export default function WeeklySummaryScreen({
   const sharePdfNative = async (html: string, dialogTitle: string) => {
     const available = await Sharing.isAvailableAsync();
     if (!available) throw new Error('sharing-unavailable');
-    const { uri } = await Print.printToFileAsync({ html });
+    // The page size is stated, never defaulted: expo-print falls back to
+    // 612 × 792 (US Letter) on BOTH platforms, so an unqualified call put an
+    // Indian district's IDSP sheet on American paper. PRINT_PAGE is A4 and
+    // matches the padding the HTML lays out against.
+    const { uri } = await Print.printToFileAsync({
+      html,
+      width: PRINT_PAGE.width,
+      height: PRINT_PAGE.height,
+    });
     await Sharing.shareAsync(uri, {
       dialogTitle,
       mimeType: 'application/pdf',
@@ -320,6 +373,15 @@ export default function WeeklySummaryScreen({
   /** The instant these figures were read — shown whenever they are not live. */
   const asOfText = useMemo(() => (result ? asOfLabel(result.fetchedAtIso) : ''), [result]);
 
+  /**
+   * Which week the arrows are pointing at — pure local date maths, never the
+   * loaded payload. Taking it from `result` meant that during a fetch the label
+   * still read the PREVIOUS week while the caption underneath already said
+   * "1 week back", and on a failed load the header kept naming a week whose
+   * figures were no longer on screen.
+   */
+  const navWeekLabel = useMemo(() => getWeekWindow(weekOffset).weekLabel, [weekOffset]);
+
   const quietWeek =
     !!summary &&
     summary.newCasesApproved === 0 &&
@@ -433,7 +495,7 @@ export default function WeeklySummaryScreen({
               </Pressable>
               <View style={styles.weekNavCenter} accessibilityLiveRegion="polite">
                 <Text style={[styles.weekNavLabel, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                  {summary ? summary.weekLabel : `Week of record`}
+                  {navWeekLabel}
                 </Text>
                 <Text style={[styles.weekNavMeta, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
                   {atCurrentWeek ? 'Current week' : `${weekOffset} week${weekOffset === 1 ? '' : 's'} back`}
@@ -492,19 +554,25 @@ export default function WeeklySummaryScreen({
                         style={[styles.cacheBannerText, { color: colors.textSecondary }]}
                         maxFontSizeMultiplier={1.3}
                       >
-                        {result?.staleReason ??
-                          t('weekly.savedCopyReason', {
-                            defaultValue: 'The server could not be reached just now.',
+                        {revalidating
+                          ? t('weekly.savedCopyChecking', {
+                              defaultValue: 'Checking for newer figures…',
+                            })
+                          : (result?.staleReason ??
+                            t('weekly.savedCopyReason', {
+                              defaultValue: 'The server could not be reached just now.',
+                            }))}
+                      </Text>
+                      {!revalidating && (
+                        <Text
+                          style={[styles.cacheBannerText, { color: colors.textSecondary }]}
+                          maxFontSizeMultiplier={1.3}
+                        >
+                          {t('weekly.savedCopyMayHaveChanged', {
+                            defaultValue: 'Figures may have changed since. Pull down to refresh.',
                           })}
-                      </Text>
-                      <Text
-                        style={[styles.cacheBannerText, { color: colors.textSecondary }]}
-                        maxFontSizeMultiplier={1.3}
-                      >
-                        {t('weekly.savedCopyMayHaveChanged', {
-                          defaultValue: 'Figures may have changed since. Pull down to refresh.',
-                        })}
-                      </Text>
+                        </Text>
+                      )}
                     </View>
                   </View>
                 )}
