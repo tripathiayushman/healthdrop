@@ -45,11 +45,61 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Guards the Bharosa contrast promise. A near-black light-mode headerBg
-      # once shipped with ~1.5:1 header text because nothing checked colour
-      # pairs. Cheap to run, and it fails the build instead of the user.
+      # ── Verification gate ────────────────────────────────────────────
+      # Everything below runs BEFORE the EAS build, so a broken commit fails
+      # in ~5 minutes of free runner time instead of burning an EAS build and
+      # shipping an APK. Each step is individually cheap; together they cover
+      # the three ways this project has actually broken.
+
+      # 1. A near-black light-mode headerBg once shipped with ~1.5:1 header
+      #    text because nothing checked colour pairs.
       - name: Check token contrast
         run: node scripts/check-contrast.cjs
+
+      # 2. Types. Cheap, and catches the renames that silently produce
+      #    undefined at runtime.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # 3. Database invariants: grants, RLS policies, and scheduled-job
+      #    health. The escalation cron failed 961 times without anyone
+      #    noticing, and several "verified by reading" security claims turned
+      #    out to be false. Read-only. Skips (exit 0) without the secret, so
+      #    a fork is never a red build.
+      - name: Check database invariants
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: node scripts/check-db.cjs
+
+      # 4. The role tour: log in as every role and walk the UI. This app once
+      #    shipped an unreadable header because the only visual check anyone
+      #    ran was a screenshot of the SIGN-IN screen — nobody logged in.
+      #    --quick is 4 sessions across both widths, themes and languages;
+      #    the full 24-session matrix is for local runs and release branches.
+      #    Skips (exit 0) without credentials, and says so out loud.
+      - name: Install Chromium for the role tour
+        run: npx playwright install --with-deps chromium
+
+      - name: Build web bundle for the role tour
+        run: npx expo export --platform web
+
+      - name: Role tour (all roles, both themes, both widths)
+        env:
+          HEALTHDROP_E2E_ACCOUNTS: ${{ secrets.HEALTHDROP_E2E_ACCOUNTS }}
+        run: node e2e/run.cjs --quick
+
+      - name: Upload role-tour evidence
+        # Screenshots and the machine-readable report, kept even when the
+        # tour fails — that is precisely when they are worth reading.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: role-tour-${{ github.run_id }}
+          path: |
+            e2e/report.json
+            e2e/shots/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Compute version
         id: version
