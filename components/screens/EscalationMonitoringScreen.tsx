@@ -144,6 +144,16 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
     return { min: Math.min(...hours), max: Math.max(...hours) };
   }, [policy]);
 
+  // Where the hours come from, in words. An official acting on a red badge is
+  // entitled to know whether the rule is one somebody chose for their district
+  // or one baked into the build that they cannot touch.
+  const policyNote = useMemo(() => {
+    if (!policy) return '';
+    if (policy.source === 'database') return 'Set by an official — tap to see every threshold';
+    if (policy.editable) return 'App default · no threshold set for this district yet';
+    return 'Fixed in this app version · not yet editable in the field';
+  }, [policy]);
+
   // headerBg is a mode-appropriate SURFACE (paper in light, dark surface in
   // dark) — so plain ink tokens are correct in BOTH modes. textInverse here
   // would render white-on-paper.
@@ -244,7 +254,7 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
               accessibilityState={{ expanded: slaOpen }}
               accessibilityLabel={`Overdue rule: an item is overdue after ${formatHours(
                 slaRange.min
-              )} to ${formatHours(slaRange.max)} depending on type and severity. ${
+              )} to ${formatHours(slaRange.max)} depending on type and severity. ${policyNote}. ${
                 slaOpen ? 'Hide' : 'Show'
               } every threshold.`}
             >
@@ -253,11 +263,7 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
                 <Text style={[styles.slaTitle, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
                   Overdue after {formatHours(slaRange.min)}–{formatHours(slaRange.max)}
                 </Text>
-                <Text style={[styles.slaSub, { color: colors.textSecondary }]}>
-                  {policy.editable
-                    ? 'Set for this district — tap to see every threshold'
-                    : 'Fixed in this app version · not yet editable in the field'}
-                </Text>
+                <Text style={[styles.slaSub, { color: colors.textSecondary }]}>{policyNote}</Text>
               </View>
               <Ionicons
                 name={slaOpen ? 'chevron-up' : 'chevron-down'}
@@ -268,21 +274,30 @@ const EscalationMonitoringScreen: React.FC<EscalationMonitoringScreenProps> = ({
 
             {slaOpen && (
               <View style={[styles.slaTable, { borderTopColor: colors.border }]}>
-                {policy.tiers.map((tier) => (
-                  <View
-                    key={`${tier.report_type}-${tier.severity ?? 'any'}-${tier.district ?? 'all'}`}
-                    style={styles.slaRow}
-                    accessible
-                    accessibilityLabel={`${tier.label}: overdue after ${formatHours(tier.hours)}`}
-                  >
-                    <Text style={[styles.slaRowLabel, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {tier.label}
-                    </Text>
-                    <Text style={[styles.slaRowValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
-                      {formatHours(tier.hours)}
-                    </Text>
-                  </View>
-                ))}
+                {policy.tiers.map((tier) => {
+                  // Only worth saying once an official HAS set something: it
+                  // separates the hours they chose from the ones still on the
+                  // app default. In an all-default policy the note is noise.
+                  const isUnset = policy.source === 'database' && tier.origin === 'built-in';
+                  return (
+                    <View
+                      key={`${tier.report_type}-${tier.severity ?? 'any'}-${tier.district ?? 'all'}`}
+                      style={styles.slaRow}
+                      accessible
+                      accessibilityLabel={`${tier.label}: overdue after ${formatHours(tier.hours)}${
+                        isUnset ? ', app default' : ''
+                      }`}
+                    >
+                      <Text style={[styles.slaRowLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {tier.label}
+                        {isUnset ? ' · default' : ''}
+                      </Text>
+                      <Text style={[styles.slaRowValue, { color: colors.text }]} maxFontSizeMultiplier={1.3}>
+                        {formatHours(tier.hours)}
+                      </Text>
+                    </View>
+                  );
+                })}
                 <Text style={[styles.slaFootnote, { color: colors.textSecondary }]}>
                   Level rises with the item&apos;s own threshold: L1 past it, L2 at twice it, L3 at three times.
                 </Text>

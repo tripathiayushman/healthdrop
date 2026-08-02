@@ -557,38 +557,48 @@ export async function getCampaignIntelligence(profile: Profile): Promise<string[
 // same red badge, and neither could change it without a release.
 //
 // The threshold now lives in ONE tier table, keyed the way an SLA actually
-// varies — report type, severity, and (once the database can hold it) district.
-// `getEscalationSlaPolicy()` is the single seam. Today it returns the built-in
-// policy below and reports `source: 'built-in'`, which the screen states out
-// loud rather than pretending the rule is configurable. When the
-// `escalation_sla_thresholds` table lands (SQL in docs / BRK-19 hand-off), this
-// function reads it, returns `source: 'database'`, and nothing else changes.
+// varies — report type, severity and district.
 //
-// No probe is issued for a relation that is known not to exist — that was
-// DEL-09's complaint about this module and it is not repeated here.
+// `getEscalationSlaPolicy()` is the single seam and it READS THE DATABASE. The
+// live project has no approval-SLA relation yet (checked 3 Aug 2026: the only
+// candidate, `outbreak_thresholds`, holds disease_name / case_threshold /
+// window_days — that is outbreak DETECTION, not approval latency, and it has
+// no district, no report type and no hours). So today the read 404s, the
+// built-in ladder below governs, and the screen says so in words. The moment
+// `escalation_sla_thresholds` is created (migration in the BRK-19 hand-off)
+// the same code path starts returning `source: 'database'` with no further
+// edit — the alternative, leaving a hook that returns a constant, is how this
+// project keeps shipping half-fixes that read as done.
+//
+// The one probe is remembered in `deadProbeCache`, so a database without the
+// table pays ONE request per session, not one per screen open. That is
+// DEL-09's complaint honoured without leaving the seam inert.
 
 export type EscalationReportType = 'disease' | 'water' | 'campaign' | 'alert' | 'report';
 
 /** One row of the SLA table. `severity: null` means "any severity of this type". */
 export interface EscalationSlaTier {
-  /** null = applies nationally. Reserved for the per-district rows the migration adds. */
+  /** null = applies nationally; a district row overrides the national one. */
   district: string | null;
   report_type: EscalationReportType;
   severity: string | null;
   hours: number;
   label: string;
+  /** Where this single row came from, so a merged policy can show which hours an official actually set. */
+  origin: 'built-in' | 'database';
 }
 
 export interface EscalationSlaPolicy {
+  /** 'database' only when at least one configured row is in force. */
   source: 'built-in' | 'database';
-  /** False while the policy ships in the build — the screen must not imply it is tunable. */
+  /** True when this deployment CAN store thresholds — false while the ladder ships in the build. */
   editable: boolean;
   tiers: EscalationSlaTier[];
 }
 
 // Ordered most-specific first. Hours are the wait after which an item is
 // OVERDUE — 2× is escalation level 2, 3× is level 3 (see escalationLevelFor).
-export const DEFAULT_ESCALATION_SLA_TIERS: EscalationSlaTier[] = [
+const BUILT_IN_SLA_TIERS: Omit<EscalationSlaTier, 'origin'>[] = [
   // A public alert waiting on approval is a warning nobody has received yet.
   { district: null, report_type: 'alert', severity: 'critical', hours: 2, label: 'Alert · critical' },
   { district: null, report_type: 'alert', severity: 'high', hours: 4, label: 'Alert · high' },
@@ -614,21 +624,128 @@ export const DEFAULT_ESCALATION_SLA_TIERS: EscalationSlaTier[] = [
   { district: null, report_type: 'report', severity: null, hours: 24, label: 'Other' },
 ];
 
+export const DEFAULT_ESCALATION_SLA_TIERS: EscalationSlaTier[] = BUILT_IN_SLA_TIERS.map((tier) => ({
+  ...tier,
+  origin: 'built-in' as const,
+}));
+
 const BUILT_IN_ESCALATION_SLA: EscalationSlaPolicy = {
   source: 'built-in',
   editable: false,
   tiers: DEFAULT_ESCALATION_SLA_TIERS,
 };
 
+// ── Reading the policy from the database ─────────────────────────────────────
+
+const ESCALATION_SLA_TABLE = 'escalation_sla_thresholds';
+const ESCALATION_SLA_SELECT = 'district,report_type,severity,hours,label';
+
+const ESCALATION_REPORT_TYPES = new Set<string>(['disease', 'water', 'campaign', 'alert', 'report']);
+
+const TYPE_TITLES: Record<EscalationReportType, string> = {
+  disease: 'Disease',
+  water: 'Water',
+  campaign: 'Campaign',
+  alert: 'Alert',
+  report: 'Other',
+};
+
+/** A row with no label of its own still has to read as a sentence in the SLA table. */
+const describeTier = (
+  reportType: EscalationReportType,
+  severity: string | null,
+  district: string | null
+): string => {
+  const base = severity ? `${TYPE_TITLES[reportType]} · ${severity}` : TYPE_TITLES[reportType];
+  return district ? `${base} (${district})` : base;
+};
+
+/** Identity of a threshold: one district + type + severity has exactly one number. */
+const tierKey = (tier: EscalationSlaTier): string =>
+  `${normalizeDistrict(tier.district)}|${tier.report_type}|${tier.severity ?? ''}`;
+
+const parseSlaRow = (row: GenericRow): EscalationSlaTier | null => {
+  const reportType = normalizeWord(row.report_type);
+  if (!ESCALATION_REPORT_TYPES.has(reportType)) return null;
+
+  // A zero or negative SLA would mark every item overdue the instant it was
+  // filed, painting the whole queue red off one bad edit. Drop the row and let
+  // the built-in tier underneath it govern instead.
+  const hours = toNumber(row.hours, Number.NaN);
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+
+  const district = getStringField(row, ['district']);
+  const severityRaw = getStringField(row, ['severity']);
+  const severity = severityRaw ? normalizeWord(severityRaw) : null;
+
+  return {
+    district,
+    report_type: reportType as EscalationReportType,
+    severity,
+    hours,
+    label: getStringField(row, ['label']) ?? describeTier(reportType as EscalationReportType, severity, district),
+    origin: 'database',
+  };
+};
+
+/**
+ * Configured rows win; the built-in ladder fills every gap they leave.
+ *
+ * A district that sets only "alert · critical = 1h" must not lose the rule for
+ * everything else — a partially configured table that silently made 14 other
+ * kinds of item un-escalatable would be worse than the constant this replaced.
+ * `resolveEscalationSla` takes the FIRST match at each specificity level, so
+ * putting database rows ahead of built-ins is what makes them override.
+ */
+const mergeSlaTiers = (dbTiers: EscalationSlaTier[]): EscalationSlaTier[] => {
+  const configured = new Set(dbTiers.map(tierKey));
+  return [...dbTiers, ...DEFAULT_ESCALATION_SLA_TIERS.filter((tier) => !configured.has(tierKey(tier)))];
+};
+
 /**
  * The SLA policy in force for this profile.
  *
- * Async on purpose: the database read this becomes is a query, and every caller
- * is already awaiting. Today there is no `escalation_sla_thresholds` relation in
- * the project, so this returns the built-in policy and says so.
+ * Three honest outcomes, and the screen says which one it got:
+ *   - no such table   → built-in ladder, not editable (today's live project)
+ *   - table, no rows  → built-in ladder, but editable — nobody has set one yet
+ *   - table with rows → those hours, with built-ins filling the gaps
  */
 export async function getEscalationSlaPolicy(_profile: Profile): Promise<EscalationSlaPolicy> {
-  return BUILT_IN_ESCALATION_SLA;
+  const key = probeKey(ESCALATION_SLA_TABLE, ESCALATION_SLA_SELECT);
+  if (deadProbeCache.has(key)) return BUILT_IN_ESCALATION_SLA;
+
+  const { data, error } = await supabase
+    .from(ESCALATION_SLA_TABLE)
+    .select(ESCALATION_SLA_SELECT)
+    .order('report_type', { ascending: true })
+    .order('hours', { ascending: true });
+
+  if (error) {
+    if (isMissingSchemaError(error)) {
+      // Not a failure: this deployment has no SLA table, so the built-in
+      // ladder IS the rule in force. Remembered so it costs one request per
+      // session rather than one per open.
+      deadProbeCache.add(key);
+      return BUILT_IN_ESCALATION_SLA;
+    }
+
+    // The table exists and we could not read it. Falling back to the built-in
+    // hours here would print a threshold that is NOT the one in force and mark
+    // items overdue against it — a confident number standing in for a failed
+    // query, which is this codebase's signature defect. Let the caller's error
+    // state own it.
+    throw new Error(`Escalation SLA policy could not be read: ${error.message}`);
+  }
+
+  const tiers = ((data ?? []) as unknown as GenericRow[])
+    .map(parseSlaRow)
+    .filter((tier): tier is EscalationSlaTier => tier !== null);
+
+  if (tiers.length === 0) {
+    return { source: 'built-in', editable: true, tiers: DEFAULT_ESCALATION_SLA_TIERS };
+  }
+
+  return { source: 'database', editable: true, tiers: mergeSlaTiers(tiers) };
 }
 
 /** Most-specific match wins: district+type+severity → type+severity → type → 'report'. */
@@ -756,9 +873,19 @@ const ESCALATION_SOURCES: EscalationSource[] = [
   },
 ];
 
-// The one approval_status value that means "waiting for a human". Verified
-// against the CHECK constraint on all four tables:
-// approval_status = ANY (ARRAY['pending_approval','approved','rejected']).
+// The one approval_status value that means "waiting for a human".
+//
+// Re-checked against the live project on 3 Aug 2026, and the earlier claim here
+// that all four tables enforce it was WRONG. Three do:
+//   disease_reports / water_quality_reports / health_campaigns
+//     CHECK (approval_status = ANY (ARRAY['pending_approval','approved','rejected']))
+// `health_alerts` has NO such constraint — the column is merely nullable with
+// DEFAULT 'pending_approval'. It is correct in practice because
+// auto_approve_alert_fn() writes literally 'pending_approval' on the non-admin
+// branch, but nothing stops a NULL or a typo, and such a row would drop out of
+// the equality filter below and leave this screen reading "Queue clear" over an
+// alert nobody has approved. The CHECK that closes that hole is DDL and is
+// reported in the BRK-19 hand-off rather than applied from here.
 const PENDING_APPROVAL = 'pending_approval';
 
 // Oldest-first, so if this cap is ever hit the rows that fall off are the

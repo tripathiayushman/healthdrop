@@ -3,7 +3,10 @@
     "cancel": "Cancel",
     "back": "Back",
     "done": "Done",
-    "ok": "OK"
+    "ok": "OK",
+    "asOf": "as of {{when}}",
+    "offlineCopy": "Offline copy · as of {{when}}",
+    "networkStalled": "The network stalled — nothing came back in time. Tap retry when you have signal."
   },
   "auth": {
     "tagline": "Community health surveillance",
@@ -406,5 +409,69 @@
     "restoreBodyPlain": "You were filling this in earlier and did not finish. If you already tapped Send, check My Submissions first — sending this again would file it twice.",
     "restore": "Restore",
     "startFresh": "Delete it"
+  },
+  "campaigns": {
+    "checkin": {
+      "mark": "Mark my attendance",
+      "markFor": "Mark my attendance at {{campaign}}",
+      "records": "Saves the time, and your phone's location if it is available. It is not checked against the camp location — none is saved for this camp.",
+      "whoSees": "The organiser and district officials can see this.",
+      "recorded": "Attendance recorded",
+      "recordedAt": "Attendance recorded · {{time}}",
+      "savedWithLocation": "Time and location saved.",
+      "savedTimeOnly": "Time saved — location was not available.",
+      "offline": "Marking attendance needs a connection — try again when you're back online.",
+      "signedOut": "You must be signed in to mark attendance.",
+      "lookupFailed": "Couldn't check your enrolment — check connection and try again.",
+      "notEnrolled": "You are not enrolled in this campaign — enrol first, then mark attendance.",
+      "saveFailed": "Couldn't record attendance — check connection and try again."
+    },
+    "enrol": {
+      "signedOut": "You must be signed in to enrol.",
+      "checkFailed": "Couldn't check this campaign — refresh and try again.",
+      "closed": "Enrolment is open only for approved campaigns that have not finished.",
+      "statusFailed": "Couldn't check your enrolment — check connection and try again.",
+      "reenrolled": "You're enrolled again in \"{{campaign}}\".",
+      "already": "You're already enrolled in \"{{campaign}}\".",
+      "done": "You're enrolled in \"{{campaign}}\".",
+      "failed": "Couldn't enrol — check connection and try again."
+    },
+    "withdraw": {
+      "signedOut": "You must be signed in to withdraw.",
+      "failed": "Couldn't withdraw — check connection and try again.",
+      "done": "You've withdrawn from \"{{campaign}}\". You can enrol again while places remain."
+    }
+  },
+  "alertStandDown": {
+    "sectionTitle": "Recently ended",
+    "sectionSubOne": "An official stood down 1 advisory. It is no longer in force.",
+    "sectionSubMany": "An official stood down {{n}} advisories. They are no longer in force.",
+    "cardA11y": "Ended advisory: {{title}}. This alert is no longer in force.",
+    "tag": "STOOD DOWN",
+    "whenUnknown": "date not recorded",
+    "noNote": "No closing note was recorded.",
+    "posterTitle": "This advisory has ended",
+    "posterFoot": "What follows is kept for the record. Do not act on it and do not pass it on.",
+    "wasUrgency": "WAS {{level}}",
+    "byWhoWhen": "Stood down by {{name}} · {{when}}",
+    "byWho": "Stood down by {{name}}",
+    "byWhen": "Stood down {{when}}",
+    "byUnknown": "Stood down — the officer and time were not recorded",
+    "zoneHint": "Is this over? Standing it down removes it from the map and the alert lists, and tells everyone who was warned that it has ended.",
+    "openA11y": "Stand down this alert — opens a form for the closing note",
+    "openAction": "Stand down this alert",
+    "formTitle": "Why is this over?",
+    "formHint": "Everyone who saw this alert will read what you write here. Say what changed — the outbreak is contained, the water tested clean, the source was repaired.",
+    "formPlaceholder": "e.g. No new cases for 14 days. Handpump repaired and retested clean on 28 July.",
+    "formInputA11y": "Closing note — required, at least {{min}} characters",
+    "countOk": "{{n}} / {{max}}",
+    "countShort": "A closing note is required — {{more}} more character(s)",
+    "errorSave": "Couldn't stand this alert down — check your connection and try again. Nothing was changed.",
+    "errorNotApplied": "Nothing was changed — this alert may already have been stood down by someone else, or your account is not permitted to close it. Pull to refresh.",
+    "cancelA11y": "Cancel — leave this alert active",
+    "cancel": "Keep it active",
+    "confirmA11y": "Confirm — stand this alert down for everyone",
+    "confirm": "Stand down",
+    "confirmSaving": "Standing down…"
   }
 }

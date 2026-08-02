@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radii } from '../../lib/ThemeContext';
+import { formatDateTime } from '../../lib/format';
 import { syncQueue, QueueItem, QueueItemType, QueueItemStatus } from '../../src/services/offlineSync/SyncQueue';
 import { offlineSyncService, SyncResult } from '../../src/services/offlineSync/OfflineSyncService';
 import { SkeletonBlock, ErrorCard, EmptyState, SyncPebble, ROLE_ACCENT } from '../dashboards/DashboardShared';
@@ -53,14 +54,10 @@ export const QUEUE_TYPE_ICON: Record<QueueItemType, keyof typeof Ionicons.glyphM
   feedback:             'chatbox-ellipses-outline',
 };
 
-const formatShortDateTime = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const date = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
-  return `${date} ${time}`;
-};
+// Timestamps go through lib/format (BRK-15): the SAME queued item is now
+// rendered on two screens, so both must read it identically — and the old
+// local helper hardcoded 'en-IN', printing English month names to a Hindi
+// user and offering no fallback on a Hermes build without full ICU.
 
 /** Best-effort human title from the queued payload — read defensively. */
 export const queuePayloadTitle = (item: QueueItem): string | null => {
@@ -300,7 +297,7 @@ export default function SyncOutboxScreen({ profile, onBack }: { profile: Profile
   const renderItem = ({ item }: { item: QueueItem }) => {
     const permanentlyFailed = isPermanentlyFailed(item);
     const typeKey = QUEUE_TYPE_LABEL_KEY[item.type] as string | undefined;
-    const savedLine = t('outbox.savedAt', { when: formatShortDateTime(item.createdAt) || '—' });
+    const savedLine = t('outbox.savedAt', { when: formatDateTime(item.createdAt) || '—' });
     const title = queuePayloadTitle(item) ?? (typeKey ? t(typeKey) : t('outbox.savedReport'));
     const subtitle = queuePayloadTitle(item)
       ? `${typeKey ? t(typeKey) : t('outbox.reportWord')} · ${savedLine}`

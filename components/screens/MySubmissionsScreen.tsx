@@ -721,7 +721,8 @@ export default function MySubmissionsScreen({
               onPress={onOpenOutbox}
               accessibilityRole="button"
               accessibilityLabel="Manage saved reports in the sync outbox"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              // 17dp of text + 2×16 = 49dp of tappable height.
+              hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
             >
               <Text style={[ms.asOf, { color: colors.primary }]} maxFontSizeMultiplier={1.3}>
                 {t('submissions.manageInOutbox', { defaultValue: 'Manage' })}

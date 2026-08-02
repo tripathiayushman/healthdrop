@@ -89,11 +89,16 @@ const storage = Platform.OS === 'web' ? {
 //     (SupabaseClient.js:63, 73, 78-80, 91).
 //   NOT COVERED: realtime (a WebSocket — no fetch involved),
 //     and any BARE `fetch()` a component makes on its own.
-//     `global.fetch` is deliberately NOT monkey-patched, so
-//     the two Nominatim reverse-geocode calls
-//     (components/AuthScreen.tsx:104, src/hooks/useLocation.ts:112)
-//     are still unbounded. Both need their own controller;
-//     see the INC-05 report.
+//     `global.fetch` is deliberately NOT monkey-patched — a
+//     global patch would also bind every library that ships
+//     its own retry logic, and would make the deadline
+//     invisible at the call site. The two Nominatim
+//     reverse-geocode calls (components/AuthScreen.tsx:104,
+//     src/hooks/useLocation.ts:112) are therefore STILL
+//     UNBOUNDED as of this change, and those files belong to
+//     other owners. fetchWithDeadline() below is the
+//     one-line fix they need; the exact edit is in the INC-05
+//     report.
 //
 // Hermes has no AbortSignal.timeout (React Native ships the
 // whatwg `abort-controller` polyfill, which implements only
@@ -136,6 +141,15 @@ export const READ_TIMEOUT_MS = 15_000;
 export const MUTATION_TIMEOUT_MS = 30_000;
 /** Deadline for edge functions (LLM completions live here). */
 export const FUNCTION_TIMEOUT_MS = 60_000;
+/**
+ * Deadline for a third-party reverse-geocode (Nominatim). Shorter than a read
+ * on purpose: the district and state it fills in are a CONVENIENCE — the form
+ * has typed fields for both and the caller already falls back to them — so
+ * making a worker watch a spinner for 15 s to save two taps is the wrong
+ * trade. Nominatim also rate-limits anonymous callers, and a throttled
+ * connection is exactly where this stalls.
+ */
+export const GEOCODE_TIMEOUT_MS = 8_000;
 
 /**
  * Raised when our own deadline fires. supabase-js does not rethrow fetch
@@ -224,17 +238,28 @@ export const timeoutForRequest = (url: string, method: string): number => {
 };
 
 /**
- * fetch with a deadline. Handed to BOTH Supabase clients as their
- * `global.fetch` option, so it covers PostgREST, auth, storage and edge
- * functions on each (SupabaseClient.js:63, 73, 78-80, 91). `globalThis.fetch`
- * is intentionally left alone — see the SCOPE note above for what that means.
+ * fetch with an EXPLICIT deadline — the primitive behind timeoutFetch, and the
+ * one to reach for from any call that does NOT go through a Supabase client.
  *
- * Exported so the deadline can be exercised directly in verification.
+ * It exists as its own export because "every request has a deadline" was
+ * claimed for INC-05a and was false: a bare `fetch()` in a component is not
+ * touched by a client's `global.fetch`, and two of them (the Nominatim
+ * reverse-geocodes) are on the GPS path of the report form — the screen a
+ * worker uses standing outside with one bar. Use:
+ *
+ *   import { fetchWithDeadline, GEOCODE_TIMEOUT_MS } from '../lib/supabase';
+ *   const res = await fetchWithDeadline(url, { headers }, GEOCODE_TIMEOUT_MS);
+ *
+ * On expiry it throws RequestTimeoutError, which isOfflineError() /
+ * describeRequestError() already understand, so the caller's existing
+ * catch keeps working and gets honest copy for free.
  */
-export const timeoutFetch = async (...args: FetchArgs): Promise<Response> => {
-  const [input, init] = args;
+export const fetchWithDeadline = async (
+  input: FetchArgs[0],
+  init: FetchArgs[1] | undefined,
+  timeoutMs: number,
+): Promise<Response> => {
   const url = requestUrl(input);
-  const timeoutMs = timeoutForRequest(url, requestMethod(input, init));
 
   const controller = new AbortController();
   let timedOut = false;
@@ -292,6 +317,20 @@ export const timeoutFetch = async (...args: FetchArgs): Promise<Response> => {
     if (cancelled) throw new RequestCancelledError(url);
     throw err;
   }
+};
+
+/**
+ * fetch with the deadline this request class earns. Handed to BOTH Supabase
+ * clients as their `global.fetch` option, so it covers PostgREST, auth, storage
+ * and edge functions on each (SupabaseClient.js:63, 73, 78-80, 91).
+ * `globalThis.fetch` is intentionally left alone — see the SCOPE note above.
+ *
+ * Exported so the deadline can be exercised directly in verification.
+ */
+export const timeoutFetch = async (...args: FetchArgs): Promise<Response> => {
+  const [input, init] = args;
+  const url = requestUrl(input);
+  return fetchWithDeadline(input, init, timeoutForRequest(url, requestMethod(input, init)));
 };
 
 // ── Error classification ─────────────────────────────

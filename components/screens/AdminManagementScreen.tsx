@@ -154,6 +154,23 @@ interface UserAuditRow {
   created_at: string;
 }
 
+/**
+ * Analytics totals. Held as a whole object or not at all: every number in it
+ * is derived from the SAME four reads, so if one read failed the other nine
+ * numbers are not a partial truth — they are a different question's answer
+ * sitting under this question's labels.
+ */
+interface AdminStats {
+  totalUsers: number;
+  activeUsers: number;
+  totalDiseaseReports: number;
+  pendingDiseaseReports: number;
+  totalWaterReports: number;
+  unsafeWaterSources: number;
+  activeCampaigns: number;
+  completedCampaigns: number;
+}
+
 interface AdminManagementScreenProps {
   profile: Profile;
   onBack: () => void;
@@ -390,18 +407,11 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     setShowConfirmModal(true);
   };
 
-  // Stats
-  const [stats, setStats] = useState({
-    totalUsers: 0,
-    activeUsers: 0,
-    totalDiseaseReports: 0,
-    pendingDiseaseReports: 0,
-    totalWaterReports: 0,
-    unsafeWaterSources: 0,
-    activeCampaigns: 0,
-    completedCampaigns: 0,
-    pendingApprovals: 0,
-  });
+  // Stats — `null` is NOT LOADED. It is never rendered as a zero: a zero here
+  // is a statement about the district ("no unsafe water sources"), and a
+  // failed read must not be allowed to make that statement.
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   // ── Audit trail state (INC-12) ──────────────────────
   // Three independent data regions, each with its own four states, because
@@ -464,39 +474,62 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
     }
   };
 
+  /**
+   * Totals for the Analytics tab.
+   *
+   * This used to be allSettled + `r.status === 'fulfilled' ? r.value.data || []
+   * : []` inside a try/catch that only logged — so a dropped connection painted
+   * "Total Users 0" and "Unsafe 0" in confident 24px ink. That is the banned
+   * shape: a failed read wearing the face of a clean district. Now every
+   * settlement is inspected, ANY failure fails the whole region, and the
+   * numbers are shown only when all four reads actually arrived.
+   *
+   * `count: 'exact'` was requested and never read; it is dropped rather than
+   * making the server COUNT(*) four tables on every tab switch.
+   */
   const loadStats = async () => {
-    try {
-      const [usersRes, diseaseRes, waterRes, campaignsRes] = await Promise.allSettled([
-        supabase.from('profiles').select('id, is_active', { count: 'exact' }),
-        supabase.from('disease_reports').select('id, status, approval_status', { count: 'exact' }),
-        supabase.from('water_quality_reports').select('id, overall_quality, approval_status', { count: 'exact' }),
-        supabase.from('health_campaigns').select('id, status, approval_status', { count: 'exact' }),
-      ]);
+    setStatsError(null);
+    const settled = await Promise.allSettled([
+      supabase.from('profiles').select('id, is_active'),
+      supabase.from('disease_reports').select('id, status'),
+      supabase.from('water_quality_reports').select('id, overall_quality'),
+      supabase.from('health_campaigns').select('id, status'),
+    ]);
 
-      const usersData = usersRes.status === 'fulfilled' ? usersRes.value.data || [] : [];
-      const diseaseData = diseaseRes.status === 'fulfilled' ? diseaseRes.value.data || [] : [];
-      const waterData = waterRes.status === 'fulfilled' ? waterRes.value.data || [] : [];
-      const campaignsData = campaignsRes.status === 'fulfilled' ? campaignsRes.value.data || [] : [];
+    const fail = (message: string | undefined) => {
+      setStats(null);
+      setStatsError(message || "Couldn't load the totals — check connection.");
+    };
 
-      // Count pending approvals across all report types
-      const pendingDiseaseApprovals = diseaseData.filter((r: any) => r.approval_status === 'pending_approval').length;
-      const pendingWaterApprovals = waterData.filter((r: any) => r.approval_status === 'pending_approval').length;
-      const pendingCampaignApprovals = campaignsData.filter((c: any) => c.approval_status === 'pending_approval').length;
-
-      setStats({
-        totalUsers: usersData.length,
-        activeUsers: usersData.filter((u: any) => u.is_active !== false).length,
-        totalDiseaseReports: diseaseData.length,
-        pendingDiseaseReports: diseaseData.filter((r: any) => r.status === 'reported').length,
-        totalWaterReports: waterData.length,
-        unsafeWaterSources: waterData.filter((r: any) => r.overall_quality === 'unsafe' || r.overall_quality === 'critical').length,
-        activeCampaigns: campaignsData.filter((c: any) => c.status === 'active' || c.status === 'upcoming').length,
-        completedCampaigns: campaignsData.filter((c: any) => c.status === 'completed').length,
-        pendingApprovals: pendingDiseaseApprovals + pendingWaterApprovals + pendingCampaignApprovals,
-      });
-    } catch (error) {
-      console.error('Error loading stats:', error);
+    const rows: any[][] = [];
+    for (const s of settled) {
+      if (s.status === 'rejected') {
+        console.error('Error loading stats:', s.reason);
+        fail(s.reason?.message);
+        return;
+      }
+      if (s.value.error) {
+        console.error('Error loading stats:', s.value.error);
+        fail(s.value.error.message);
+        return;
+      }
+      // Only here — on a read that SUCCEEDED — may an absent array stand for
+      // "no rows". PostgREST returns [] for an empty table; null cannot mean
+      // failure at this point because the error branch above already returned.
+      rows.push(s.value.data ?? []);
     }
+    const [usersData, diseaseData, waterData, campaignsData] = rows;
+
+    setStats({
+      totalUsers: usersData.length,
+      activeUsers: usersData.filter((u: any) => u.is_active !== false).length,
+      totalDiseaseReports: diseaseData.length,
+      pendingDiseaseReports: diseaseData.filter((r: any) => r.status === 'reported').length,
+      totalWaterReports: waterData.length,
+      unsafeWaterSources: waterData.filter((r: any) => r.overall_quality === 'unsafe' || r.overall_quality === 'critical').length,
+      activeCampaigns: campaignsData.filter((c: any) => c.status === 'active' || c.status === 'upcoming').length,
+      completedCampaigns: campaignsData.filter((c: any) => c.status === 'completed').length,
+    });
   };
 
   const loadUsers = async () => {
@@ -1217,7 +1250,45 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
 
   // ==================== RENDER ANALYTICS ====================
   // Data numerals in ink, tabular-nums — never in category colors.
-  const renderAnalytics = () => (
+  // Four states, like every other data region here: skeleton / content /
+  // quiet-zero / error-with-retry. A zero on this tab is a claim about the
+  // district, so it may only ever come from a read that succeeded.
+  const renderAnalytics = () => {
+    if (statsError) {
+      return (
+        <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+          <ErrorCard message={statsError} onRetry={loadStats} />
+        </View>
+      );
+    }
+    if (stats === null) {
+      return (
+        <View style={styles.skeletonWrap} accessibilityElementsHidden>
+          <SkeletonBlock height={128} radius={radii.md} />
+          <SkeletonBlock height={128} radius={radii.md} />
+          <SkeletonBlock height={128} radius={radii.md} />
+        </View>
+      );
+    }
+    const s = stats;
+    if (
+      s.totalUsers === 0 &&
+      s.totalDiseaseReports === 0 &&
+      s.totalWaterReports === 0 &&
+      s.activeCampaigns + s.completedCampaigns === 0
+    ) {
+      return (
+        <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
+          <EmptyState
+            icon="document-outline"
+            color={colors.textSecondary}
+            title="Nothing has been recorded yet."
+            subtitle="All four tables were read and all four are empty. This is what they hold — not a failure to read them."
+          />
+        </View>
+      );
+    }
+    return (
     <ScrollView showsVerticalScrollIndicator={false}>
       <View style={styles.analyticsContainer}>
         {[
@@ -1225,36 +1296,36 @@ const AdminManagementScreen: React.FC<AdminManagementScreenProps> = ({ profile, 
             icon: 'people-outline' as const,
             title: 'User Statistics',
             stats: [
-              { value: stats.totalUsers, label: 'Total Users' },
-              { value: stats.activeUsers, label: 'Active' },
-              { value: stats.totalUsers - stats.activeUsers, label: 'Inactive' },
+              { value: s.totalUsers, label: 'Total Users' },
+              { value: s.activeUsers, label: 'Active' },
+              { value: s.totalUsers - s.activeUsers, label: 'Inactive' },
             ],
           },
           {
             icon: 'medkit-outline' as const,
             title: 'Disease Reports',
             stats: [
-              { value: stats.totalDiseaseReports, label: 'Total' },
-              { value: stats.pendingDiseaseReports, label: 'Pending' },
-              { value: stats.totalDiseaseReports - stats.pendingDiseaseReports, label: 'Verified' },
+              { value: s.totalDiseaseReports, label: 'Total' },
+              { value: s.pendingDiseaseReports, label: 'Pending' },
+              { value: s.totalDiseaseReports - s.pendingDiseaseReports, label: 'Verified' },
             ],
           },
           {
             icon: 'water-outline' as const,
             title: 'Water Quality Reports',
             stats: [
-              { value: stats.totalWaterReports, label: 'Total' },
-              { value: stats.totalWaterReports - stats.unsafeWaterSources, label: 'Safe' },
-              { value: stats.unsafeWaterSources, label: 'Unsafe' },
+              { value: s.totalWaterReports, label: 'Total' },
+              { value: s.totalWaterReports - s.unsafeWaterSources, label: 'Safe' },
+              { value: s.unsafeWaterSources, label: 'Unsafe' },
             ],
           },
           {
             icon: 'megaphone-outline' as const,
             title: 'Campaigns',
             stats: [
-              { value: stats.activeCampaigns + stats.completedCampaigns, label: 'Total' },
-              { value: stats.activeCampaigns, label: 'Active' },
-              { value: stats.completedCampaigns, label: 'Completed' },
+              { value: s.activeCampaigns + s.completedCampaigns, label: 'Total' },
+              { value: s.activeCampaigns, label: 'Active' },
+              { value: s.completedCampaigns, label: 'Completed' },
             ],
           },
         ].map((cardData, i) => (

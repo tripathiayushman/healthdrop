@@ -736,6 +736,20 @@ export const DiseaseReportForm: React.FC<DiseaseReportFormProps> = ({
     setSelectedSymptoms([]);
     setOtherSymptoms('');
     setNotes('');
+    // A NEW report needs a NEW idempotency key.
+    //
+    // This is the one place the key must be re-minted, and the only place in
+    // the app that reuses a form instance after a successful send. Keeping the
+    // key would have been the exact inverse of the duplicate bug and far worse:
+    // the second outbreak she reports collides with the row just inserted,
+    // ignoreDuplicates makes it ON CONFLICT DO NOTHING, the service reads the
+    // FIRST report back and returns it as a success (lib/services/
+    // diseaseReports.ts — the `if (!data)` branch), and she is shown a
+    // confirmation card for a report that was never filed. A silent loss of a
+    // real disease report, dressed as a save.
+    //
+    // Not a per-call mint: it is per FILLING-IN, and this is a new filling-in.
+    setSubmitKey(`dr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`);
     // A blank second report is not unsaved work — re-arm so leaving it
     // untouched stays silent and nothing empty gets autosaved as a draft.
     draft.markPristine();
