@@ -2,7 +2,8 @@
 // AUTH RECOVERY — in-app password reset via email OTP
 // No deep links are configured for this app, so email
 // link-based resets are not viable. Instead:
-//   1. requestResetCode(email)     → signInWithOtp (6-digit code)
+//   1. requestResetCode(email)     → signInWithOtp (emails a numeric code;
+//      length is the server-side "Email OTP Length" setting, 6-10 digits)
 //   2. verifyResetCode(email,code) → verifyOtp (type: 'email')
 //   3. setNewPassword(password)    → updateUser, then sign-out
 //
@@ -14,9 +15,12 @@
 // the main client never sees a session until the user
 // signs in normally with their new password.
 //
-// NOTE (server config): the 6-digit code only appears in
-// the reset email if the "Magic Link" email template
-// includes {{ .Token }} (Dashboard → Auth → Templates).
+// NOTE (server config): the code only appears in the reset
+// email if the "Magic Link" template includes {{ .Token }}
+// (Dashboard → Auth → Templates). Its LENGTH is also a
+// server setting — Auth → Email OTP Length, 6-10 digits.
+// The client accepts the whole range; 6 is kindest to a
+// field worker typing it from a phone.
 // =====================================================
 import 'react-native-url-polyfill/auto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -79,7 +83,7 @@ const isUnknownEmail = (error: unknown): boolean =>
   errCode(error) === 'otp_disabled' || /signups not allowed/i.test(errText(error));
 
 /**
- * Step 1 — email a 6-digit reset code.
+ * Step 1 — email a numeric reset code (server decides the length).
  * Anti-enumeration: an unknown email returns the SAME success as a
  * known one; the caller shows "code sent" either way, so this screen
  * never reveals whether an account exists.
@@ -100,7 +104,7 @@ export const requestResetCode = async (email: string): Promise<RecoveryResult> =
 };
 
 /**
- * Step 2 — verify the 6-digit code. On success the RECOVERY client
+ * Step 2 — verify the emailed code. On success the RECOVERY client
  * (not the app client) holds a temporary session so the password can
  * be updated in step 3.
  */

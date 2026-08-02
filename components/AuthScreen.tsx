@@ -4,7 +4,7 @@
 // 52dp inputs, inline field errors (no Alert.alert),
 // solid-fill role selection, honest signup errors.
 // In-app password recovery: 3-step email-OTP flow
-// (email → 6-digit code → new password) on an isolated
+// (email → emailed code → new password) on an isolated
 // auth client — see lib/services/authRecovery.ts.
 // =====================================================
 import React, { useEffect, useRef, useState } from 'react';
@@ -27,6 +27,16 @@ import { useTheme, spacing, radii } from '../lib/ThemeContext';
 interface AuthScreenProps { onAuthSuccess: () => void; }
 
 // ── Indian States ─────────────────────────────────────
+/**
+ * Email OTP length is a SERVER setting (Supabase → Authentication → Email
+ * OTP Length), configurable from 6 to 10 digits. The client must accept the
+ * full range: a fixed 6 silently truncated the 8-digit codes this project
+ * was issuing, so every reset attempt failed with "incorrect code".
+ * Set the project to 6 to give field workers the shortest code to type.
+ */
+const OTP_MIN_LENGTH = 6;
+const OTP_MAX_LENGTH = 10;
+
 const INDIAN_STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh',
   'Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Karnataka',
@@ -464,8 +474,12 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
   const handleVerifyCode = async () => {
     const code = rCode.trim();
-    if (!/^\d{6}$/.test(code)) {
-      setErrors({ rCode: 'Enter the 6-digit code from the email' });
+    // Length is a SERVER setting (Supabase Auth "Email OTP Length", 6-10).
+    // Hard-coding 6 here locked users out whenever the project was configured
+    // for longer codes — the field silently truncated an 8-digit email code to
+    // 6 and every attempt failed. Accept whatever the server issues.
+    if (!new RegExp(`^\\d{${OTP_MIN_LENGTH},${OTP_MAX_LENGTH}}$`).test(code)) {
+      setErrors({ rCode: `Enter the ${OTP_MIN_LENGTH}–${OTP_MAX_LENGTH} digit code from the email` });
       return;
     }
     setLoading(true);
@@ -694,7 +708,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               /* ══ RECOVERY 1/3 — EMAIL ═════════════════ */
               <>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  We'll email you a 6-digit code to reset your password.
+                  We'll email you a code to reset your password.
                 </Text>
                 <LabeledField
                   label="Email" icon="at-outline" value={rEmail}
@@ -708,11 +722,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               /* ══ RECOVERY 2/3 — CODE ══════════════════ */
               <>
                 <Text style={[s.disclosure, { color: colors.textTertiary }]} maxFontSizeMultiplier={1.3}>
-                  {`Enter the 6-digit code we sent to ${rEmail.trim()}.`}
+                  {`Enter the code we sent to ${rEmail.trim()}.`}
                 </Text>
                 <View style={s.fieldWrap}>
                   <Text style={[s.fieldLabel, { color: colors.textSecondary }]} maxFontSizeMultiplier={1.3}>
-                    6-digit code
+                    Code from the email
                   </Text>
                   <TextInput
                     style={[
@@ -728,15 +742,15 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                       WEB_NO_OUTLINE,
                     ]}
                     value={rCode}
-                    onChangeText={(t) => { setRCode(t.replace(/\D/g, '').slice(0, 6)); clearError('rCode'); }}
+                    onChangeText={(t) => { setRCode(t.replace(/\D/g, '').slice(0, OTP_MAX_LENGTH)); clearError('rCode'); }}
                     placeholder="••••••"
                     placeholderTextColor={colors.placeholder}
                     keyboardType="number-pad"
-                    maxLength={6}
+                    maxLength={OTP_MAX_LENGTH}
                     textContentType="oneTimeCode"
                     onFocus={() => setCodeFocused(true)}
                     onBlur={() => setCodeFocused(false)}
-                    accessibilityLabel="6-digit code from the email"
+                    accessibilityLabel="Code from the email"
                   />
                   <FieldError message={errors.rCode} />
                 </View>
