@@ -48,6 +48,13 @@ yarn-error.*
 *service-account*.json
 serviceAccountKey.json
 
+# ── Role-tour harness (e2e/) ──────────────────────────────
+# Run artifacts. known-failures.json and accounts.example.json ARE tracked;
+# real credentials and generated output never are.
+e2e/shots/
+e2e/report.json
+e2e/accounts.local.json
+
 # typescript
 *.tsbuildinfo
 

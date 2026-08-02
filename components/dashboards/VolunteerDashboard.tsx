@@ -91,7 +91,14 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
         .eq('approval_status', 'approved')
         .order('created_at', { ascending: false })
         .limit(80);
-      const campaignData = await supabase.from('health_campaigns').select('id,name,title,campaign_name,description,campaign_type,start_date,end_date,district,state').eq('status', 'active').order('start_date', { ascending: true }).limit(4);
+      // Select only columns that exist. This used to ask for a speculative
+      // union — id,name,title,campaign_name,... — and health_campaigns has
+      // campaign_name but neither name nor title. Postgres rejects the whole
+      // statement on the first unknown column (42703), so this query returned
+      // HTTP 400 every single time and the volunteer's campaign list was
+      // permanently empty. The error was counted, but an empty list reads as
+      // "no campaigns" rather than "the query is broken".
+      const campaignData = await supabase.from('health_campaigns').select('id,campaign_name,description,campaign_type,start_date,end_date,district,state').eq('status', 'active').order('start_date', { ascending: true }).limit(4);
 
       // Silent zeros are design bugs: a failed fetch marks the region errored.
       if (alertData.error || campaignData.error) {
@@ -239,7 +246,7 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
                     </View>
                     <View style={styles.campaignInfo}>
                       <Text style={[styles.campaignTitle, { color: colors.text }]} numberOfLines={1}>
-                        {c.campaign_name || c.title || c.name || 'Untitled Campaign'}
+                        {c.campaign_name || 'Untitled Campaign'}
                       </Text>
                       <Text style={[styles.campaignDesc, { color: colors.textSecondary }]} numberOfLines={2}>{c.description}</Text>
                       <View style={styles.campaignMeta}>

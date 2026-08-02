@@ -1,0 +1,8 @@
+[
+  { "role": "asha_worker",      "email": "asha@example.test",     "password": "REPLACE_ME" },
+  { "role": "district_officer", "email": "district@example.test", "password": "REPLACE_ME" },
+  { "role": "clinic",           "email": "clinic@example.test",   "password": "REPLACE_ME" },
+  { "role": "volunteer",        "email": "vol@example.test",      "password": "REPLACE_ME" },
+  { "role": "health_admin",     "email": "health@example.test",   "password": "REPLACE_ME" },
+  { "role": "super_admin",      "email": "admin@example.test",    "password": "REPLACE_ME" }
+]

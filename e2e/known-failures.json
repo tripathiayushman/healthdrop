@@ -3,12 +3,27 @@
     "id": "outbreak-signal-is-a-detail-screen",
     "finding": "none",
     "reason": "outbreak-signal is a DETAIL screen, not an index. MainApp renders it only when outbreakFocusId is set (MainApp.tsx:428), and it is opened from a live outbreak card on DistrictOfficerDashboard. A static nav entry would land on a screen with no outbreak to show, which is worse than no entry at all. It is unreachable in the tour only because the outbreaks table is empty, which is the correct quiet-zero state. Delete this entry if an outbreak INDEX screen is ever added, because then a real entry point should exist.",
-    "match": { "kind": "screen-unreachable", "screen": "outbreak-signal" }
+    "match": {
+      "kind": "screen-unreachable",
+      "screen": "outbreak-signal"
+    }
   },
   {
     "id": "outbreak-console-is-a-detail-screen",
     "finding": "none",
     "reason": "Same as outbreak-signal: MainApp.tsx:443 renders outbreak-console only with an outbreakFocusId, and it is reached from outbreak-signal. A detail screen is legitimately reachable only through the record it describes.",
-    "match": { "kind": "screen-unreachable", "screen": "outbreak-console" }
+    "match": {
+      "kind": "screen-unreachable",
+      "screen": "outbreak-console"
+    }
+  },
+  {
+    "id": "ai-insights-openrouter-proxy-rate-limited",
+    "finding": "SEC-06",
+    "reason": "AIInsightsPanel requests an insight from functions/v1/openrouter-proxy when a role's home dashboard mounts. A six-hour cache now serves repeat mounts, but every tour session is a fresh browser context with empty storage, so each one still makes the cold call — and 24 sessions within a few minutes exhaust the free-tier quota, after which every later request in the run answers 429. The status varies with the live project's state (429 while rate-limited; 404/500 seen on earlier runs), so the signature matches any status for that endpoint. This is a real limit worth respecting rather than a pure harness artifact: the same burst from real users would rate-limit them too. Delete this entry once the call is gated behind explicit consent (SEC-06) and its failure is surfaced as a four-state error region instead of a console line.",
+    "match": {
+      "kind": "console-error",
+      "signature": "/openrouter-proxy$"
+    }
   }
 ]

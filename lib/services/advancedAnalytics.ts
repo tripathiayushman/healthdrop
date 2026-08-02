@@ -219,41 +219,31 @@ async function selectFromFirstAvailableView(
   return [];
 }
 
-const parseHealthScoreRow = (row: GenericRow): DistrictHealthRanking => {
-  const district = getStringField(row, ['district']) ?? 'Unknown';
-  const healthScore = toNumber(row.health_score, 0);
-  return {
-    district,
-    active_cases: toNumber(row.active_cases, 0),
-    avg_water_score: toNumber(row.avg_water_score, 0),
-    outbreak_count: toNumber(row.outbreak_count, 0),
-    avg_response_time: toNumber(row.avg_response_time, 0),
-    health_score: healthScore,
-    risk_rank: toNumber(row.risk_rank, 0),
-  };
-};
+// parseHealthScoreRow lived here to map a precomputed ranking view into
+// DistrictHealthRanking. No such view exists, so it was only ever reachable
+// from a branch that could not be taken. Removed with the dead probes.
 
 export async function getDistrictHealthRanking(profile: Profile): Promise<DistrictHealthRanking[]> {
-  const viewRows = await selectFromFirstAvailableView(
-    ['vw_district_health_ranking', 'district_health_scores', 'vw_health_scores'],
-    '*',
-    (query) => query.order('health_score', { ascending: false }).limit(200)
-  );
-
-  if (viewRows.length > 0) {
-    const mapped = applyDistrictScope(viewRows.map(parseHealthScoreRow), profile)
-      .sort((a, b) => a.health_score - b.health_score)
-      .map((row, index) => ({ ...row, risk_rank: index + 1 }));
-
-    return mapped;
-  }
-
+  // This used to probe vw_district_health_ranking, district_health_scores and
+  // vw_health_scores in turn. None of the three exists, so every open of the
+  // District Health Score screen fired three guaranteed-404 requests before
+  // doing the real work below.
+  //
+  // There is a real view — vw_district_health_score — but it is NOT a
+  // substitute: it exposes raw aggregates (total_reports, total_cases,
+  // active_outbreaks, avg_severity_score) and has neither health_score nor
+  // risk_rank. Wiring it in would have satisfied the "view found" branch and
+  // produced a ranking of zeroes. The score is computed here, from source
+  // rows, and that is the only implementation.
   const cutoffIso = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [diseaseRows, waterRows, outbreakRows, alertRows] = await Promise.all([
+  const [diseaseRows, waterRows, outbreakRows] = await Promise.all([
     selectFirstSuccessful(
       'disease_reports',
       [
+        // approved_at is what makes the response-time term real — see the
+        // diseaseRows loop below.
+        'district,cases_count,approval_status,created_at,approved_at',
         'district,cases_count,approval_status,created_at',
         'district,cases_count,created_at',
       ],
@@ -275,14 +265,14 @@ export async function getDistrictHealthRanking(profile: Profile): Promise<Distri
       ],
       (query) => query.gte('created_at', cutoffIso).limit(5000)
     ),
-    selectFirstSuccessful(
-      'health_alerts',
-      [
-        'district,created_at,resolved_at,status',
-        'district,created_at,status',
-      ],
-      (query) => query.gte('created_at', cutoffIso).limit(5000)
-    ),
+    // A fourth query fetched health_alerts as 'district,created_at,resolved_at,
+    // status' purely to derive response time. health_alerts has no resolved_at
+    // column, so Postgres rejected it with 42703 on every single open of the
+    // District Health Score screen — for all six roles — and the fallback
+    // variant then returned rows with no resolution timestamp at all. The
+    // metric could never be computed, so responseCount stayed 0 and every
+    // district silently took the hardcoded 12-hour default below. Response
+    // time now comes from disease_reports.approved_at, which is real data.
   ]);
 
   type DistrictMetrics = {
@@ -326,6 +316,20 @@ export async function getDistrictHealthRanking(profile: Profile): Promise<Distri
 
     const caseCount = Math.max(0, toNumber(row.cases_count, 1));
     bucket.activeCases += caseCount;
+
+    // Officer response time: how long a report waited for a human decision.
+    // Only approved reports have a decision timestamp to measure against.
+    if (approvalStatus === 'approved') {
+      const createdMs = toDateMs(row.created_at);
+      const approvedMs = toDateMs(row.approved_at);
+      if (createdMs !== null && approvedMs !== null && approvedMs >= createdMs) {
+        const hours = (approvedMs - createdMs) / (1000 * 60 * 60);
+        if (Number.isFinite(hours)) {
+          bucket.responseHoursTotal += hours;
+          bucket.responseCount += 1;
+        }
+      }
+    }
   });
 
   waterRows.forEach((row) => {
@@ -353,27 +357,11 @@ export async function getDistrictHealthRanking(profile: Profile): Promise<Distri
     }
   });
 
-  alertRows.forEach((row) => {
-    const district = getStringField(row, ['district']);
-    const bucket = ensureDistrict(district);
-    if (!bucket) return;
-
-    const createdMs = toDateMs(row.created_at);
-    const resolvedMs = toDateMs(row.resolved_at);
-
-    if (createdMs === null || resolvedMs === null || resolvedMs < createdMs) {
-      return;
-    }
-
-    const pendingHours = (resolvedMs - createdMs) / (1000 * 60 * 60);
-    if (!Number.isFinite(pendingHours) || pendingHours < 0) return;
-
-    bucket.responseHoursTotal += pendingHours;
-    bucket.responseCount += 1;
-  });
-
   const ranking = Array.from(metrics.values()).map((row) => {
     const avgWaterScore = row.waterScoreCount > 0 ? row.waterScoreTotal / row.waterScoreCount : 60;
+    // No approvals in the window means no measured response time. Assume a
+    // neutral 12h rather than rewarding a district for having decided nothing;
+    // until this query was fixed, EVERY district silently took this branch.
     const avgResponse = row.responseCount > 0 ? row.responseHoursTotal / row.responseCount : 12;
 
     const healthScore = clamp(
@@ -411,7 +399,10 @@ const parseCampaignName = (row: GenericRow): string =>
 
 export async function getCampaignEffectiveness(profile: Profile): Promise<CampaignEffectiveness[]> {
   const viewRows = await selectFromFirstAvailableView(
-    ['vw_campaign_effectiveness', 'campaign_effectiveness', 'vw_campaign_performance'],
+    // Only vw_campaign_effectiveness exists (it does have success_score).
+    // campaign_effectiveness and vw_campaign_performance never did, and each
+    // open of Campaign Intelligence paid for two 404s to learn that again.
+    ['vw_campaign_effectiveness'],
     '*',
     (query) => query.order('success_score', { ascending: false }).limit(300)
   );
@@ -441,11 +432,17 @@ export async function getCampaignEffectiveness(profile: Profile): Promise<Campai
     return mapped.filter((item) => item.campaign_id.length > 0);
   }
 
+  // Both candidate lists used to select title, name, target_population and
+  // reached_population. None of the four exists on health_campaigns, and
+  // Postgres rejects a statement on its first unknown column (42703), so
+  // BOTH candidates failed and getCampaignEffectiveness always returned [].
+  // Campaign Intelligence therefore showed a quiet zero — not "no campaigns",
+  // but "the query never worked" — for every role that can open it.
   const campaignRows = await selectFirstSuccessful(
     'health_campaigns',
     [
-      'id,campaign_name,title,name,campaign_type,district,state,status,start_date,end_date,target_population,reached_population,target_beneficiaries,current_participants,max_participants,created_at',
-      'id,campaign_name,title,name,campaign_type,district,state,status,start_date,end_date,target_population,reached_population,created_at',
+      'id,campaign_name,campaign_type,district,state,status,start_date,end_date,target_beneficiaries,current_participants,max_participants,created_at',
+      'id,campaign_name,campaign_type,district,state,status,start_date,end_date,created_at',
     ],
     (query) => query.order('created_at', { ascending: false }).limit(500)
   );
@@ -599,17 +596,10 @@ const mapEscalationRow = (row: GenericRow, fallbackType: string): EscalationReco
 };
 
 export async function getEscalationMonitoring(profile: Profile): Promise<EscalationRecord[]> {
-  const escalationViews = await selectFromFirstAvailableView(
-    ['vw_escalation_monitoring', 'escalation_monitoring', 'vw_pending_escalations'],
-    '*',
-    (query) => query.order('created_at', { ascending: false }).limit(500)
-  );
-
-  if (escalationViews.length > 0) {
-    const mapped = applyDistrictScope(escalationViews.map((row) => mapEscalationRow(row, 'report')), profile);
-    return mapped.filter((row) => row.report_id.length > 0);
-  }
-
+  // Probed vw_escalation_monitoring, escalation_monitoring and
+  // vw_pending_escalations here. None of the three exists in this database,
+  // so the screen paid for three 404s on every open and then did the real
+  // work below regardless.
   const cutoffIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
 
   const tables = [
