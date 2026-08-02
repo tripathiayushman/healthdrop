@@ -1539,6 +1539,15 @@ const styles = StyleSheet.create({
     minHeight: 56,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.lg,
+    // The label column takes flex: 1 and eats every remaining pixel, so
+    // `space-between` had nothing left to distribute and the value label sat
+    // flush against the caption — a measured 0px gutter at 360 AND 412.
+    // Worst on Profile → "Language / भाषा", whose caption wraps to two lines,
+    // putting "…some screens" directly beside "English" and "remain English"
+    // underneath it. It reads as overlapping text even though the boxes never
+    // intersect, which is why no overflow check caught it: the page never
+    // scrolls sideways, so scrollWidth never moves. Eyes caught this one.
+    gap: spacing.md,
   },
   menuItemLeft: {
     flexDirection: 'row',
@@ -1565,6 +1574,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
+    // Never let the value/chevron be squeezed to win space for the caption:
+    // a half-rendered "Engli…" is worse than a caption that wraps once more.
+    flexShrink: 0,
   },
   menuValue: {
     fontSize: 13,

@@ -398,7 +398,16 @@ async function main() {
       console.error(`unknown role(s): ${unknown.join(', ')}`);
       return 2;
     }
+    const before = sessions.map(s => s.role);
     sessions = sessions.filter(s => opts.roles.includes(s.role));
+    if (!sessions.length) {
+      console.error(
+        `no ${opts.mode} sessions cover ${opts.roles.join(', ')} — ` +
+        `the ${opts.mode} matrix only runs ${[...new Set(before)].join(', ')}. ` +
+        `Use --full, or add sessions to FULL_SESSIONS/QUICK_SESSIONS in e2e/catalog.cjs.`
+      );
+      return 2;
+    }
   }
   const missing = [...new Set(sessions.map(s => s.role))].filter(r => !accountsResult.accounts.has(r));
   if (missing.length) {

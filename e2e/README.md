@@ -18,8 +18,8 @@ This harness is the machine that logs in. As every role. Every time.
 npx expo export --platform web     # build ./dist  (or: npm run export:web)
 npx playwright install chromium    # one-time browser download (~150 MB)
 
-npm run e2e:quick                  # 4 sessions, ~3 min — local iteration
-npm run e2e                        # 24 sessions, full matrix — CI
+npm run e2e:quick                  # 4 sessions  — ~2 min wall (concurrency 2)
+npm run e2e                        # 24 sessions — ~4.5 min wall (concurrency 3)
 npm run verify                     # contrast gate + tsc + the quick tour
 ```
 
@@ -180,11 +180,20 @@ a suppression with no plan finding and no explanation does not load.
 
 **A known failure that starts passing fails the run.** The run classifies every entry as:
 
-* *still failing* — suppressed, printed under `KNOWN FAILURES (recorded, not hidden)`
-* *stale* — its scope was exercised and **every** matching observation passed. The run
-  fails with `STALE KNOWN FAILURES`; delete the entry so the fix stays guarded.
-* *not exercised* — this run never visited its scope. Normal with `--quick` and with
-  `--roles=`; never counted as a pass.
+* *still failing* — suppressed, printed under `KNOWN FAILURES (recorded, not hidden)`.
+* *stale* — a check of the same kind and scope **passed**, and nothing matched. That is
+  positive evidence the defect is fixed and the suppression is now unguarded rope. The
+  run **fails** with `STALE KNOWN FAILURES`; delete the entry.
+* *matched nothing* — no match, and no same-kind pass either. Printed loudly, but it
+  does not redden the run: it is the normal state under `--quick` / `--roles=`, and it
+  is also what a fixed console error looks like (a request that stopped happening
+  leaves no passing counterpart to prove it). **Check these by hand** — a rotting
+  suppression is the one failure mode this file is supposed to prevent.
+
+Reachability is deliberately recorded as a `screen-unreachable` check that **passes**
+when the screen is reachable, precisely so that fixing an entry point produces the
+positive evidence stale-detection needs. `overflow` and `empty-body` follow the same
+convention: the check is named for the defect and passes when it is absent.
 
 ---
 
@@ -280,8 +289,18 @@ Notes for anyone extending it — every one of these was learned the hard way:
   rather than silently forced. Three retries with a modal sweep between them come
   first, so this is not a flake generator.
 * **No hardcoded sleeps.** Loading is "wait until the rendered text and element count
-  stop changing"; navigation is "wait until the tab count flips". Timeouts are
-  ceilings, not expectations, and are generous enough for a cold CI box.
+  stop changing"; navigation is "wait until the tab count flips". `networkidle` is a
+  hint with a 6 s ceiling, never the thing waited on — the Supabase client keeps
+  chattering, and waiting on it cost ~20 s per screen before it was demoted.
+* **Entry labels resolve exact-first.** `DashboardShared` renders three label shapes:
+  `"Alert"` (QuickActionBtn), `"Disease Reports, 3 pending"` (badged ToolCard) and
+  `"Water Reports: 12"` (StatCard). A loose prefix match grabs an AlertCard
+  (`"Alert, urgency high: …"`) when the catalog asked for the Alert quick action, then
+  hangs waiting for a navigation that never happens.
+* **The static server survives `dist/` being rebuilt underneath it.** An unhandled
+  stream `error` used to take the whole runner down with `EPERM` when someone ran
+  `expo export` mid-tour. A dead request is recoverable; a dead runner loses the
+  entire matrix.
 * **`toggleTheme` cycles light → dark → *system* → light.** A fresh context always
   boots at `light`, so exactly one press lands on dark. Two presses would land on
   `system`, which — with the OS pinned to light — silently renders light again.

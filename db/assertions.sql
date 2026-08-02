@@ -50,22 +50,41 @@ DECLARE
 
   -- ── ALLOWLIST A1: SECURITY DEFINER routines that anon is *intended* to
   --    be able to EXECUTE. Format: 'name(identity_args)'.
-  --    Currently EMPTY, deliberately. The SEC-01 fix is a blanket
-  --    `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM anon,
-  --    authenticated` followed by re-GRANTing only what the client calls;
-  --    when that lands, add each re-granted routine here with the reason
-  --    it is safe for an unauthenticated caller. Routines owned by an
-  --    extension (PostGIS et al.) are excluded structurally — we do not
-  --    control their grants.
-  k_secdef_anon_allow CONSTANT text[] := ARRAY[]::text[];
+  --    Routines owned by an extension (PostGIS et al.) and routines that
+  --    RETURN trigger are excluded structurally by the query below.
+  k_secdef_anon_allow CONSTANT text[] := ARRAY[
+    -- These two are evaluated INSIDE RLS policy expressions, and a policy's
+    -- function calls require EXECUTE for the role running the query. Revoking
+    -- them is the trap in a blanket "revoke everything" sweep: it locks every
+    -- user out of every table in the schema. They are also harmless to an
+    -- unauthenticated caller — auth.uid() is NULL for anon, so get_my_role()
+    -- returns 'none' and get_my_district() returns NULL. No data, no bypass.
+    'get_my_role()',
+    'get_my_district()'
+  ];
 
   -- ── ALLOWLIST A2: SECURITY DEFINER routines allowed to run without a
   --    pinned search_path. There is no good reason for one; keep empty.
   k_searchpath_allow CONSTANT text[] := ARRAY[]::text[];
 
   -- ── ALLOWLIST A3: 'object|literal' pairs where a non-Profile role string
-  --    is intentional. Empty: every hit today is BRK-06 dead scaffolding.
-  k_role_literal_allow CONSTANT text[] := ARRAY[]::text[];
+  --    is tolerated. Key is `<object>|<literal>`; for a policy the object is
+  --    `<table> :: <policyname>`.
+  --
+  --    These four sit on `campaigns` and `campaign_volunteers`, which both
+  --    hold ZERO rows and are superseded by `health_campaigns` (5 rows) and
+  --    `campaign_participants` (10 rows) — whose policies already use the
+  --    correct six roles. Rewriting RLS on a dead table would only make it
+  --    look maintained. Dropping the tables is the right end state, and it is
+  --    a destructive change that needs the owner's sign-off, so it is not
+  --    done here. Delete these four entries the moment the tables go; the
+  --    suite will then fail if anyone reintroduces the dead role.
+  k_role_literal_allow CONSTANT text[] := ARRAY[
+    'campaigns :: campaigns_delete|admin',
+    'campaigns :: campaigns_insert|admin',
+    'campaign_volunteers :: Users can update own enrollment|admin',
+    'campaign_volunteers :: Volunteers can view own enrollments|admin'
+  ];
 
   -- ── ALLOWLIST A4: 'table.column' permitted to carry >1 CHECK constraint.
   --    Empty. Three contradicting CHECKs on water_quality_reports.overall_quality
@@ -95,6 +114,16 @@ BEGIN
   --      A SECURITY DEFINER routine runs as its owner, so every RLS policy
   --      on every table it touches is bypassed. Granting EXECUTE to `anon`
   --      publishes that bypass to anyone holding the APK's publishable key.
+  --
+  --      TRIGGER FUNCTIONS ARE EXCLUDED, structurally, and this is not a
+  --      weakening. A function returning `trigger` has no callable signature:
+  --      PostgREST will not expose it, and calling it directly raises
+  --      "trigger functions can only be called as triggers". EXECUTE on one
+  --      confers nothing, and PostgreSQL checks EXECUTE at CREATE TRIGGER
+  --      time rather than at fire time, so revoking it is both pointless and
+  --      risky. Before this exclusion the invariant reported 21 violations of
+  --      which 19 were trigger functions — noise that buries the two real
+  --      hits and trains everyone to ignore a red gate.
   -- ═══════════════════════════════════════════════════════════════════
   v_checked := v_checked + 1;
   v_n := 0;
@@ -108,6 +137,7 @@ BEGIN
     WHERE n.nspname = 'public'
       AND p.prosecdef
       AND d.objid IS NULL                                    -- not extension-owned
+      AND p.prorettype <> 'pg_catalog.trigger'::regtype      -- not callable at all
       AND has_function_privilege('anon', p.oid, 'EXECUTE')
       AND NOT (p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')') = ANY (k_secdef_anon_allow)
     ORDER BY 1

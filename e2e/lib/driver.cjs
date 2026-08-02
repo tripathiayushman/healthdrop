@@ -289,10 +289,10 @@ async function enableDarkMode(page) {
   await gotoTab(page, 'profile');
   const row = byLabel(page, 'Dark Mode').first();
   await tap(page, row, 'Dark Mode toggle');
+  // Wait for the paint, not for a timer: the app background token flips
+  // #FFFFFF -> #0B0B0D. If it never flips, the caller's theme-applied check
+  // records the failure with the measured colour.
   await page.waitForFunction(() => {
-    // the app background token flips to #0B0B0D
-    const bg = getComputedStyle(document.body).backgroundColor;
-    void bg;
     let best = null; let bestArea = 0;
     for (const el of document.querySelectorAll('*')) {
       const r = el.getBoundingClientRect();
