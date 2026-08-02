@@ -1,0 +1,14 @@
+[
+  {
+    "id": "outbreak-signal-is-a-detail-screen",
+    "finding": "none",
+    "reason": "outbreak-signal is a DETAIL screen, not an index. MainApp renders it only when outbreakFocusId is set (MainApp.tsx:428), and it is opened from a live outbreak card on DistrictOfficerDashboard. A static nav entry would land on a screen with no outbreak to show, which is worse than no entry at all. It is unreachable in the tour only because the outbreaks table is empty, which is the correct quiet-zero state. Delete this entry if an outbreak INDEX screen is ever added, because then a real entry point should exist.",
+    "match": { "kind": "screen-unreachable", "screen": "outbreak-signal" }
+  },
+  {
+    "id": "outbreak-console-is-a-detail-screen",
+    "finding": "none",
+    "reason": "Same as outbreak-signal: MainApp.tsx:443 renders outbreak-console only with an outbreakFocusId, and it is reached from outbreak-signal. A detail screen is legitimately reachable only through the record it describes.",
+    "match": { "kind": "screen-unreachable", "screen": "outbreak-console" }
+  }
+]

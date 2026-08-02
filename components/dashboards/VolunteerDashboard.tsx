@@ -200,6 +200,7 @@ export const VolunteerDashboard: React.FC<Props> = ({ profile, onNavigate }) => 
         <>
           <Section title="Operations Intelligence">
             <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="Track your district risk and health score trend" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="water-outline" iconColor={colors.info} title="Water Sources" subtitle="Which sources near you are safe, and when each was tested" onPress={() => onNavigate('water-sources')} />
             <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Choose which dashboard widgets remain visible" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />

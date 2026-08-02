@@ -232,6 +232,7 @@ export const AshaWorkerDashboard: React.FC<Props> = ({ profile, onNavigate }) =>
         <>
           <Section title="Operations Intelligence">
             <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="View district risk score and outbreak pressure" onPress={() => onNavigate('health-score')} />
+            <ToolCard icon="water-outline" iconColor={colors.info} title="Water Sources" subtitle="Browse sources in your area and their latest test result" onPress={() => onNavigate('water-sources')} />
             <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Review campaign performance and strategic guidance" onPress={() => onNavigate('campaign-intelligence')} />
             <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Choose dashboard widgets you want to see" onPress={() => onNavigate('widget-customization')} />
           </Section>

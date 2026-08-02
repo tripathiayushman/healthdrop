@@ -721,15 +721,10 @@ export async function getAIAlerts(profile: Profile): Promise<AIAlert[]> {
 
   let mapped = generatedRows.map((row) => mapAIAlertRow(row, 'generated'));
 
-  if (mapped.length === 0) {
-    const aiAlertRows = await selectFirstSuccessful(
-      'ai_alerts',
-      ['*'],
-      (query) => query.order('created_at', { ascending: false }).limit(300)
-    );
-
-    mapped = aiAlertRows.map((row) => mapAIAlertRow(row, 'generated'));
-  }
+  // There was a second fallback to an `ai_alerts` table here. No such table
+  // exists, so it 404'd on every dashboard load that had no AI alerts yet —
+  // silent to the user, but a wasted round-trip and console noise on the
+  // most-visited screen. The real table is ai_generated_alerts, queried above.
 
   if (mapped.length === 0) {
     const recommendationRows = await selectFirstSuccessful(

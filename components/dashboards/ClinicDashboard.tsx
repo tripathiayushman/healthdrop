@@ -120,6 +120,7 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
           <Section title="Clinic Approval Tools">
             <ToolCard icon="medkit-outline" iconColor={colors.danger} title="Disease Reports" subtitle="Verify and approve submitted disease reports" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
             <ToolCard icon="water-outline" iconColor={colors.info} title="Water Quality Reports" subtitle="Verify and approve water quality submissions" onPress={() => onNavigate('approval-queue:water')} />
+            <ToolCard icon="albums-outline" iconColor={colors.primary} title="Records Console" subtitle="Disease, water and campaign records for your district" onPress={() => onNavigate('admin-management')} />
           </Section>
           <SectionDivider />
         </>
@@ -185,6 +186,8 @@ export const ClinicDashboard: React.FC<Props> = ({ profile, onNavigate }) => {
             <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="View district health score and response indicators" onPress={() => onNavigate('health-score')} />
             <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Track campaign effectiveness for your district" onPress={() => onNavigate('campaign-intelligence')} />
             <ToolCard icon="git-network-outline" iconColor={colors.danger} title="Escalation Monitoring" subtitle="Monitor pending approvals crossing escalation windows" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="water-outline" iconColor={colors.info} title="Water Sources" subtitle="Sources in your district and their latest test result" onPress={() => onNavigate('water-sources')} />
+            <ToolCard icon="share-social-outline" iconColor={colors.primary} title="Weekly Summary" subtitle="IDSP-style verified digest — share on WhatsApp" onPress={() => onNavigate('weekly-summary')} />
             <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Tailor the dashboard modules visible to you" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />

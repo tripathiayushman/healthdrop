@@ -156,6 +156,7 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
             <ToolCard icon="checkmark-circle-outline" iconColor={colors.accent} title="Reports Pending Review" subtitle="ASHA & clinic reports awaiting approval" onPress={() => onNavigate('approval-queue:disease')} badge={stats.pendingReports} />
             <ToolCard icon="megaphone-outline" iconColor={colors.success} title="Campaign Approvals" subtitle="Review & publish pending health campaigns" onPress={() => onNavigate('approval-queue:campaigns')} />
             <ToolCard icon="warning-outline" iconColor={colors.warning} title="Alert Management" subtitle="Approve, publish & manage health alerts" onPress={() => onNavigate('approval-queue:alerts')} />
+            <ToolCard icon="albums-outline" iconColor={colors.primary} title="Records Console" subtitle="Users, disease, water and campaign records in one place" onPress={() => onNavigate('admin-management')} />
           </Section>
           <SectionDivider />
         </>
@@ -206,6 +207,9 @@ export const HealthAdminDashboard: React.FC<Props> = ({ profile, onNavigate }) =
             <ToolCard icon="pulse-outline" iconColor={colors.info} title="District Health Score" subtitle="Track health score and district risk ranking" onPress={() => onNavigate('health-score')} />
             <ToolCard icon="analytics-outline" iconColor={colors.success} title="Campaign Intelligence" subtitle="Measure campaign impact and optimize outreach" onPress={() => onNavigate('campaign-intelligence')} />
             <ToolCard icon="git-network-outline" iconColor={colors.danger} title="Escalation Monitoring" subtitle="Identify pending approvals that need intervention" onPress={() => onNavigate('escalation-monitoring')} />
+            <ToolCard icon="water-outline" iconColor={colors.info} title="Water Sources" subtitle="Every registered source and its latest test result" onPress={() => onNavigate('water-sources')} />
+            <ToolCard icon="share-social-outline" iconColor={colors.primary} title="Weekly Summary" subtitle="IDSP-style verified digest — share on WhatsApp" onPress={() => onNavigate('weekly-summary')} />
+            <ToolCard icon="radio-outline" iconColor={colors.primary} title="Broadcast to staff" subtitle="In-app advisory to field staff — never shown to the public" onPress={() => onNavigate('advisory-composer')} />
             <ToolCard icon="options-outline" iconColor={colors.textSecondary} title="Customize Widgets" subtitle="Select dashboard modules visible on your home view" onPress={() => onNavigate('widget-customization')} />
           </Section>
           <SectionDivider />

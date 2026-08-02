@@ -45,7 +45,22 @@ interface CachedInsightPayload {
   insight: AIInsight;
   scope: InsightScope;
   savedAt: string;
+  lang?: string;
 }
+
+// How long a stored insight is served without re-asking the model.
+//
+// This panel used to call the LLM on EVERY dashboard mount and treat the
+// cache purely as a crash-mat for failures. Six roles opening their home
+// screen a few times was enough to hit the proxy's rate limit — the role
+// tour produced 29 separate HTTP 429s from openrouter-proxy — and every
+// mount made the user wait on a network round-trip for advice that changes
+// a few times a day at most. Serving a fresh copy first makes the dashboard
+// open immediately, keeps the free tier usable, and costs nothing in
+// accuracy: surveillance summaries are not minute-to-minute data.
+//
+// Pull-to-refresh bypasses this entirely (loadInsights({ force: true })).
+const INSIGHT_FRESH_MS = 6 * 60 * 60 * 1000;
 
 const getInsightsCacheKey = (profile: Profile): string => {
   const userId = profile.id || 'unknown';
@@ -75,11 +90,35 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   const [trendLoading, setTrendLoading] = useState(true);
   const [trendError, setTrendError] = useState(false);
 
-  const loadInsights = async () => {
+  const loadInsights = async ({ force = false }: { force?: boolean } = {}) => {
     setLoading(true);
     setInsightError(false);
     setExpanded(false);
     const cacheKey = getInsightsCacheKey(profile);
+
+    // Serve a recent insight without touching the model. Only a copy written
+    // in the CURRENT language counts — a language switch must re-ask, so the
+    // advice is not left in the previous language.
+    if (!force) {
+      try {
+        const freshRaw = await AsyncStorage.getItem(cacheKey);
+        if (freshRaw) {
+          const cached = JSON.parse(freshRaw) as CachedInsightPayload;
+          const savedMs = cached?.savedAt ? new Date(cached.savedAt).getTime() : NaN;
+          const isFresh = Number.isFinite(savedMs) && Date.now() - savedMs < INSIGHT_FRESH_MS;
+          if (cached?.insight && isFresh && (cached.lang ?? i18n.language) === i18n.language) {
+            setInsight(cached.insight);
+            setScope(cached.scope || 'global');
+            setCachedAt(cached.savedAt);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch {
+        // Unreadable cache is not an error — fall through and ask the model.
+      }
+    }
+
     try {
       const district = profile.district;
       const state    = profile.state;
@@ -128,6 +167,7 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
         insight: result,
         scope: detectedScope,
         savedAt: new Date().toISOString(),
+        lang: i18n.language,
       };
       await AsyncStorage.setItem(cacheKey, JSON.stringify(cachePayload));
     } catch {
@@ -230,7 +270,8 @@ export const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ profile }) => 
   };
 
   const refreshPanel = () => {
-    loadInsights();
+    // An explicit refresh must always reach the model, never the cache.
+    loadInsights({ force: true });
     loadTrendData();
   };
 
