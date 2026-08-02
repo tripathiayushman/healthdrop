@@ -75,3 +75,18 @@
 --   fails for the wrong reason is as misleading as one that passes for the
 --   wrong reason, and the only way to tell them apart is to look.
 -- =====================================================================
+
+-- ── ADDENDUM: index the new table's foreign keys ────────────────────────
+-- escalation_sla_thresholds added created_by and updated_by -> profiles, and
+-- the first pass indexed only `district`. That left two unindexed foreign keys
+-- and falsified, within the hour, the claim recorded earlier today that "every
+-- foreign key that still exists is now indexed" (assertion A5's allowlist was
+-- emptied on that basis). CI would have failed the gate.
+--
+-- They earn their place regardless of the assertion: both columns are
+-- ON DELETE SET NULL, so deleting a profile scans this table for referencing
+-- rows, and an unindexed FK makes that a sequential scan.
+CREATE INDEX IF NOT EXISTS idx_escalation_sla_thresholds_created_by
+  ON public.escalation_sla_thresholds (created_by);
+CREATE INDEX IF NOT EXISTS idx_escalation_sla_thresholds_updated_by
+  ON public.escalation_sla_thresholds (updated_by);
