@@ -91,6 +91,20 @@ BEGIN
     GROUP BY d.jobid, j.jobname, j.command
     ORDER BY runs DESC, d.jobid
   LOOP
+    IF r.command = '(command unknown — job removed)' THEN
+      -- The job no longer exists in cron.job, so these runs are history: it
+      -- cannot fail again. Unscheduling is exactly what the HINT below tells
+      -- you to do, and failing the build for another 24 hours afterwards
+      -- would punish taking the advice — and worse, would make "wait for the
+      -- window to roll" the way to go green, which is indistinguishable from
+      -- ignoring it. Reported loudly, not fatally, so the record stays
+      -- visible while the gate goes back to watching LIVE jobs.
+      RAISE NOTICE E'GONE cron job % "%" failed % time(s) in the last % before it was unscheduled (% failed all-time)\n     error   : %',
+        r.jobid, r.jobname, r.runs, v_window, r.failed_all_time,
+        rtrim(replace(coalesce(r.last_error, '(no return_message recorded)'), E'\n', ' '));
+      CONTINUE;
+    END IF;
+
     v_failed := v_failed + 1;
     v_runs   := v_runs + r.runs;
     RAISE WARNING E'FAIL cron job % "%" failed % time(s) in the last % (% failed all-time)\n     command : %\n     window  : % .. %\n     error   : %',

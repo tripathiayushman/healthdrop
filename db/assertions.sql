@@ -84,7 +84,16 @@ DECLARE
   k_role_literal_allow CONSTANT text[] := ARRAY[
     'campaigns :: campaigns_insert|admin',
     'campaign_volunteers :: Users can update own enrollment|admin',
-    'campaign_volunteers :: Volunteers can view own enrollments|admin'
+    'campaign_volunteers :: Volunteers can view own enrollments|admin',
+    -- notify_users_push is different from the rest: its 'admin' sits in a
+    -- district-BYPASS list (`OR p.role IN (...)`), not in a permission guard.
+    -- A dead literal there can only fail to WIDEN a recipient list, and the
+    -- list already widens correctly for super_admin and health_admin. The
+    -- function wraps net.http_post and swallows every exception into
+    -- RETURN -1, so a typo introduced while editing it would be invisible,
+    -- and testing it end-to-end means sending real pushes to real handsets.
+    -- Not worth that risk for a literal that provably changes nothing.
+    'notify_users_push(p_title text, p_body text, p_data jsonb, p_trigger_type text, p_reference_id uuid, p_reference_table text, p_target_user_id uuid, p_target_role text, p_target_district text)|admin'
   ];
 
   -- ── ALLOWLIST A4: 'table.column' permitted to carry >1 CHECK constraint.
@@ -94,10 +103,17 @@ DECLARE
   k_multi_check_allow CONSTANT text[] := ARRAY[]::text[];
 
   -- ── ALLOWLIST A5: foreign-key constraint names that may go unindexed.
-  --    Empty for now. REF-06 argues only some of the 19 need covering
-  --    indexes; when the owner decides which, list the rest here with the
-  --    reason (e.g. "write-only column, never joined or cascaded on").
-  k_fk_index_allow CONSTANT text[] := ARRAY[]::text[];
+  --    16 of the original 19 now have covering indexes. These three do not,
+  --    and deliberately so: both tables hold ZERO rows and are superseded by
+  --    health_campaigns (5 rows) and campaign_participants (10 rows). An
+  --    index on a dead table is upkeep that makes a corpse look maintained.
+  --    Delete these three entries when the tables are dropped — at which
+  --    point the constraints go with them and the suite stays honest.
+  k_fk_index_allow CONSTANT text[] := ARRAY[
+    'campaigns_created_by_fkey',
+    'campaigns_approved_by_fkey',
+    'campaign_volunteers_volunteer_id_fkey'
+  ];
 
   -- ── ALLOWLIST A6: tables in `public` permitted to run without RLS.
   --    Extension-owned tables (PostGIS `spatial_ref_sys`) are excluded
@@ -439,9 +455,16 @@ BEGIN
       ('disease_reports',        ARRAY['a','w','d'], 'reporter_id',  'lib/services/diseaseReports.ts, src/services/offlineSync'),
       ('water_quality_reports',  ARRAY['a','w','d'], 'reporter_id',  'lib/services/waterQuality.ts'),
       ('health_alerts',          ARRAY['a'],         'created_by',   'components/forms/AlertForm.tsx'),
-      ('health_campaigns',       ARRAY['a','w','d'], 'organizer_id', 'lib/services/campaigns.ts, components/forms/CampaignForm.tsx'),
+      ('health_campaigns',       ARRAY['a','w','d'], 'organizer_id', 'components/forms/CampaignForm.tsx, components/screens/{CampaignsScreen,ApprovalQueueScreen,AdminManagementScreen}.tsx'),
       ('campaign_participants',  ARRAY['a','w'],     'user_id',      'components/screens/CampaignsScreen.tsx'),
-      ('campaign_volunteers',    ARRAY['a','d'],     'volunteer_id', 'lib/services/campaigns.ts (enrol / unenrol)'),
+      -- campaign_volunteers is deliberately ABSENT. Its only writer was
+      -- lib/services/campaigns.ts, a dead parallel enrolment path (it wrote to
+      -- a 0-row table and called an increment_volunteers RPC that does not
+      -- exist), deleted 2026-08-02. The live path is campaign_participants,
+      -- one row above. A8 asks "is every write the client performs actually
+      -- permitted" — with no client write, the missing DELETE policy it used
+      -- to report is no longer a defect, and adding the policy would have
+      -- preserved a dead path instead of removing it.
       ('profiles',               ARRAY['a','w'],     'id',           'components/AuthScreen.tsx, lib/services/users.ts'),
       ('user_feedback',          ARRAY['a','w'],     'user_id',      'components/screens/ProfileScreen.tsx'),
       ('app_events',             ARRAY['a'],         'user_id',      'lib/services/analytics.ts'),
